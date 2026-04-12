@@ -16,7 +16,7 @@ use linux_raw_sys::{
 use starry_vm::{VmMutPtr, vm_write_slice};
 
 use crate::{
-    mm::UserConstPtr,
+    mm::{UserConstPtr, UserPtr},
     task::{AsThread, processes},
 };
 
@@ -34,6 +34,28 @@ pub fn sys_getgid() -> AxResult<isize> {
 
 pub fn sys_getegid() -> AxResult<isize> {
     Ok(current().as_thread().proc_data.getegid() as isize)
+}
+
+pub fn sys_getresuid(ruid: *mut u32, euid: *mut u32, suid: *mut u32) -> AxResult<isize> {
+    if ruid.is_null() || euid.is_null() || suid.is_null() {
+        return Err(AxError::BadAddress);
+    }
+    let (r, e, s) = current().as_thread().proc_data.get_resuid();
+    *UserPtr::from(ruid).get_as_mut()? = r;
+    *UserPtr::from(euid).get_as_mut()? = e;
+    *UserPtr::from(suid).get_as_mut()? = s;
+    Ok(0)
+}
+
+pub fn sys_getresgid(rgid: *mut u32, egid: *mut u32, sgid: *mut u32) -> AxResult<isize> {
+    if rgid.is_null() || egid.is_null() || sgid.is_null() {
+        return Err(AxError::BadAddress);
+    }
+    let (r, e, s) = current().as_thread().proc_data.get_resgid();
+    *UserPtr::from(rgid).get_as_mut()? = r;
+    *UserPtr::from(egid).get_as_mut()? = e;
+    *UserPtr::from(sgid).get_as_mut()? = s;
+    Ok(0)
 }
 
 pub fn sys_setuid(uid: u32) -> AxResult<isize> {

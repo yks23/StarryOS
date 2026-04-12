@@ -396,6 +396,28 @@ impl ProcessData {
         self.egid.load(Ordering::SeqCst)
     }
 
+    /// Real, effective, and saved user-IDs (`getresuid(2)`).
+    #[inline]
+    pub fn get_resuid(&self) -> (u32, u32, u32) {
+        let o = Ordering::SeqCst;
+        (
+            self.ruid.load(o),
+            self.euid.load(o),
+            self.suid.load(o),
+        )
+    }
+
+    /// Real, effective, and saved group-IDs (`getresgid(2)`).
+    #[inline]
+    pub fn get_resgid(&self) -> (u32, u32, u32) {
+        let o = Ordering::SeqCst;
+        (
+            self.rgid.load(o),
+            self.egid.load(o),
+            self.sgid.load(o),
+        )
+    }
+
     fn cred_change_allowed(new: u32, r: u32, e: u32, s: u32) -> bool {
         new == r || new == e || new == s
     }
