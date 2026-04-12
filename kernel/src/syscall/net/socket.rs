@@ -12,7 +12,7 @@ use linux_raw_sys::{
     general::{O_CLOEXEC, O_NONBLOCK},
     net::{
         AF_INET, AF_UNIX, AF_VSOCK, IPPROTO_TCP, IPPROTO_UDP, SHUT_RD, SHUT_RDWR, SHUT_WR,
-        SOCK_DGRAM, SOCK_SEQPACKET, SOCK_STREAM, sockaddr, socklen_t,
+        SOCK_DGRAM, SOCK_STREAM, sockaddr, socklen_t,
     },
 };
 
@@ -201,7 +201,9 @@ pub fn sys_socketpair(
             let (sock1, sock2) = StreamTransport::new_pair(pid);
             (UnixSocket::new(sock1), UnixSocket::new(sock2))
         }
-        SOCK_DGRAM | SOCK_SEQPACKET => {
+        // `AF_UNIX` `SOCK_SEQPACKET` is not implemented; fall through to `_` → `ESOCKTNOSUPPORT`
+        // like `sys_socket` (issue-251). Do not build `DgramTransport` pairs for SEQPACKET.
+        SOCK_DGRAM => {
             let (sock1, sock2) = DgramTransport::new_pair(pid);
             (UnixSocket::new(sock1), UnixSocket::new(sock2))
         }

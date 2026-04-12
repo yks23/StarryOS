@@ -1,0 +1,27 @@
+{
+  "id": "issue-251",
+  "title": "socket/socketpair：`AF_UNIX`+`SOCK_SEQPACKET` 在 `socket` 与 `socketpair` 中准入与实现不一致（与 Linux 差距）",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_socketpair`：`AF_UNIX` 不再将 `SOCK_SEQPACKET` 与 `SOCK_DGRAM` 共用 `DgramTransport::new_pair`；`SOCK_SEQPACKET` 落入未支持分支 → `ESOCKTNOSUPPORT`，与 `sys_socket` 一致；未实现 Unix SEQPACKET 传输前两处均明确拒绝。",
+  "files_changed": ["kernel/src/syscall/net/socket.rs"],
+  "description": "**`kernel/src/syscall/net/socket.rs`** **`sys_socket`**（约 **40–86** 行）仅匹配 **`AF_UNIX`** 与 **`SOCK_STREAM`**/**`SOCK_DGRAM`**；**`SOCK_SEQPACKET`** 落入 **`(AF_UNIX, _)`** 分支 → **`ESOCKTNOSUPPORT`**，即 **`socket(AF_UNIX, SOCK_SEQPACKET, 0)`** 被拒绝。\n\n同文件 **`sys_socketpair`**（约 **181–232** 行）将 **`SOCK_SEQPACKET`** 与 **`SOCK_DGRAM`** 一并交给 **`DgramTransport::new_pair`** 构造 **Unix** 对端。\n\n**Linux**：**`AF_UNIX`** **`SOCK_SEQPACKET`** 为独立套接字类型（有序、保留报文边界，语义不同于 **DGRAM**）；**`socket`** 与 **`socketpair`** 对 **SEQPACKET** 的可用性应对齐手册。**当前** 一侧完全拒绝、一侧按 **datagram** 路径建连，**与 Linux** 行为及两侧入口一致性均不足；若短期不实现 **SEQPACKET**，**`socketpair`** 亦应 **`ESOCKTNOSUPPORT`**，或实现与 **`STREAM`/`DGRAM`** 区分的传输层后再放开。\n\n**建议**：统一策略：**拒绝** **SEQPACKET**（两处均 **`ESOCKTNOSUPPORT`**）并文档化；或引入 **Linux 对齐** 的 **SEQPACKET** 实现，并在 **`sys_socket`** 中开放 **`AF_UNIX`+`SOCK_SEQPACKET`**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["socket", "socketpair"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/socket.rs:40-86", "kernel/src/syscall/net/socket.rs:181-211"],
+    "related_files": [],
+    "key_insight": "socket 拒 SEQPACKET；socketpair 与 DGRAM 同路径"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；`socket`/`socketpair` + `AF_UNIX`/`SOCK_SEQPACKET` 与 Linux 对照。",
+    "expected_output_contains": "",
+    "pass_criteria": "两处入口与 Linux 对 SEQPACKET 的支持一致，或明确拒绝。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0）"
+  },
+  "suggested_fix": "`socketpair` 对 SEQPACKET 与 `socket` 同判；或实现完整 UNIX SEQPACKET。",
+  "references": ["man 2 socketpair", "man 7 unix", "issue-241"]
+}
