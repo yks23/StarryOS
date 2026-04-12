@@ -17,10 +17,25 @@ fn validate_fs_type(fs_type: &str) -> AxResult<()> {
     if fs_type.is_empty() {
         return Err(AxError::InvalidInput);
     }
-    if !SUPPORTED_MOUNT_FSTYPES.iter().any(|&t| t == fs_type) {
+    if !SUPPORTED_MOUNT_FSTYPES.contains(&fs_type) {
         return Err(AxError::InvalidInput);
     }
     Ok(())
+}
+
+/// `mount(2)` `source` must match what we implement for each `fs_type` (issue-187). Extend with a
+/// new arm when adding filesystems to [`SUPPORTED_MOUNT_FSTYPES`].
+fn validate_mount_source(source: &str, fs_type: &str) -> AxResult<()> {
+    match fs_type {
+        "tmpfs" => {
+            if source.is_empty() || source == "tmpfs" || source == fs_type {
+                Ok(())
+            } else {
+                Err(AxError::InvalidInput)
+            }
+        }
+        _ => Err(AxError::InvalidInput),
+    }
 }
 
 /// Supported `mount(2)` subset: no `MS_*` bits (no `MS_RDONLY`/`MS_BIND`/… until implemented).
@@ -60,6 +75,7 @@ pub fn sys_mount(
     debug!("sys_mount <= source: {source:?}, target: {target:?}, fs_type: {fs_type:?}, flags: {flags}");
 
     validate_fs_type(&fs_type)?;
+    validate_mount_source(&source, &fs_type)?;
 
     let fs = MemoryFs::new();
 

@@ -1,0 +1,27 @@
+{
+  "id": "issue-187",
+  "title": "mount：`sys_mount` 读入 `source` 后未参与挂载，仅 `MemoryFs::new()`，与 Linux `source` 角色脱节",
+  "status": "resolved",
+  "created_at": "2026-04-13T20:00:00Z",
+  "severity": "medium",
+  "fix_summary": "**`validate_mount_source`**：对 **`tmpfs`** 仅允许 **`source` 为空、`\"tmpfs\"` 或等于 `fs_type`**，否则 **`EINVAL`**；**`validate_fs_type`** 改用 **`slice::contains`**。**`/proc/mounts` 动态源字符串** 仍未接 VFS（留待后续）。",
+  "files_changed": ["kernel/src/syscall/fs/mount.rs"],
+  "description": "**`kernel/src/syscall/fs/mount.rs`** 中 **`sys_mount`** 对 **`source`** 执行 **`vm_load_string(source)?`**（**`EFAULT`/`EINVAL`** 路径仍生效），但随后 **`let fs = MemoryFs::new();`** **完全不使用** **`source`** 字符串，仅 **`debug!`** 打印。**Linux `mount(2)`**：**`source`** 对 **块设备路径**、**bind**/**move** 挂载、部分 **fs 子类型**（如 **nfs** 的 **server:path**）具有语义；即令 **tmpfs** 常把 **`source` 显示为 **`tmpfs`**，用户态与 **`/proc/mounts`** 仍依赖一致字符串。**Starry** 当前仅支持 **`tmpfs`/`MemoryFs`**，忽略 **`source`** 会阻碍后续扩展（**loop**、**bind**），并使 **「同一 `target` +不同 `source`」** 的探测或测试与 **Linux** 不对齐。**与 issue-032**（挂载类型/能力笼统项）互补：本条聚焦 **`source` 参数** 的 **静默忽略**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["mount"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/mount.rs:47-69"],
+    "related_files": [],
+    "key_insight": "`source` 经 `vm_load_string` 后无消费，仅 `MemoryFs::new()`"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "在 **Linux** 与 **Starry** 上对同一 **`target`** 分别以 **`source=\"/dev/foo\"` vs `source=\"tmpfs\"`**（**`fs_type=tmpfs`**）调用 **`mount`**，检查 **`/proc/mounts` 或 Starry 等价视图** 是否记录 **`source`**；再测 **非法/不存在 `source`** 时 **Linux** 是否拒绝而 **Starry** 仍成功。",
+    "expected_output_contains": "",
+    "pass_criteria": "**`source`** 与 **`fstype`** 组合有文档化语义或 **EINVAL**；禁止在无定义时 **静默等同** 所有 **`source`**。",
+    "last_result": "`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` 通过（未改 **`/proc/mounts`** 桩）。"
+  },
+  "suggested_fix": "短期：对 **`tmpfs`** 将 **`source`** 限制为 **空、`tmpfs`、或与 `fs_type` 一致** 否则 **`EINVAL`**，并写入 **VFS 挂载记录** 供 **`/proc`** 类接口使用；长期：**bind**/**块设备** 路径再接 **`source`**。",
+  "references": ["man 2 mount", "issue-032"]
+}
