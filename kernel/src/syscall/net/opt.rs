@@ -2,11 +2,15 @@ use core::mem::size_of;
 
 use axerrno::{AxError, AxResult, LinuxError};
 use axnet::options::{Configurable, GetSocketOption, SetSocketOption};
-use linux_raw_sys::net::{socklen_t, tcp_info, IP_TTL, TCP_INFO};
+use linux_raw_sys::{
+    general::timeval,
+    net::{socklen_t, tcp_info, IP_TTL, TCP_INFO, SOL_SOCKET, SO_RCVTIMEO, SO_SNDTIMEO},
+};
 
 use crate::{
     file::{FileLike, Socket},
     mm::{UserConstPtr, UserPtr},
+    time::read_timeval_user,
 };
 
 const PROTO_TCP: u32 = linux_raw_sys::net::IPPROTO_TCP as u32;
@@ -110,8 +114,6 @@ macro_rules! call_dispatch {
             (SOL_SOCKET, SO_SNDBUF) => SendBuffer as Int<usize>,
             (SOL_SOCKET, SO_RCVBUF) => ReceiveBuffer as Int<usize>,
             (SOL_SOCKET, SO_KEEPALIVE) => KeepAlive as IntBool,
-            (SOL_SOCKET, SO_RCVTIMEO) => ReceiveTimeout as Duration,
-            (SOL_SOCKET, SO_SNDTIMEO) => SendTimeout as Duration,
             (SOL_SOCKET, SO_PASSCRED) => PassCredentials as IntBool,
             (SOL_SOCKET, SO_PEERCRED) => PeerCredentials as Ucred,
 
@@ -221,6 +223,20 @@ pub fn sys_setsockopt(
     if level == PROTO_IP && optname == IP_TTL {
         let val = conv::IpTtl::sys_to_rust(optval, optlen)?;
         socket.set_option(SetSocketOption::Ttl(&val))?;
+        return Ok(0);
+    }
+    // issue-217: `timeval` field-wise read (same as `read_timeval_user` / issue-204), not `get_as_ref` bulk load.
+    if level == SOL_SOCKET && (optname == SO_RCVTIMEO || optname == SO_SNDTIMEO) {
+        if (optlen as usize) < size_of::<timeval>() {
+            return Err(AxError::InvalidInput);
+        }
+        let p = optval.address().as_usize() as *const timeval;
+        let val = conv::Duration::sys_to_rust(read_timeval_user(p)?)?;
+        if optname == SO_RCVTIMEO {
+            socket.set_option(SetSocketOption::ReceiveTimeout(&val))?;
+        } else {
+            socket.set_option(SetSocketOption::SendTimeout(&val))?;
+        }
         return Ok(0);
     }
     macro_rules! dispatch {
