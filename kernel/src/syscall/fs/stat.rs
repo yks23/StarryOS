@@ -117,20 +117,21 @@ pub fn sys_access(path: *const c_char, mode: u32) -> AxResult<isize> {
 }
 
 pub fn sys_faccessat2(dirfd: c_int, path: *const c_char, mode: u32, flags: u32) -> AxResult<isize> {
-    let path = path.nullable().map(vm_load_string).transpose()?;
-    debug!("sys_faccessat2 <= dirfd: {dirfd}, path: {path:?}, mode: {mode}, flags: {flags}");
-
+    // Linux do_faccessat: reject invalid flags/mode before copy_from_user(pathname) (EINVAL before EFAULT).
     // Linux VALID_FACCESSAT_FLAGS (see open.c): AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH | AT_EACCESS.
     const VALID_FACCESSAT_FLAGS: u32 = AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH | AT_EACCESS;
     if flags & !VALID_FACCESSAT_FLAGS != 0 {
         return Err(AxError::InvalidInput);
     }
 
-    // Linux do_faccessat: mode must be a subset of F_OK|R_OK|W_OK|X_OK (F_OK is 0 on Linux uapi).
+    // mode must be a subset of F_OK|R_OK|W_OK|X_OK (F_OK is 0 on Linux uapi).
     const VALID_ACCESS_MODE: u32 = F_OK | R_OK | W_OK | X_OK;
     if mode & !VALID_ACCESS_MODE != 0 {
         return Err(AxError::InvalidInput);
     }
+
+    let path = path.nullable().map(vm_load_string).transpose()?;
+    debug!("sys_faccessat2 <= dirfd: {dirfd}, path: {path:?}, mode: {mode}, flags: {flags}");
 
     let file = resolve_at(dirfd, path.as_deref(), flags)?;
 

@@ -1,0 +1,28 @@
+{
+  "id": "issue-129",
+  "title": "faccessat2 先 vm_load_string(path) 再校验 flags 与 mode，EINVAL与 EFAULT 顺序可偏离 Linux",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "resolved_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_faccessat2`：将 `VALID_FACCESSAT_FLAGS` 与 `VALID_ACCESS_MODE` 移到 `vm_load_string(path)` 之前，非法 flags/mode 先 `InvalidInput`（EINVAL），与 Linux `do_faccessat` 在 `copy_from_user` 前的校验顺序一致；`debug!` 仍在读 path 之后。",
+  "files_changed": ["kernel/src/syscall/fs/stat.rs"],
+  "description": "**`sys_faccessat2`**（`kernel/src/syscall/fs/stat.rs`）首行 **`path.nullable().map(vm_load_string)...`**，随后才 **`VALID_FACCESSAT_FLAGS`** 与 **`mode & !VALID_ACCESS_MODE`** 校验。**Linux** **`do_faccessat`** 通常在 **`copy_from_user`** 路径字符串之前即拒绝非法 **`flags`** / **`mode`**（**`EINVAL`**）。当 **`flags`** 或 **`mode`** 非法且 **`path`** 用户指针不可读时：**Starry** 可能先 **`EFAULT`类**；**Linux** 多先 **`EINVAL`**。与 **issue-127** **`statx`**（已 **verified**）同类；**issue-128** 已覆盖 **`mode`** 掩码语义，本 issue 侧重**校验顺序**。**`debug!`** 夹在 **`path`** 与 **`flags`** 之间，不改变用户访问顺序。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["faccessat2"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/stat.rs:119-156"],
+    "related_files": ["kernel/src/syscall/fs/stat.rs:60-109"],
+    "key_insight": "`vm_load_string(path)` 先于 `flags`/`mode` 校验"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "非法 **`flags`** 或非法 **`mode`** + 不可读 **`path`**；对比 **Linux** 首错 **`EINVAL`** vs **Starry** 是否 **`EFAULT`**。",
+    "expected_output_contains": "",
+    "pass_criteria": "**`flags`**/**`mode`** 校验在触碰用户 **`path`** 之前，或文档化当前顺序。",
+    "last_result": "2026-04-12：flags/mode 先于 `vm_load_string`；`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` PASS；QEMU 未测"
+  },
+  "suggested_fix": "将 **`VALID_FACCESSAT_FLAGS`**、**`VALID_ACCESS_MODE`**（及任何不依赖路径的 **`dirfd`** 合法性若与 **Linux** 一致需提前者）移到 **`vm_load_string`** 之前；**`debug!`** 可紧随其后。",
+  "references": ["man 2 faccessat2", "Linux fs/open.c do_faccessat"]
+}
