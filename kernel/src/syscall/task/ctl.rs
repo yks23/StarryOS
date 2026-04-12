@@ -143,8 +143,29 @@ pub fn sys_prctl(
             buf[..len].copy_from_slice(&name.as_bytes()[..len]);
             vm_write_slice(arg2 as _, &buf)?;
         }
-        PR_SET_SECCOMP => {}
-        PR_MCE_KILL => {}
+        PR_SET_SECCOMP => {
+            // Linux `SECCOMP_MODE_*`: 0 = disabled, 1 = strict, 2 = filter.
+            const SECCOMP_MODE_FILTER: usize = 2;
+            if arg2 > SECCOMP_MODE_FILTER {
+                return Err(AxError::InvalidInput);
+            }
+            return Err(AxError::Unsupported);
+        }
+        PR_MCE_KILL => {
+            use linux_raw_sys::prctl::{
+                PR_MCE_KILL_CLEAR, PR_MCE_KILL_DEFAULT, PR_MCE_KILL_SET,
+            };
+            match arg2 {
+                x if x == PR_MCE_KILL_CLEAR as usize => return Err(AxError::Unsupported),
+                x if x == PR_MCE_KILL_SET as usize => {
+                    if arg3 > PR_MCE_KILL_DEFAULT as usize {
+                        return Err(AxError::InvalidInput);
+                    }
+                    return Err(AxError::Unsupported);
+                }
+                _ => return Err(AxError::InvalidInput),
+            }
+        }
         PR_SET_MM => {
             // not implemented; but avoid annoying warnings
             return Err(AxError::InvalidInput);
