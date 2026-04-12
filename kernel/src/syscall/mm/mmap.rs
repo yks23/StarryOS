@@ -326,10 +326,6 @@ pub fn sys_mprotect(addr: usize, length: usize, prot: u32) -> AxResult<isize> {
     };
     debug!("sys_mprotect <= addr: {addr:#x}, length: {length:x}, prot: {permission_flags:?}");
 
-    if length == 0 {
-        return Err(AxError::InvalidInput);
-    }
-
     if permission_flags.intersects(MmapProt::GROWDOWN | MmapProt::GROWSUP) {
         return Err(AxError::InvalidInput);
     }
@@ -338,6 +334,12 @@ pub fn sys_mprotect(addr: usize, length: usize, prot: u32) -> AxResult<isize> {
     // Linux/POSIX: `addr` must be page-aligned (issue-270).
     if !start_addr.is_aligned_4k() {
         return Err(AxError::InvalidInput);
+    }
+
+    // Linux `do_mprotect_pkey`: `if (!len) return 0;` — zero-length no-op (issue-280). Unlike
+    // `munmap` / `mmap` zero-length rules.
+    if length == 0 {
+        return Ok(0);
     }
 
     let curr = current();
