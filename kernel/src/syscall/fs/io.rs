@@ -377,10 +377,9 @@ pub fn sys_sendfile(out_fd: c_int, in_fd: c_int, offset: *mut u64, len: usize) -
     );
 
     let src = if !offset.is_null() {
+        // LP64: user `offset` is `loff_t*` / updated `u64` — no 4GiB cap (issue-220); `read_at`/`write_at`
+        // enforce any file-size limits.
         let file = File::from_fd(in_fd)?;
-        if offset.vm_read()? > u32::MAX as u64 {
-            return Err(AxError::InvalidInput);
-        }
         SendFile::Offset(file, offset)
     } else {
         SendFile::Direct(get_file_like(in_fd)?)

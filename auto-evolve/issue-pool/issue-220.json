@@ -1,0 +1,27 @@
+{
+  "id": "issue-220",
+  "title": "sys_sendfile：非 NULL offset 大于 u32::MAX 即 EINVAL，与 Linux loff_t/sendfile64 大文件偏移不符",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "medium",
+  "fix_summary": "删除 **`sys_sendfile`** 在 **`offset` 非 NULL** 时对 **`offset.vm_read()? > u32::MAX as u64`** 的 **`EINVAL`** 拒绝。**`SendFile::Offset`**/**`read_at`/`write_at`** 已用 **`u64`**；与 LP64 上 **`sendfile64`**/**`loff_t*`** 语义一致，大文件偏移由 VFS 与 **`read_at`** 结果约束。",
+  "files_changed": ["kernel/src/syscall/fs/io.rs"],
+  "description": "**`kernel/src/syscall/fs/io.rs`** **`sys_sendfile`** 在 **`offset` 非 NULL** 时（约 **379–384** 行）执行 **`if offset.vm_read()? > u32::MAX as u64 { return Err(AxError::InvalidInput); }`**，将用户提供的文件内偏移限制在 **`0..=u32::MAX`**。\n\n在 **riscv64**（及一般 **LP64**）上，Linux **`sendfile(2)`** / **`sendfile64`** 的 **`offset`** 为 **`loff_t`** / **`off_t`**（**64 位有符号**），允许大于 **4GiB** 的合法读写位置；当前实现会在 **`offset > 2^32-1`** 时拒绝，导致大文件 **`sendfile`** 行为与 **Linux/glibc** 不一致（例如从 **`4GiB+1`** 起传 `offset` 即失败）。\n\n**`SendFile::Offset`** 与 **`do_send`** 已使用 **`u64`** 与 **`read_at`/`write_at`**，限制似非 VFS 能力所致，更可能是历史 **`off_t==u32`** 假设残留。\n\n**建议**：与 **`copy_file_range`** / **`splice`** 分支一致，仅在 **`offset < 0`**（若类型为有符号）或 **`read_at`** 失败时返回错误；或显式文档化 **Starry 仅支持 32 位文件偏移** 的 ABI 偏差。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["sendfile"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/io.rs:370-392"],
+    "related_files": ["kernel/src/syscall/fs/io.rs:300-337"],
+    "key_insight": "u32::MAX 截断语义与 LP64 sendfile 偏移类型不符"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：构造 >4GiB 常规文件 + `sendfile` 带 `offset` 的集成测试。",
+    "expected_output_contains": "",
+    "pass_criteria": "移除不当的 u32::MAX 门限，或与 Linux loff_t 语义对齐并文档化。",
+    "last_result": "通过：`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`（exit 0，仅有既有 warning）。"
+  },
+  "suggested_fix": "删除 **`> u32::MAX`** 检查，或改为与 **`__kernel_off_t`/`loff_t`** 一致的边界校验（含负偏移拒绝）。",
+  "references": ["man 2 sendfile", "issue-020 mremap（同属 mm/文件语义粗糙）"]
+}
