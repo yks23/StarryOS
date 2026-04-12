@@ -22,6 +22,7 @@ from typing import Optional
 
 BASE_DIR = Path(__file__).parent
 ISSUE_POOL = BASE_DIR / "issue-pool"
+ISSUE_ARCHIVE = BASE_DIR / "issue-archive"  # resolved/verified 归档
 TESTS_DIR = BASE_DIR / "tests"
 MEMORY_DIR = BASE_DIR / "memory"
 STATE_FILE = BASE_DIR / "kernel-state.json"
@@ -38,7 +39,7 @@ if not AGENT_API_KEY:
             AGENT_API_KEY = line.strip().split("=", 1)[1]
             break
 
-for d in [ISSUE_POOL, TESTS_DIR, MEMORY_DIR, MSG_QUEUE_DIR,
+for d in [ISSUE_POOL, ISSUE_ARCHIVE, TESTS_DIR, MEMORY_DIR, MSG_QUEUE_DIR,
           MSG_QUEUE_DIR / "debugger", MSG_QUEUE_DIR / "executor"]:
     d.mkdir(parents=True, exist_ok=True)
 
@@ -417,13 +418,53 @@ class AgentSession:
         self.state.status = AgentStatus.STOPPED
 
 
-# ── Priority-sorted issue picker for executor ─────────────────
+# ── Issue lifecycle management ─────────────────────────────────
 
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
+IN_PROGRESS_TIMEOUT = 20 * 60  # in-progress 超过 20 分钟自动回退到 open
+
+
+def archive_resolved_issues():
+    """将 resolved/verified 的 issue 从 issue-pool 移到 issue-archive。
+    移动后 issue-pool 中不再有该文件，executor 不可能再次取到它。"""
+    for f in list(ISSUE_POOL.glob("issue-*.json")):
+        try:
+            d = json.loads(f.read_text())
+            status = d.get("status", "")
+            if status in ("resolved", "verified"):
+                dest = ISSUE_ARCHIVE / f.name
+                shutil.move(str(f), str(dest))
+                print(f"[kernel] 归档 {f.name} → issue-archive/ ({status})")
+        except Exception:
+            pass
+
+
+def unstick_in_progress():
+    """检测卡在 in-progress 超时的 issue，回退为 open。
+    防止 agent 失败后 issue 永远卡住。"""
+    now = time.time()
+    for f in list(ISSUE_POOL.glob("issue-*.json")):
+        try:
+            d = json.loads(f.read_text())
+            if d.get("status") != "in_progress":
+                continue
+            # 用文件修改时间判断是否超时
+            mtime = f.stat().st_mtime
+            if now - mtime > IN_PROGRESS_TIMEOUT:
+                d["status"] = "open"
+                d.setdefault("_retries", 0)
+                d["_retries"] += 1
+                d["_unstick_note"] = f"自动回退: in-progress 超过 {IN_PROGRESS_TIMEOUT//60} 分钟未完成"
+                f.write_text(json.dumps(d, indent=2, ensure_ascii=False))
+                print(f"[kernel] {f.name} 卡住，回退为 open（第 {d['_retries']} 次）")
+        except Exception:
+            pass
+
 
 def pick_next_issue() -> Optional[dict]:
-    """按 severity 排序取出下一个 open issue（含完整内容）。"""
+    """按 severity 排序取出下一个 open issue。
+    只扫描 issue-pool（不扫 issue-archive），所以 resolved 的不会被再次处理。"""
     candidates = []
     for f in sorted(ISSUE_POOL.glob("issue-*.json")):
         try:
@@ -617,6 +658,10 @@ class Scheduler:
         self._debugger_thread.start()
 
         while self._running:
+            # 维护 issue 生命周期
+            archive_resolved_issues()
+            unstick_in_progress()
+
             self.kernel_state.last_tick = datetime.now().isoformat()
             self.kernel_state.issue_stats = scan_issues()
             self.kernel_state.save()

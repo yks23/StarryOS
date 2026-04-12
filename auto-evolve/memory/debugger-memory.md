@@ -2,12 +2,12 @@
 
 ## 最近更新
 - 日期：2026-04-12
-- 本轮新发现问题数：23（issue-011 至 issue-033，对应 Question2.md 中 🔴/⚠️ 与排序优先级）
+- 本轮新发现问题数：1（issue-034：accept 填充 local 而非 peer）
 - 本轮验证已修复问题数：0（executor-memory 未报告已修复项）
 
 ## 扫描进度
-- 已审计的 syscall 模块：依据 Question2.md 全文与 kernel 抽样核对（`syscall/mod.rs` dummy 分支、`fd_ops.rs` flock/fcntl、`mmap.rs`、`schedule.rs`、`sys.rs`、`ctl.rs`、`signal.rs`、`membarrier.rs`）
-- 未审计的 syscall 模块：可继续深挖 net/opt、ioctl 全表、prctl 剩余选项
+- 已审计的 syscall 模块：依据 Question2.md 全文与 kernel 抽样核对（`syscall/mod.rs` dummy 分支、`fd_ops.rs` flock/fcntl、`mmap.rs`、`schedule.rs`、`sys.rs`、`ctl.rs`、`signal.rs`、`membarrier.rs`）；**本轮新增：`syscall/net/socket.rs`（accept4 与 peer 地址语义）**
+- 未审计的 syscall 模块：`syscall/net/io.rs`/`cmsg.rs` 边界、**`syscall/net/opt.rs` 已扫为宏分发（非本轮重点）**、ioctl 全表、prctl 剩余选项
 - 已检查的 TODO/FIXME 位置：execve 多线程、mremap full、fd_ops flock、flock64、sysinfo Zeroable、timer 抢占相关注释
 
 ## 活跃问题摘要
@@ -34,11 +34,13 @@
 - issue-031: ioctl 非终端场景（low, open）
 - issue-032: mount 类型受限/行为（medium, open）
 - issue-033: setitimer VIRTUAL/PROF 精度（low, open）
+- issue-034: accept 返回本端地址非对端（high, open）
 
 ## 给 Executor 的消息
 - 建议仍按 Question2 第四部分「第一梯队」顺序：先假成功类（011–017、015），再 026 信号与 job control（依赖 axtask 能力）。
 - issue-012/013/014 依赖 `/proc/self/fd` readlink；若 rootfs 无 proc，测试需在该环境标注或换检测方式。
 - sys_dummy_fd 对进程名 `qemu-` 前缀会返回 ENOSYS（io.rs），与裸机行为不一致，修复时勿忽略该分支。
+- issue-034 为单行语义错误（`local_addr`→`peer_addr`），修复成本低、影响所有依赖 accept 输出地址的网络服务。
 
 ## 待验证
 - Q1 生成的 issue-001–010 未在本仓库中出现；若合并仓库后请避免编号冲突。
