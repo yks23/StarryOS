@@ -6,6 +6,7 @@ Auto-Evolve Kernel: 调度内核
 
 import json
 import os
+import re
 import time
 import subprocess
 import threading
@@ -28,6 +29,14 @@ MSG_QUEUE_DIR = BASE_DIR / "msg-queue"
 SKILL_DEBUGGER = BASE_DIR / "skill-debugger"
 SKILL_EXECUTOR = BASE_DIR / "skill-executor"
 WORKSPACE = BASE_DIR.parent
+
+AGENT_BIN = os.path.expanduser("~/.local/bin/agent")
+AGENT_API_KEY = os.environ.get("CURSOR_API_KEY", "")
+if not AGENT_API_KEY:
+    for line in os.popen("env").readlines():
+        if line.startswith("cursor-api-key="):
+            AGENT_API_KEY = line.strip().split("=", 1)[1]
+            break
 
 for d in [ISSUE_POOL, TESTS_DIR, MEMORY_DIR, MSG_QUEUE_DIR,
           MSG_QUEUE_DIR / "debugger", MSG_QUEUE_DIR / "executor"]:
@@ -290,60 +299,111 @@ class AgentSession:
         self.state = state
         self.process: Optional[subprocess.Popen] = None
         self._lock = threading.Lock()
+        self.log_file = BASE_DIR / f"logs/{self.name}.log"
+        self.log_file.parent.mkdir(exist_ok=True)
 
-    def _build_cmd(self, message: str, resume: bool = False) -> list[str]:
-        cmd = ["cursor-agent"]
-        if resume and self.state.session_id:
+    def _build_cmd(self, message: str) -> list[str]:
+        cmd = [AGENT_BIN]
+
+        if self.state.session_id:
             cmd += ["--resume", self.state.session_id]
+            cmd.append(message)
         else:
-            cmd += ["--skill", str(self.skill_file)]
-        cmd += ["--message", message]
-        cmd += ["--workspace", str(WORKSPACE)]
+            skill_content = self.skill_file.read_text()
+            cmd.append(f"{skill_content}\n\n---\n\n{message}")
+
+        cmd += [
+            "--print",
+            "--trust",
+            "--yolo",
+            "--output-format", "json",
+            "--workspace", str(WORKSPACE),
+        ]
+        if AGENT_API_KEY:
+            cmd += ["--api-key", AGENT_API_KEY]
+
         return cmd
 
-    def send_message(self, message: str, resume: bool = True) -> bool:
-        """向 agent 发送一条消息。实际中这里会调用 cursor agent CLI。"""
+    def _parse_session_id(self, output: str) -> Optional[str]:
+        """从 agent JSON 输出中解析 session ID。"""
+        for pattern in [
+            r'"session_id"\s*:\s*"([^"]+)"',
+            r'"chatId"\s*:\s*"([^"]+)"',
+        ]:
+            m = re.search(pattern, output)
+            if m:
+                return m.group(1)
+        return None
+
+    def _log(self, text: str):
+        with open(self.log_file, "a") as f:
+            f.write(text)
+
+    def send_message(self, message: str) -> bool:
+        """向 agent 发送一条消息并等待完成。"""
         with self._lock:
             self.state.status = AgentStatus.BUSY
-            self.state.current_task = message[:100]
+            self.state.current_task = message[:120]
             self.state.last_active = datetime.now().isoformat()
             self.state.message_count += 1
 
-        # 记录消息到日志
-        log_file = BASE_DIR / f"logs/{self.name}.log"
-        log_file.parent.mkdir(exist_ok=True)
-        with open(log_file, "a") as f:
-            f.write(f"\n{'='*60}\n")
-            f.write(f"[{datetime.now().isoformat()}] Message #{self.state.message_count}\n")
-            f.write(f"{'='*60}\n")
-            f.write(message + "\n")
+        self._log(
+            f"\n{'='*60}\n"
+            f"[{datetime.now().isoformat()}] Message #{self.state.message_count}\n"
+            f"{'='*60}\n"
+            f"{message}\n"
+        )
 
-        # ── 实际的 agent CLI 调用点 ──
-        # 当 cursor-agent CLI 可用时，取消下面的注释：
-        #
-        # cmd = self._build_cmd(message, resume)
-        # try:
-        #     result = subprocess.run(
-        #         cmd, capture_output=True, text=True, timeout=600,
-        #         cwd=str(WORKSPACE)
-        #     )
-        #     with open(log_file, "a") as f:
-        #         f.write(f"\n--- STDOUT ---\n{result.stdout}\n")
-        #         f.write(f"\n--- STDERR ---\n{result.stderr}\n")
-        #     if result.returncode != 0:
-        #         self.state.status = AgentStatus.ERROR
-        #         self.state.error = result.stderr[:200]
-        #         return False
-        #     # 解析 session_id（cursor agent CLI 输出中应包含）
-        #     # self.state.session_id = parse_session_id(result.stdout)
-        # except subprocess.TimeoutExpired:
-        #     self.state.status = AgentStatus.ERROR
-        #     self.state.error = "timeout"
-        #     return False
+        cmd = self._build_cmd(message)
+
+        try:
+            print(f"[kernel] {self.name}: 发送消息 (#{self.state.message_count})...")
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=600,
+                cwd=str(WORKSPACE),
+                env={**os.environ, "CURSOR_API_KEY": AGENT_API_KEY},
+            )
+
+            self._log(f"\n--- STDOUT ({len(result.stdout)} chars) ---\n")
+            self._log(result.stdout[-2000:] if len(result.stdout) > 2000 else result.stdout)
+            if result.stderr:
+                self._log(f"\n--- STDERR ---\n{result.stderr[-500:]}\n")
+
+            session_id = self._parse_session_id(result.stdout)
+            if session_id:
+                self.state.session_id = session_id
+                print(f"[kernel] {self.name}: session_id = {session_id}")
+
+            if result.returncode != 0:
+                with self._lock:
+                    self.state.status = AgentStatus.ERROR
+                    self.state.error = (result.stderr or result.stdout)[:200]
+                print(f"[kernel] {self.name}: 执行失败 (exit={result.returncode})")
+                return False
+
+            print(f"[kernel] {self.name}: 执行完成")
+
+        except subprocess.TimeoutExpired:
+            with self._lock:
+                self.state.status = AgentStatus.ERROR
+                self.state.error = "执行超时(600s)"
+            self._log("\n--- TIMEOUT ---\n")
+            print(f"[kernel] {self.name}: 超时")
+            return False
+        except FileNotFoundError:
+            with self._lock:
+                self.state.status = AgentStatus.ERROR
+                self.state.error = f"找不到 agent CLI: {AGENT_BIN}"
+            print(f"[kernel] {self.name}: 找不到 agent CLI")
+            return False
 
         with self._lock:
             self.state.status = AgentStatus.IDLE
             self.state.current_task = None
+            self.state.error = None
 
         return True
 
