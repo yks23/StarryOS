@@ -1,0 +1,27 @@
+{
+  "id": "issue-250",
+  "title": "clock_gettime：`CLOCK_MONOTONIC_RAW`/`CLOCK_BOOTTIME` 与 `CLOCK_MONOTONIC` 共用 `monotonic_time()`（与 Linux 语义不一致）",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_clock_gettime`：将 `CLOCK_MONOTONIC`/`COARSE`、`CLOCK_MONOTONIC_RAW`、`CLOCK_BOOTTIME` 拆分为独立分支与 `clock_read_*` 辅助函数；HAL 仍单一单调计数器，故 RAW 与 MONOTONIC 同值（内核无 NTP 频偏层）、BOOTTIME 与 MONOTONIC 同值（无 suspend 累计），与 Starry 能力一致并在源码注释中固定契约。`clock_getres`/`clock_nanosleep`/`timerfd` 未改。",
+  "files_changed": ["kernel/src/syscall/time.rs"],
+  "description": "**`kernel/src/syscall/time.rs`** **`sys_clock_gettime`**（约 **60–82** 行）在 **`match cid`** 中将 **`CLOCK_MONOTONIC`**、**`CLOCK_MONOTONIC_RAW`**、**`CLOCK_MONOTONIC_COARSE`** 与 **`CLOCK_BOOTTIME`** **一并**映射为 **`axhal::time::monotonic_time()`**。\n\n**Linux `clock_gettime(2)`**：**`CLOCK_MONOTONIC_RAW`** 为**不经 NTP/freq 调整**的单调时钟；**`CLOCK_BOOTTIME`** 与 **`CLOCK_MONOTONIC`** 类似但**包含系统休眠（suspend）**经过的时间。二者**不应**与 **`CLOCK_MONOTONIC`** **永远**数值绑死相等（在无 NTP、无 suspend 的极简环境下**可能**偶然接近，但与手册及 **`glibc`/`musl`** 可观察行为不一致）。**`CLOCK_*_COARSE`** 与 **`MONOTONIC`** 共用同一底层在 Linux 上常见，但 **RAW/BOOTTIME** 分叉更关键。\n\n**建议**：在 **HAL** 层区分 **`monotonic_raw`** / **`boottime`** / **`monotonic`**（或文档化「**Starry 无 NTP 调整、无 suspend 计时**」并限制 **`clock_gettime`** 测试契约）；**`clock_getres`**/**`clock_nanosleep`** 与 **`timerfd`** 使用相同时钟语义时需一并核对。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["clock_gettime", "clock_getres"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/time.rs:60-82"],
+    "related_files": ["kernel/src/syscall/time.rs:30-42", "kernel/src/syscall/task/schedule.rs:125-174"],
+    "key_insight": "RAW/BOOTTIME/MONOTONIC 同一分支"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 man 7 time、Linux `posix_cpu_nsleep`/`timekeeping`。",
+    "expected_output_contains": "",
+    "pass_criteria": "RAW/BOOTTIME 与 Linux 定义一致，或文档化限制。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0）"
+  },
+  "suggested_fix": "拆分时钟源；无能力时 `EOPNOTSUPP` 或明确文档。",
+  "references": ["man 7 time", "clock_gettime(2)", "issue-071"]
+}

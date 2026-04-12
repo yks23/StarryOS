@@ -41,6 +41,26 @@ fn clock_id_supported(clock_id: u32) -> bool {
     )
 }
 
+/// `CLOCK_MONOTONIC` / `CLOCK_MONOTONIC_COARSE` — HAL monotonic counter (`axhal::time::monotonic_time`).
+#[inline]
+fn clock_read_monotonic() -> TimeValue {
+    monotonic_time()
+}
+
+/// `CLOCK_MONOTONIC_RAW` — Linux exposes hardware time without NTP/frequency adjustment; Starry has no
+/// separate skew layer on top of the HAL counter, so this matches [`clock_read_monotonic`] (issue-250).
+#[inline]
+fn clock_read_monotonic_raw() -> TimeValue {
+    monotonic_time()
+}
+
+/// `CLOCK_BOOTTIME` — Linux includes suspend time; Starry does not track S-state duration, so this
+/// matches [`clock_read_monotonic`] (issue-250).
+#[inline]
+fn clock_read_boottime() -> TimeValue {
+    monotonic_time()
+}
+
 /// Resolution reported by [`sys_clock_getres`], aligned with Linux conventions:
 /// `*_COARSE` clocks follow jiffies / HZ-scale granularity (here **1 ms**); others match
 /// typical high-resolution / hrtimer **`1 ns`** reports.
@@ -61,9 +81,9 @@ pub fn sys_clock_gettime(clock_id: __kernel_clockid_t, ts: *mut timespec) -> AxR
     let cid = clock_id as u32;
     let now = match cid {
         CLOCK_REALTIME | CLOCK_REALTIME_COARSE => wall_time(),
-        CLOCK_MONOTONIC | CLOCK_MONOTONIC_RAW | CLOCK_MONOTONIC_COARSE | CLOCK_BOOTTIME => {
-            monotonic_time()
-        }
+        CLOCK_MONOTONIC | CLOCK_MONOTONIC_COARSE => clock_read_monotonic(),
+        CLOCK_MONOTONIC_RAW => clock_read_monotonic_raw(),
+        CLOCK_BOOTTIME => clock_read_boottime(),
         CLOCK_PROCESS_CPUTIME_ID | CLOCK_THREAD_CPUTIME_ID => {
             let (utime, stime) = current().as_thread().time.borrow().output();
             utime + stime
