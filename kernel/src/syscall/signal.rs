@@ -94,13 +94,24 @@ pub fn sys_rt_sigaction(
 
     let curr = current();
     let mut actions = curr.as_thread().proc_data.signal.actions.lock();
-    if let Some(oldact) = oldact.nullable() {
-        oldact.vm_write(actions[signo].clone().into())?;
-    }
-    if let Some(act) = act.nullable() {
-        let act = unsafe { act.vm_read_uninit()?.assume_init() }.into();
-        debug!("sys_rt_sigaction <= signo: {signo:?}, act: {act:?}");
-        actions[signo] = act;
+    let old = actions[signo].clone();
+
+    match act.nullable() {
+        None => {
+            if let Some(oldact) = oldact.nullable() {
+                oldact.vm_write(old.into())?;
+            }
+        }
+        Some(act_ptr) => {
+            // Linux do_rt_sigaction: copy_from_user(act) before copy_to_user(oldact); EFAULT on
+            // `act` must not clobber `oldact` (issue-147).
+            let act = unsafe { act_ptr.vm_read_uninit()?.assume_init() }.into();
+            debug!("sys_rt_sigaction <= signo: {signo:?}, act: {act:?}");
+            actions[signo] = act;
+            if let Some(oldact) = oldact.nullable() {
+                oldact.vm_write(old.into())?;
+            }
+        }
     }
     Ok(0)
 }
