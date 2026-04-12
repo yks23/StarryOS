@@ -10,7 +10,10 @@ use axfs_ng_vfs::NodeType;
 use axio::{Seek, SeekFrom};
 use axpoll::{IoEvents, Pollable};
 use linux_raw_sys::general::{
-    __kernel_off_t, SPLICE_F_GIFT, SPLICE_F_MORE, SPLICE_F_MOVE, SPLICE_F_NONBLOCK,
+    __kernel_off_t, FALLOC_FL_COLLAPSE_RANGE, FALLOC_FL_INSERT_RANGE, FALLOC_FL_KEEP_SIZE,
+    FALLOC_FL_NO_HIDE_STALE, FALLOC_FL_PUNCH_HOLE, FALLOC_FL_UNSHARE_RANGE,
+    FALLOC_FL_WRITE_ZEROES, FALLOC_FL_ZERO_RANGE, SPLICE_F_GIFT, SPLICE_F_MORE, SPLICE_F_MOVE,
+    SPLICE_F_NONBLOCK,
 };
 
 /// Linux `splice(2)` flags; unknown bits must be rejected with EINVAL.
@@ -20,6 +23,17 @@ const SPLICE_F_MASK: u32 = SPLICE_F_MOVE | SPLICE_F_NONBLOCK | SPLICE_F_MORE | S
 const COPY_FILE_RANGE_COMPRESS: u32 = 1 << 0;
 const COPY_FILE_RANGE_DEDUPE: u32 = 1 << 2;
 const COPY_FILE_RANGE_MASK: u32 = COPY_FILE_RANGE_COMPRESS | COPY_FILE_RANGE_DEDUPE;
+
+/// Linux `fallocate(2)` `FALLOC_FL_*` bits (`uapi/linux/fs.h` / `linux_raw_sys`); unknown bits → EINVAL.
+/// `FALLOC_FL_ALLOCATE_RANGE` is **0** (default); non-zero modes are not implemented yet (issue-225).
+const FALLOC_FL_KNOWN_MASK: u32 = FALLOC_FL_KEEP_SIZE
+    | FALLOC_FL_PUNCH_HOLE
+    | FALLOC_FL_NO_HIDE_STALE
+    | FALLOC_FL_COLLAPSE_RANGE
+    | FALLOC_FL_ZERO_RANGE
+    | FALLOC_FL_INSERT_RANGE
+    | FALLOC_FL_UNSHARE_RANGE
+    | FALLOC_FL_WRITE_ZEROES;
 
 /// `lseek(2)` / `llseek` — not always exposed next to `SEEK_SET` in all libc headers.
 const SEEK_DATA: c_int = 3;
@@ -143,6 +157,8 @@ pub fn sys_ftruncate(fd: c_int, length: __kernel_off_t) -> AxResult<isize> {
     Ok(0)
 }
 
+/// Default `mode == 0` extends file length to `max(current, offset + len)` (space reservation).
+/// Other `FALLOC_FL_*` combinations (punch hole, zero range, …) need sparse/VFS support → `EOPNOTSUPP`.
 pub fn sys_fallocate(
     fd: c_int,
     mode: u32,
@@ -150,8 +166,11 @@ pub fn sys_fallocate(
     len: __kernel_off_t,
 ) -> AxResult<isize> {
     debug!("sys_fallocate <= fd: {fd}, mode: {mode}, offset: {offset}, len: {len}");
-    if mode != 0 {
+    if mode & !FALLOC_FL_KNOWN_MASK != 0 {
         return Err(AxError::InvalidInput);
+    }
+    if mode != 0 {
+        return Err(AxError::OperationNotSupported);
     }
     if offset < 0 || len < 0 {
         return Err(AxError::InvalidInput);
