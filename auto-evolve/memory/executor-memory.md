@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-229 resolved（**`mprotect`**：**`length == 0` → `InvalidInput`（EINVAL）**，与 **`sys_mmap`**/**Linux** 对齐；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-221 resolved（**`getdents64`**：**`DirBuffer`**：**`NAME_MAX`**、**`d_reclen`**（**`u16::try_from`**）、**`d_off`**（**`i64::try_from`**）与 **`SAFETY`** 注释；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-219 resolved（**`waitpid`/`wait4`**：**`__WNOTHREAD`** → **`Unsupported`**，勿静默忽略；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-225 resolved（**`fallocate`**：**`FALLOC_FL_*`** 掩码未知位 **`EINVAL`**；**`mode==0`** 仍为 **`set_len(max…)`**；其它已知 **`FALLOC_FL_*`** → **`EOPNOTSUPP`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -207,6 +208,7 @@
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
 | issue-221 | getdents64 dirent64 NAME_MAX/d_reclen/d_off | resolved | 2026-04-12 |
+| issue-229 | mprotect length==0 → EINVAL（对齐 mmap） | resolved | 2026-04-12 |
 | issue-219 | waitpid __WNOTHREAD → Unsupported | resolved | 2026-04-12 |
 | issue-225 | fallocate FALLOC_FL 掩码 + 非零 EOPNOTSUPP | resolved | 2026-04-12 |
 | issue-227 | shmat 无效 shmid 不 unwrap（EINVAL） | resolved | 2026-04-12 |
@@ -370,6 +372,7 @@
 - **`rt_sigqueueinfo`/`rt_tgsigqueueinfo`**：Linux 分别为 **3/4 个**用户参数（**`uinfo`** 为最后一参），**无** **`sigsetsize`**；勿从 **`a3`/`a4`** 读 **`sigsetsize`** 或调用 **`check_sigset_size`**（残留寄存器会误 **EINVAL**）。**`rt_sig*`** 中带 **`sigsetsize`** 的是 **`rt_sigprocmask`**、**`rt_sigaction`**、**`rt_sigpending`**、**`rt_sigtimedwait`**、**`rt_sigsuspend`** 等，勿与 queueinfo 混淆。**`make_queue_signal_info`**：**`signo==0`** → **`Ok(None)`**；否则 **`parse_signo`** 后 **`uinfo==NULL` → `BadAddress`** 再 **`vm_read`**（**`pidfd_send_signal`** 同路径）。
 - timerfd：`TimerFd` 实现 `FileLike` + `Pollable`；到期逻辑在 `process_expirations` 中根据时钟纳秒与 `next_deadline_nanos` 比较；通过 `axtask::register_timer_callback`（首次创建时注册）在每次内核 timer tick 中扫描弱引用列表并 `wake` `PollSet`；创建 fd 用 `add_file_like`（与 eventfd2 相同），勿对 `Arc<TimerFd>` 误用 `add_to_fd_table(self)`。**`timerfd_settime`**：**`new_value.is_null()` → `InvalidInput`**。**`timerfd_gettime`**：**`curr_value.is_null()` → `BadAddress`**（Linux **EFAULT**），在 **`from_fd`** 之后、**`gettime`/`vm_write`** 之前校验，避免先算定时器再因用户指针失败。
 - **`mmap(2)` `flags`**：先 **`flags & !ALLOWED_MAP_FLAGS`**（**`MAP_TYPE|MAP_FIXED|MAP_ANONYMOUS|…|MAP_DROPPABLE|(MAP_HUGE_MASK<<MAP_HUGE_SHIFT)`** 等 uapi 位），非零 → **`InvalidInput`**；**`MmapFlags::from_bits(flags)`**，**`None`** 时 **`MAP_SHARED_VALIDATE` 类型 → `OperationNotSupported`**，否则 **`InvalidInput`**；勿在未知/非法组合上 **`from_bits_truncate`**。合法 **`MAP_HUGE_*`** 等须在 **`MmapFlags`** 中声明以便 **`from_bits`** 成功。
+- **`mprotect(2)`**：**`length == 0`** → **`InvalidInput`**（**EINVAL**），与 **`sys_mmap`** 对零长度一致（issue-229）。
 - **`pipe2`**：**`flags`** 仅允许 **`O_CLOEXEC`/`O_NONBLOCK`**（**`PipeFlags`**）；用 **`from_bits(...).ok_or(InvalidInput)`**，勿 **`from_bits_truncate`**（与 **`eventfd2`/`epoll_create1`** 一致）。**`add_to_fd_table`** 成功后若 **`fds.vm_write`** 失败（**EFAULT** 等），须 **`close_file_like`** 已安装的读/写 **fd**，勿留孤儿表项（issue-148）；第二端分配失败时仍应关闭已装读端，勿对 **`close_file_like`** **`unwrap`**。
 - **`poll(2)`/`ppoll(2)`**：**`pollfd.fd < 0`** 的条目被忽略，**`revents`** 须置 **0**（勿保留陈旧位）。
 - **`epoll_ctl(2)`**：**`EPOLL_CTL_ADD`/`MOD`** 须先 **`get_file_like(fd)`**（无效目标 fd → **EBADF**），再 **`event.get_as_ref`**/**`parse_event`**（**EFAULT**/**EINVAL** 类），与 Linux 顺序一致（issue-144）；**`events`** 未知位等仍按 issue-078 **`KNOWN_EPOLL_EVENTS_MASK`**。**`EPOLL_CTL_DEL`** 不读 **`event`**。

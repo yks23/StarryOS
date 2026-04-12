@@ -315,6 +315,10 @@ pub fn sys_mprotect(addr: usize, length: usize, prot: u32) -> AxResult<isize> {
     };
     debug!("sys_mprotect <= addr: {addr:#x}, length: {length:x}, prot: {permission_flags:?}");
 
+    if length == 0 {
+        return Err(AxError::InvalidInput);
+    }
+
     if permission_flags.intersects(MmapProt::GROWDOWN | MmapProt::GROWSUP) {
         return Err(AxError::InvalidInput);
     }

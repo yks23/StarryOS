@@ -1,0 +1,27 @@
+{
+  "id": "issue-229",
+  "title": "mprotect：`length==0` 未拒绝，Linux 对零长度区间返回 EINVAL",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`sys_mprotect`**：在 **`align_up_4k`** 之前 **`length == 0` → `AxError::InvalidInput`**（**EINVAL**），与 **`sys_mmap`** 及 Linux **`mprotect(2)`** 一致。",
+  "files_changed": ["kernel/src/syscall/mm/mmap.rs"],
+  "description": "**`kernel/src/syscall/mm/mmap.rs`** **`sys_mprotect`**（约 **311–328** 行）将 **`length`** 经 **`align_up_4k`** 后直接交给 **`AddrSpace::protect`**。当用户传入 **`length == 0`** 时，对齐后仍为 **0**，可能对 **空区间** 调用 **`protect`**，与 **Linux** 对 **`mprotect(addr, 0, …)`** 的常规处理不一致。\n\n**Linux `mprotect(2)`**：**`len`** 为 **0** 时通常返回 **`EINVAL`**（空区间无意义；与 **`munmap(addr, 0)`** 同类问题见 **issue-222**）。\n\n**建议**：在 **`align_up_4k`** 之前或之后显式 **`if length == 0 { return Err(AxError::InvalidInput); }`**（或与 **`sys_mmap`** 对 **`length==0`** 的策略对齐）。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["mprotect"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/mm/mmap.rs:311-328"],
+    "related_files": ["kernel/src/syscall/mm/mmap.rs:135-145"],
+    "key_insight": "mmap 拒 length==0；mprotect 未对称"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；`mprotect(addr, 0, PROT_READ)`。",
+    "expected_output_contains": "",
+    "pass_criteria": "`length==0` 返回 EINVAL 或与 Linux 一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos：通过（exit 0）"
+  },
+  "suggested_fix": "`if length == 0 { return Err(AxError::InvalidInput); }`（对齐 `sys_mmap`）。",
+  "references": ["man 2 mprotect", "issue-222"]
+}
