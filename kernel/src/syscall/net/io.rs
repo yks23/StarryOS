@@ -205,15 +205,38 @@ fn recv_on_socket(
             };
 
             let pushed = match *cmsg {
-                CMsg::Rights { fds } => builder.push(SOL_SOCKET, SCM_RIGHTS, |data| {
-                    let mut written = 0;
-                    for (f, chunk) in fds.into_iter().zip(data.chunks_exact_mut(size_of::<i32>())) {
-                        let fd = add_file_like(f, false)?;
-                        chunk.copy_from_slice(&fd.to_ne_bytes());
-                        written += size_of::<i32>();
+                CMsg::Rights { fds } => {
+                    // `push` may return `Ok(false)` before invoking the closure; do not move `fds`
+                    // into a `FnOnce` that could be dropped unrun (issue-183).
+                    if builder.remaining() < size_of::<cmsghdr>() {
+                        cmsg_trunc = true;
+                        drop(fds);
+                        continue;
                     }
-                    Ok(written)
-                })?,
+                    let body_cap = builder.remaining() - size_of::<cmsghdr>();
+                    let total = fds.len();
+                    let pushed_inner = builder.push(SOL_SOCKET, SCM_RIGHTS, move |data| {
+                        let cap_fds = data.len() / size_of::<i32>();
+                        let to_install = total.min(cap_fds);
+                        let mut it = fds.into_iter();
+                        for (f, chunk) in it
+                            .by_ref()
+                            .take(to_install)
+                            .zip(data.chunks_exact_mut(size_of::<i32>()))
+                        {
+                            let fd = add_file_like(f, false)?;
+                            chunk.copy_from_slice(&fd.to_ne_bytes());
+                        }
+                        for f in it {
+                            drop(f);
+                        }
+                        Ok(to_install * size_of::<i32>())
+                    })?;
+                    if total.saturating_mul(size_of::<i32>()) > body_cap {
+                        cmsg_trunc = true;
+                    }
+                    pushed_inner
+                }
             };
             if !pushed {
                 cmsg_trunc = true;

@@ -74,6 +74,12 @@ impl<'a> CMsgBuilder<'a> {
         }
     }
 
+    /// Bytes still available in the user control buffer (from `msg_controllen` capacity).
+    #[inline]
+    pub fn remaining(&self) -> usize {
+        self.capacity.saturating_sub(*self.len)
+    }
+
     pub fn push(
         &mut self,
         level: u32,
