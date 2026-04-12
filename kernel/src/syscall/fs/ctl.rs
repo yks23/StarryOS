@@ -33,6 +33,8 @@ use crate::{
     task::AsThread,
     time::{TimeValueLike, read_timespec_user},
 };
+#[cfg(target_arch = "x86_64")]
+use crate::time::read_timeval_user;
 
 /// The ioctl() system call manipulates the underlying device parameters
 /// of special files.
@@ -509,16 +511,6 @@ fn update_times(
             ..Default::default()
         })?;
     Ok(())
-}
-
-#[cfg(target_arch = "x86_64")]
-fn read_timeval_user(p: *const timeval) -> AxResult<timeval> {
-    unsafe {
-        Ok(timeval {
-            tv_sec: core::ptr::addr_of!((*p).tv_sec).vm_read()?,
-            tv_usec: core::ptr::addr_of!((*p).tv_usec).vm_read()?,
-        })
-    }
 }
 
 #[cfg(target_arch = "x86_64")]

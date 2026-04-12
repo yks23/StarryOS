@@ -139,3 +139,13 @@ pub(crate) fn read_timespec_user(p: *const timespec) -> AxResult<timespec> {
         })
     }
 }
+
+/// Read one user `timeval` field-by-field (issue-204/215; avoids bulk load via `get_as_ref`).
+pub(crate) fn read_timeval_user(p: *const timeval) -> AxResult<timeval> {
+    unsafe {
+        Ok(timeval {
+            tv_sec: core::ptr::addr_of!((*p).tv_sec).vm_read()?,
+            tv_usec: core::ptr::addr_of!((*p).tv_usec).vm_read()?,
+        })
+    }
+}

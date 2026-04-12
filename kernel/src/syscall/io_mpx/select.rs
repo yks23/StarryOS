@@ -17,8 +17,10 @@ use crate::{
     mm::{UserConstPtr, UserPtr, nullable},
     syscall::signal::check_sigset_size,
     task::with_blocked_signals,
-    time::TimeValueLike,
+    time::{TimeValueLike, read_timespec_user},
 };
+#[cfg(target_arch = "x86_64")]
+use crate::time::read_timeval_user;
 
 struct FdSet(Bitmap<{ __FD_SETSIZE as usize }>);
 
@@ -217,9 +219,13 @@ pub fn sys_select(
         readfds,
         writefds,
         exceptfds,
-        nullable!(timeout.get_as_ref())?
-            .map(|it| it.try_into_time_value())
-            .transpose()?,
+        if timeout.is_null() {
+            None
+        } else {
+            Some(
+                read_timeval_user(timeout.address().as_usize() as *const timeval)?.try_into_time_value()?,
+            )
+        },
         0.into(),
     )
 }
@@ -244,9 +250,13 @@ pub fn sys_pselect6(
         readfds,
         writefds,
         exceptfds,
-        nullable!(timeout.get_as_ref())?
-            .map(|ts| ts.try_into_time_value())
-            .transpose()?,
+        if timeout.is_null() {
+            None
+        } else {
+            Some(
+                read_timespec_user(timeout.address().as_usize() as *const timespec)?.try_into_time_value()?,
+            )
+        },
         sigmask,
     )
 }

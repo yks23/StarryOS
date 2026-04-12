@@ -10,7 +10,7 @@ use starry_vm::{VmMutPtr, VmPtr};
 
 use crate::{
     task::{AsThread, ITimerType, time_value_from_nanos},
-    time::TimeValueLike,
+    time::{TimeValueLike, read_timeval_user},
 };
 
 fn clock_id_supported(clock_id: u32) -> bool {
@@ -113,16 +113,6 @@ pub fn sys_times(tms: *mut Tms) -> AxResult<isize> {
         })?;
     }
     Ok(nanos_to_ticks(monotonic_time_nanos()) as _)
-}
-
-/// Read one user `timeval` field-by-field (issue-204 / no bulk `assume_init` on padding).
-fn read_timeval_user(p: *const timeval) -> AxResult<timeval> {
-    unsafe {
-        Ok(timeval {
-            tv_sec: core::ptr::addr_of!((*p).tv_sec).vm_read()?,
-            tv_usec: core::ptr::addr_of!((*p).tv_usec).vm_read()?,
-        })
-    }
 }
 
 fn read_itimerval_user(p: *const itimerval) -> AxResult<itimerval> {

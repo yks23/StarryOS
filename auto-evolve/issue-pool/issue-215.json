@@ -1,0 +1,36 @@
+{
+  "id": "issue-215",
+  "title": "`pselect6`/`ppoll`/`select` 超时：`get_as_ref`+`try_into_time_value` 等价整颗 `timespec`/`timeval` 拷贝，未用 `read_timespec_user`",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "在 **`crate::time`** 增加 **`read_timeval_user`**（与 **`read_timespec_user`** 同构）；**`syscall/time.rs`**/**`fs/ctl.rs`** 改为复用。**`sys_pselect6`**/**`sys_ppoll`** 对非空超时指针用 **`read_timespec_user(address().as_usize() as *const timespec)?`**；**`sys_select`（x86_64）** 用 **`read_timeval_user`**。去掉 **`get_as_ref` + `try_into_time_value`** 整结构按值路径。",
+  "files_changed": [
+    "kernel/src/time.rs",
+    "kernel/src/syscall/fs/ctl.rs",
+    "kernel/src/syscall/time.rs",
+    "kernel/src/syscall/io_mpx/select.rs",
+    "kernel/src/syscall/io_mpx/poll.rs"
+  ],
+  "description": "**`kernel/src/syscall/io_mpx/select.rs`** **`sys_pselect6`**（约 **247–249** 行）与 **`sys_select`（x86_64）**（约 **220–222** 行）对 **`UserConstPtr<timespec>`/`UserConstPtr<timeval>`** 使用 **`nullable!(timeout.get_as_ref())?.map(|ts| ts.try_into_time_value())`**。**`get_as_ref`** 返回指向用户缓冲的 **`&timespec`/`&timeval`**；**`try_into_time_value`** 在 **`TimeValueLike`** 实现中对 **`timespec`/`timeval` 按值接收**，实际发生 **整结构从用户地址加载**（与 **`Copy`** 语义一致），**非** **`read_timespec_user`** 的 **`tv_sec`/`tv_nsec`（或 `tv_usec`）标量读**。\n\n**`kernel/src/syscall/io_mpx/poll.rs`** **`sys_ppoll`**（约 **119–121** 行）对 **`UserConstPtr<timespec>`** 同样 **`get_as_ref` + `try_into_time_value`**。\n\n与 **issue-205**/**issue-207**/**issue-209** 已统一采用的 **`read_timespec_user`**/**`read_timeval_user`** 策略不一致；若 **`linux_raw_sys`** 中 **`timespec`/`timeval`** 含 padding 或布局演进，整颗加载的可审计性与 **issue-201** 类问题同源。**建议**：对非空超时指针改为 **`read_timespec_user(p as *const _)`** / **`read_timeval_user`**（可从 **`UserConstPtr::address()`** 得到 **`VirtAddr` 再转指针，或补充 **`as_ptr()`**），与 **`timerfd_settime`** 对齐；**`read_timeval_user`** 当前在 **`syscall/time.rs`**/**`fs/ctl.rs`** 为模块内 helper，可抽到 **`crate::time`** 复用。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["pselect6", "ppoll", "select"],
+  "source_context": {
+    "primary_files": [
+      "kernel/src/syscall/io_mpx/select.rs:207-251",
+      "kernel/src/syscall/io_mpx/poll.rs:110-124"
+    ],
+    "related_files": ["kernel/src/time.rs"],
+    "key_insight": "用户超时经 `&T` + `try_into_time_value` 触发按值拷贝，非字段读"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 **`read_timespec_user`** / **`sys_timerfd_settime`**。",
+    "expected_output_contains": "",
+    "pass_criteria": "超时路径使用与 **`issue-209`** 同构的字段读 helper，或证明无 padding/布局风险。",
+    "last_result": "通过：`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`（exit 0，仅有既有 warning）。"
+  },
+  "suggested_fix": "在 `select`/`ppoll` 超时分支调用 `read_timespec_user`/`read_timeval_user`（可将 `UserConstPtr` 转为 `*const _` 后传入）。",
+  "references": ["man 2 pselect", "man 2 ppoll", "issue-209", "issue-205", "issue-201"]
+}

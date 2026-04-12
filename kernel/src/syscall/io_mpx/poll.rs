@@ -13,7 +13,7 @@ use crate::{
     mm::{UserConstPtr, UserPtr, nullable},
     syscall::signal::check_sigset_size,
     task::with_blocked_signals,
-    time::TimeValueLike,
+    time::{TimeValueLike, read_timespec_user},
 };
 
 fn do_poll(
@@ -116,9 +116,13 @@ pub fn sys_ppoll(
 ) -> AxResult<isize> {
     check_sigset_size(sigsetsize)?;
     let fds = fds.get_as_mut_slice(nfds.try_into().map_err(|_| AxError::InvalidInput)?)?;
-    let timeout = nullable!(timeout.get_as_ref())?
-        .map(|ts| ts.try_into_time_value())
-        .transpose()?;
+    let timeout = if timeout.is_null() {
+        None
+    } else {
+        Some(
+            read_timespec_user(timeout.address().as_usize() as *const timespec)?.try_into_time_value()?,
+        )
+    };
     // TODO: handle signal
     do_poll(fds, timeout, nullable!(sigmask.get_as_ref())?.copied())
 }
