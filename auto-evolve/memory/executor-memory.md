@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-259 resolved（**`openat`/`open`**：**`O_PATH`** 时 **`flags`** 须为 Linux **`O_PATH_FLAGS`** 子集（**`O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC|O_PATH`**），否则 **`InvalidInput`（EINVAL）**；**`validate_open_flags`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-258 resolved（**`memfd_create`/`memfd_secret`**：**`MFD_EXEC`** 与 **`MFD_NOEXEC_SEAL`** 同置 → **`InvalidInput`（EINVAL）**；**`validate_memfd_flags`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-257 resolved（**`sendto`/`sendmsg`**：**`msg_name`/`addr` 非空**且 **`addrlen==0`** → **`InvalidInput`（EINVAL）**；仅 **`addr.is_null()`** 时 **`to: None`**；**`send_on_socket`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-256 resolved（**`getsockname`/`getpeername`**：**`addr==NULL`** 时 **`Ok(0)`**，不读 **`addrlen`**、不 **`write_to_user`**；非 NULL 仍先 **`addrlen.get_as_mut()`** 再地址再写（**`net/name.rs`**；与 issue-119 顺序兼容）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -267,6 +268,7 @@
 | issue-256 | getsockname/getpeername addr==NULL 不写用户 | resolved | 2026-04-12 |
 | issue-257 | sendto/sendmsg 非空 addr 且 addrlen==0 → EINVAL | resolved | 2026-04-12 |
 | issue-258 | memfd MFD_EXEC 与 MFD_NOEXEC_SEAL 互斥 EINVAL | resolved | 2026-04-12 |
+| issue-259 | openat O_PATH 仅允许 O_PATH_FLAGS 组合 EINVAL | resolved | 2026-04-12 |
 | issue-219 | waitpid __WNOTHREAD → Unsupported | resolved | 2026-04-12 |
 | issue-225 | fallocate FALLOC_FL 掩码 + 非零 EOPNOTSUPP | resolved | 2026-04-12 |
 | issue-227 | shmat 无效 shmid 不 unwrap（EINVAL） | resolved | 2026-04-12 |
@@ -434,6 +436,7 @@
 - **`mmap(2)` `flags`**：先 **`flags & !ALLOWED_MAP_FLAGS`**（**`MAP_TYPE|MAP_FIXED|MAP_ANONYMOUS|…|MAP_DROPPABLE|(MAP_HUGE_MASK<<MAP_HUGE_SHIFT)`** 等 uapi 位），非零 → **`InvalidInput`**；**`MmapFlags::from_bits(flags)`**，**`None`** 时 **`MAP_SHARED_VALIDATE` 类型 → `OperationNotSupported`**，否则 **`InvalidInput`**；勿在未知/非法组合上 **`from_bits_truncate`**。合法 **`MAP_HUGE_*`** 等须在 **`MmapFlags`** 中声明以便 **`from_bits`** 成功。
 - **`mprotect(2)`**：**`length == 0`** → **`InvalidInput`**（**EINVAL**），与 **`sys_mmap`** 对零长度一致（issue-229）。**`munmap(2)`**：**`length == 0`** → **`InvalidInput`**（**EINVAL**）（issue-234）。
 - **`brk(2)`**：非零 **`addr`** 须 **4K 页对齐**（**`VirtAddr::is_aligned(PAGE_SIZE_4K)`**），否则 **`InvalidInput`（EINVAL）**；成功路径 **`set_heap_top`/`return`** 均为对齐地址（issue-253；**`USER_HEAP_BASE`/`heap_limit`** 等仍见 issue-089）。
+- **`openat(2)`/`open(2)`**（**`fs/fd_ops.rs`**）：**`validate_open_flags`** 先于 **`flags_to_options`**；若 **`O_PATH`**，**`flags`** 须为 Linux **`O_PATH_FLAGS`**（**`O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC|O_PATH`**）子集，否则 **`InvalidInput`（EINVAL）**（**`fs/open.c` `build_open_flags`**，issue-259；含 **`O_PATH|O_CREAT`** 等）。
 - **`pipe2`**：**`flags`** 仅允许 **`O_CLOEXEC`/`O_NONBLOCK`**（**`PipeFlags`**）；用 **`from_bits(...).ok_or(InvalidInput)`**，勿 **`from_bits_truncate`**（与 **`eventfd2`/`epoll_create1`** 一致）。**`add_to_fd_table`** 成功后若 **`fds.vm_write`** 失败（**EFAULT** 等），须 **`close_file_like`** 已安装的读/写 **fd**，勿留孤儿表项（issue-148）；第二端分配失败时仍应关闭已装读端，勿对 **`close_file_like`** **`unwrap`**。
 - **`poll(2)`/`ppoll(2)`**：**`pollfd.fd < 0`** 的条目被忽略，**`revents`** 须置 **0**（勿保留陈旧位）。
 - **`epoll_ctl(2)`**：**`fd == epfd` → `InvalidInput`**（**EINVAL**），勿将 epoll 实例加入自身（issue-240）。**`EPOLL_CTL_ADD`/`MOD`** 须先 **`get_file_like(fd)`**（无效目标 fd → **EBADF**），再 **`event.get_as_ref`**/**`parse_event`**（**EFAULT**/**EINVAL** 类），与 Linux 顺序一致（issue-144）；**`events`** 未知位等仍按 issue-078 **`KNOWN_EPOLL_EVENTS_MASK`**。**`EPOLL_CTL_DEL`** 不读 **`event`**。

@@ -1,0 +1,27 @@
+{
+  "id": "issue-259",
+  "title": "openat：`O_PATH` 与 `O_CREAT`/`O_TRUNC` 等可同时传入 `flags_to_options`，与 Linux `build_open_flags` EINVAL 不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_openat` 在 `flags_to_options` 前调用 `validate_open_flags`：若置 `O_PATH`，则 `flags` 须为 Linux `O_PATH_FLAGS`（`O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC|O_PATH`）子集，否则 `InvalidInput`（EINVAL），对齐 `fs/open.c` `build_open_flags`。",
+  "files_changed": ["kernel/src/syscall/fs/fd_ops.rs"],
+  "description": "**`kernel/src/syscall/fs/fd_ops.rs`** **`flags_to_options`**（约 **24–57** 行）按位独立设置 **`create`/`truncate`/`path`** 等，**未** 在 syscall 层拒绝 **`O_PATH`** 与 **`O_CREAT`**/**`O_TRUNC`**/**`O_EXCL`** 等 **Linux** 禁止或需忽略的组合。\n\n**Linux `fs/open.c` `build_open_flags`（及同类路径）**：若 **`flags & O_PATH`**，则 **`O_CREAT`** 等会触发 **`-EINVAL`**（「不能用 **`O_PATH`** 创建文件」），而非对 **`OpenOptions`** 同时置位 **`path`+`create`**。\n\n**当前**：**`sys_openat`** 将 **`O_PATH|O_CREAT`** 等直接交给 **`OpenOptions::open`**，行为依赖 **axfs** 是否拒绝；若未拒绝，可能与 **Linux** **`errno`**/**打开结果** 分叉。\n\n**建议**：在 **`sys_openat`**（或 **`flags_to_options`** 入口）对照 **`VALID_OPEN_FLAGS`**：**`O_PATH`** 时清除或拒绝与 **`O_CREAT`/`O_TRUNC`/`O_EXCL`**/**同步/直写** 等冲突位，与内核 **`build_open_flags`** 一致。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["openat", "open"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/fd_ops.rs:23-193"],
+    "related_files": [],
+    "key_insight": "O_PATH 与 create/truncate 未互斥"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；`openat(path, O_PATH|O_CREAT, …)` 与 Linux 对照。",
+    "expected_output_contains": "",
+    "pass_criteria": "O_PATH|O_CREAT → EINVAL（或等价），与 Linux。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0）"
+  },
+  "suggested_fix": "在 `flags_to_options` 前增加 `O_PATH` 与禁止标志的校验与文档化。",
+  "references": ["man 2 open", "Linux fs/open.c build_open_flags"]
+}

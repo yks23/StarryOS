@@ -20,6 +20,20 @@ use crate::{
     task::AsThread,
 };
 
+/// Linux `fs/open.c` `O_PATH_FLAGS`: with `O_PATH`, only these `open(2)` bits may be set
+/// (`build_open_flags`; rejects `O_CREAT`/`O_TRUNC`/`O_EXCL`/`O_APPEND`/… with `O_PATH`).
+const OPEN_PATH_FLAG_MASK: u32 = O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC | O_PATH;
+
+fn validate_open_flags(flags: u32) -> AxResult<()> {
+    if flags & O_PATH == 0 {
+        return Ok(());
+    }
+    if flags & !OPEN_PATH_FLAG_MASK != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    Ok(())
+}
+
 /// Convert open flags to [`OpenOptions`].
 fn flags_to_options(flags: c_int, mode: __kernel_mode_t, (uid, gid): (u32, u32)) -> OpenOptions {
     let flags = flags as u32;
@@ -185,6 +199,7 @@ pub fn sys_openat(
 
     let mode = mode & !current().as_thread().proc_data.umask();
 
+    validate_open_flags(flags as u32)?;
     let options = flags_to_options(flags, mode, (sys_geteuid()? as _, sys_getegid()? as _));
     let dirfd = dirfd_for_path_resolution(dirfd, path.as_str());
     with_fs(dirfd, |fs| options.open(fs, path))
