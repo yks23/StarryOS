@@ -12,8 +12,8 @@ use axpoll::{IoEvents, Pollable};
 use linux_raw_sys::general::{
     __kernel_off_t, FALLOC_FL_COLLAPSE_RANGE, FALLOC_FL_INSERT_RANGE, FALLOC_FL_KEEP_SIZE,
     FALLOC_FL_NO_HIDE_STALE, FALLOC_FL_PUNCH_HOLE, FALLOC_FL_UNSHARE_RANGE,
-    FALLOC_FL_WRITE_ZEROES, FALLOC_FL_ZERO_RANGE, SPLICE_F_GIFT, SPLICE_F_MORE, SPLICE_F_MOVE,
-    SPLICE_F_NONBLOCK,
+    FALLOC_FL_WRITE_ZEROES, FALLOC_FL_ZERO_RANGE, RWF_APPEND, RWF_DSYNC, RWF_HIPRI, RWF_NOWAIT,
+    RWF_SYNC, SPLICE_F_GIFT, SPLICE_F_MORE, SPLICE_F_MOVE, SPLICE_F_NONBLOCK,
 };
 
 /// Linux `splice(2)` flags; unknown bits must be rejected with EINVAL.
@@ -23,6 +23,10 @@ const SPLICE_F_MASK: u32 = SPLICE_F_MOVE | SPLICE_F_NONBLOCK | SPLICE_F_MORE | S
 const COPY_FILE_RANGE_COMPRESS: u32 = 1 << 0;
 const COPY_FILE_RANGE_DEDUPE: u32 = 1 << 2;
 const COPY_FILE_RANGE_MASK: u32 = COPY_FILE_RANGE_COMPRESS | COPY_FILE_RANGE_DEDUPE;
+
+/// Linux `preadv2(2)` / `pwritev2(2)` `RWF_*` (`uapi/linux/fs.h`, via `linux_raw_sys::general`);
+/// unknown bits → EINVAL; defined bits not yet honored → EOPNOTSUPP (issue-248).
+const RWF_MASK: u32 = RWF_HIPRI | RWF_DSYNC | RWF_SYNC | RWF_NOWAIT | RWF_APPEND;
 
 /// Linux `POSIX_FADV_*` through `POSIX_FADV_WIPEONFORK` (`uapi/linux/fadvise.h`, values 0..=7).
 /// Larger `advice` values are EINVAL until extended in the uapi.
@@ -286,14 +290,26 @@ pub fn sys_pwritev(
     sys_pwritev2(fd, iov, iovcnt, offset, 0)
 }
 
+/// `preadv2`/`pwritev2` `flags` (`RWF_*`): reject unknown bits; defined semantics not implemented yet.
+fn check_rwf_flags(flags: u32) -> AxResult<()> {
+    if flags & !RWF_MASK != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    if flags != 0 {
+        return Err(AxError::OperationNotSupported);
+    }
+    Ok(())
+}
+
 pub fn sys_preadv2(
     fd: c_int,
     iov: *const IoVec,
     iovcnt: usize,
     offset: __kernel_off_t,
-    _flags: u32,
+    flags: u32,
 ) -> AxResult<isize> {
-    debug!("sys_preadv2 <= fd: {fd}, iovcnt: {iovcnt}, offset: {offset}, flags: {_flags}");
+    debug!("sys_preadv2 <= fd: {fd}, iovcnt: {iovcnt}, offset: {offset}, flags: {flags}");
+    check_rwf_flags(flags)?;
     let f = File::from_fd(fd)?;
     if offset < 0 {
         return Err(AxError::InvalidInput);
@@ -308,9 +324,10 @@ pub fn sys_pwritev2(
     iov: *const IoVec,
     iovcnt: usize,
     offset: __kernel_off_t,
-    _flags: u32,
+    flags: u32,
 ) -> AxResult<isize> {
-    debug!("sys_pwritev2 <= fd: {fd}, iovcnt: {iovcnt}, offset: {offset}, flags: {_flags}");
+    debug!("sys_pwritev2 <= fd: {fd}, iovcnt: {iovcnt}, offset: {offset}, flags: {flags}");
+    check_rwf_flags(flags)?;
     let f = File::from_fd(fd)?;
     if offset < 0 {
         return Err(AxError::InvalidInput);

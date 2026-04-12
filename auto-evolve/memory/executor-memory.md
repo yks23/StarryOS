@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-248 resolved（**`preadv2`/`pwritev2`**：**`RWF_*`** 未知位 **`EINVAL`**；**`flags!=0`**（已定义位）→ **`EOPNOTSUPP`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-247 resolved（**`splice`**：**`SPLICE_F_*`**（**`flags!=0`**）→ **`OperationNotSupported`（EOPNOTSUPP）**，直至标志参与 **`do_send`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-246 resolved（**`copy_file_range`**：**`COPY_FILE_RANGE_COMPRESS`/`DEDUPE`**（**`flags!=0`**）→ **`OperationNotSupported`（EOPNOTSUPP）**，勿静默 **`do_send`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-245 resolved（**`shmdt`**：**`shmaddr==0`**/**非页对齐** → **`InvalidInput`（EINVAL）**，先于 **`get_shmid_by_vaddr`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -245,6 +246,7 @@
 | issue-245 | shmdt shmaddr==0/非页对齐 → EINVAL | resolved | 2026-04-12 |
 | issue-246 | copy_file_range COMPRESS/DEDUPE → EOPNOTSUPP | resolved | 2026-04-12 |
 | issue-247 | splice SPLICE_F_* flags!=0 → EOPNOTSUPP | resolved | 2026-04-12 |
+| issue-248 | preadv2/pwritev2 RWF_* 掩码 + 非零 EOPNOTSUPP | resolved | 2026-04-12 |
 | issue-219 | waitpid __WNOTHREAD → Unsupported | resolved | 2026-04-12 |
 | issue-225 | fallocate FALLOC_FL 掩码 + 非零 EOPNOTSUPP | resolved | 2026-04-12 |
 | issue-227 | shmat 无效 shmid 不 unwrap（EINVAL） | resolved | 2026-04-12 |
@@ -483,6 +485,7 @@
 - **`fallocate(2)`**：**`mode`** 未知 **`FALLOC_FL_*`** 位 → **`EINVAL`**；**`mode == 0`** 仅扩展逻辑长度（**`set_len(max(current, offset+len))`**）；其它已知标志（**`KEEP_SIZE`/打洞/零范围等**）尚无稀疏 extent → **`EOPNOTSUPP`**（issue-225），勿与非法位混为同一 **`EINVAL`**。
 - **`getdents64(2)`**：**`linux_dirent64`** 中 **`d_name`** 长度 ≤ **`NAME_MAX`**；记录总长 **`d_reclen`** 用 **`u16::try_from(aligned_len)`**，目录 cookie **`d_off`** 用 **`i64::try_from(VFS offset)`**，溢出/超长 → **`EINVAL`**（issue-221）；**`unsafe`** 写入前有 **`SAFETY`** 说明。
 - **`pwrite64(2)`**：**`offset < 0` → `InvalidInput`**（issue-108）；**`len == 0`** 仍须先 **`File::from_fd`** 再 **`Ok(0)`**，勿在 **`from_fd`** 前早退，以便无效 fd 得 **EBADF**（issue-125，对齐 Linux **`vfs_write`/`fget`**）。
+- **`preadv2(2)` / `pwritev2(2)`**：**`flags`**（**`RWF_*`**）须为 **`linux_raw_sys::general`** 中 **`RWF_HIPRI|DSYNC|SYNC|NOWAIT|APPEND`** 子集，否则 **`InvalidInput`**（**EINVAL**）；**`flags!=0`** → **`OperationNotSupported`**（**EOPNOTSUPP**），直至实现对应 **`RWF_*`** 语义（issue-248）。**`preadv`/`pwritev`** 经 **`flags=0`** 调用 **v2**。
 - **`truncate(2)`**：**`length < 0` → `InvalidInput`** 须先于 **`path.get_as_str()`**，以便坏 **`path`** 与负长度组合时优先 **EINVAL**（issue-126，与 **`ftruncate`** 及 Linux **`do_truncate`** 一致）。
 - **`recvmsg`/`recvfrom`/`sendmsg`/`sendto`**：**`flags`** 须在 **`linux_raw_sys::net::MSG_*`** 定义的 **接收** 与 **发送** 掩码内（**`RECVMSG_FLAGS_MASK`** 含 **`MSG_PEEK`**；**`SENDMSG_FLAGS_MASK`** 不含 **`MSG_PEEK`**），否则 **`EINVAL`**。**`axnet::SendFlags`** 仍为占位 **`bitflags!`**，合法 **`MSG_*`** 尚未透传到 **`SendOptions.flags`**；**`MSG_DONTWAIT`** 等语义需在 **`axnet-ng`** 扩展 **`SendFlags`** 并在各 **`SocketOps::send`/`recv`** 中实现。
 - **`times(2)`**：**`tms_*`** 为 **`clock_t` jiffies**（**`USER_HZ = 100`**，**`ns * USER_HZ / 1e9`**）；返回值亦为单调时钟 jiffies（issue-224）。**`tms_utime`/`tms_stime`** 来源：线程组用户/系统时间（已退出线程计入 **`exited_threads_*_ns`**，存活线程取 **`TimeManager::cpu_nanos`**）；**`tms_cutime`/`tms_cstime`** = 已通过 **`wait`** 回收的子进程线程组 CPU 累计（**`waitpid`** 从僵尸 **`ProcessData`** 读 **`thread_group_cpu_nanos`** 后加到父 **`child_*_ns`**）。末线程退出时 **`register_zombie_process_data`**，**`wait`** **`free`** 后 **`remove_zombie_process_data`**。
