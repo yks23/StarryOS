@@ -235,7 +235,10 @@ def generate_auto_prompt_debugger() -> str:
         except Exception:
             pass
 
-    parts = ["你当前处于自动巡检模式。请执行以下操作：\n"]
+    # 统计已完成总数（归档的）
+    archive_total = sum(1 for _ in ISSUE_ARCHIVE.glob("issue-*.json"))
+
+    parts = ["你当前处于自动巡检模式。\n"]
 
     step = 1
     if resolved_issues:
@@ -247,19 +250,41 @@ def generate_auto_prompt_debugger() -> str:
         step += 1
 
     parts.append(
-        f"{step}. 【发现新问题】当前问题池有 {open_count} 个 open issue（其中 {open_bug_count} 个 bug 类）。\n"
-        f"   请审计一个尚未检查的 syscall 模块，发现问题并写入 issue-pool。\n"
-        f"   参考 memory/debugger-memory.md 中的扫描进度，选择未审计的模块。\n"
+        f"{step}. 【发现高价值问题】（重要！请专注于大问题，不要再提交参数校验顺序之类的小修补）\n"
+        f"\n"
+        f"   当前状态：已修复 {archive_total} 个 issue，pool 剩余 {open_count} 个 open。\n"
+        f"   参数校验、errno 精细化等小问题已经足够多了。现在请聚焦以下 **高价值方向**：\n"
+        f"\n"
+        f"   A. 【缺失的重要 syscall】以下常用 syscall 在 Starry 中完全缺失（返回 ENOSYS），实现任意一个都比修参数校验有价值：\n"
+        f"      - waitid（更灵活的进程等待，systemd/init 使用）\n"
+        f"      - execveat（从 fd 执行程序，fexecve 依赖）\n"
+        f"      - ppoll 的 sigmask 正确处理\n"
+        f"      - semget/semop/semctl（System V 信号量，PostgreSQL 使用）\n"
+        f"      - mq_open/mq_send/mq_receive（POSIX 消息队列）\n"
+        f"      - sched_get_priority_max/min\n"
+        f"\n"
+        f"   B. 【功能性增强】让更多真实程序能运行：\n"
+        f"      - /proc/self/exe 符号链接（ldd、busybox applet 发现依赖它）\n"
+        f"      - /proc/[pid]/maps 完善（调试工具、地址空间可视化）\n"
+        f"      - /proc/meminfo 完善（free 命令）\n"
+        f"      - /proc/cpuinfo（lscpu 命令）\n"
+        f"      - Unix domain socket 的 SCM_CREDENTIALS/SO_PEERCRED 完善\n"
+        f"      - pty/tty 的 TCSAFLUSH 等 termios 操作完善\n"
+        f"\n"
+        f"   C. 【架构级改进】高难度但影响深远：\n"
+        f"      - 实现 SIGSTOP/SIGCONT 的多线程全进程暂停（当前只单线程）\n"
+        f"      - CoW fork 的大页支持\n"
+        f"      - mmap MAP_SHARED 的 msync 写回完整性\n"
+        f"\n"
+        f"   severity 标注规则：缺失 syscall = medium/high，/proc 完善 = medium，架构改进 = high。\n"
+        f"   不要再提交 severity=low 的参数校验类 issue。\n"
     )
     step += 1
 
-    # bug 类 issue 充足时引导提改进方案
     if open_bug_count >= 5:
         parts.append(
-            f"{step}. 【主动改进】bug 类 issue 充足（{open_bug_count} 个），可以额外提出 1-2 个改进提案。\n"
-            f"   改进方向：易用性（/proc 完善、错误信息优化）、性能（锁优化、缓存）、兼容性（缺失 syscall 补全）。\n"
-            f"   改进 issue 的 severity 设为 low，category 设为 improvement。\n"
-            f"   同样需要附带测试用例来验证改进效果。\n"
+            f"{step}. 【主动改进提案】可以额外提出 1-2 个 improvement 类 issue。\n"
+            f"   方向：让更多 Alpine 包能直接运行、让开发者体验更好。\n"
         )
         step += 1
 
