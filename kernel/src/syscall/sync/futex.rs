@@ -98,6 +98,14 @@ pub fn sys_futex(
             // Linux ABI: `timeout` argument slot carries `nr_requeue` (`val2`) as `u32`, not a timespec.
             let nr_requeue = assert_unsigned(timeout.addr() as u32)?;
 
+            // Second futex word must be a valid user address; NULL / bad memory must not become
+            // `key2 == 0` bucket noise (issue-384; same syscall-time probe theme as issue-375/383).
+            if uaddr2.is_null() {
+                return Err(AxError::InvalidInput);
+            }
+            check_access(uaddr2.addr(), size_of::<u32>()).map_err(|_| AxError::BadAddress)?;
+            uaddr2.vm_read()?;
+
             let futex = futex_table.get(&key);
             let key2 = FutexKey::new_current(uaddr2.addr());
             let table2 = futex_table_for(&key2);

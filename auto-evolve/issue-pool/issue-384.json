@@ -1,0 +1,27 @@
+{
+  "id": "issue-384",
+  "title": "`futex(2)`：`FUTEX_REQUEUE`/`FUTEX_CMP_REQUEUE` 未校验 `uaddr2`，NULL 或非法地址与 Linux `EINVAL`/`EFAULT` 分层可能不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T23:15:00Z",
+  "severity": "low",
+  "description": "`kernel/src/syscall/sync/futex.rs` `sys_futex` 的 `FUTEX_REQUEUE`/`FUTEX_CMP_REQUEUE` 分支（约 93–115 行）：在 `assert_unsigned(value)` 与（`CMP_REQUEUE` 时）`uaddr.vm_read` 之后，直接使用 `FutexKey::new_current(uaddr2.addr())` 与 `get_or_insert(&key2)`，**未**检测 `uaddr2.is_null()`，也**未**对 `uaddr2` 做 `check_access` 或 `vm_read` 探测。Linux `futex_requeue` 路径要求第二个用户 futex 字为合法可访问用户地址；`uaddr2 == NULL` 通常对应 **`EINVAL`**（或 **`EFAULT`** 类），不应静默落到 **key=0** 的哈希桶上。\n\n`FUTEX_WAIT` 等路径会经 `uaddr.vm_read` 间接校验首个 `uaddr`；`REQUEUE` 对 **`uaddr2`** 缺少对称探测，与 **issue-375**/**issue-383** 用户指针 syscall 时刻校验主题同类。\n\n建议：在 `REQUEUE`/`CMP_REQUEUE` 进入 `key2` 前，若 `uaddr2.is_null()` 则 `InvalidInput`（或对齐 Linux 的 `EINVAL`）；否则对 `uaddr2` 做 `check_access` 或轻量 `vm_read`，失败映射 `BadAddress`。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["futex"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/sync/futex.rs:93-115"],
+    "related_files": ["kernel/src/syscall/sync/futex.rs:146-157"],
+    "key_insight": "`key2` 前：`uaddr2.is_null()` → `EINVAL`；`check_access`+`vm_read` 探测 → `EFAULT`"
+  },
+  "fix_summary": "`sys_futex` `FUTEX_REQUEUE`/`FUTEX_CMP_REQUEUE`：在构造 `key2` 前对 `uaddr2` 校验——NULL → `InvalidInput`；`check_access(sizeof u32)` + `vm_read` 失败 → `BadAddress`（issue-384）。",
+  "files_changed": ["kernel/src/syscall/sync/futex.rs"],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：`FUTEX_REQUEUE` 与 `uaddr2 == NULL` 或不可读指针对照 Linux `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "`uaddr2` 非法时与 Linux `EINVAL`/`EFAULT` 一致，或文档化差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（仓库既有警告）"
+  },
+  "suggested_fix": "在 `key2`/`get_or_insert` 前校验 `uaddr2` 非 NULL 且用户可读（`check_access`/`vm_read`）。",
+  "references": ["man 2 futex", "kernel/src/syscall/sync/futex.rs", "issue-383", "issue-375"]
+}
