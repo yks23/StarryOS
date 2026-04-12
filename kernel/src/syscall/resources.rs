@@ -37,14 +37,11 @@ pub fn sys_prlimit64(
         }
 
         let limit = &mut proc_data.rlim.write()[resource];
-        if new_limit.rlim_max <= limit.max {
-            limit.max = new_limit.rlim_max;
-        } else {
-            // TODO: patch resources
-            // return Err(AxError::OperationNotPermitted);
-            return Ok(0);
+        if new_limit.rlim_max > limit.max {
+            // Linux do_prlimit: unprivileged raise of hard limit above current cap → EPERM.
+            return Err(AxError::OperationNotPermitted);
         }
-
+        limit.max = new_limit.rlim_max;
         limit.current = new_limit.rlim_cur;
     }
 
