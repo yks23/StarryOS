@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-112 resolved（**`io_uring_setup`**：成功写回 **`IoUringParams`** 前 **`sq_off`/`cq_off`/`resv`/线程字段** 清零，注释标明 **无 ring mmap布局**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-111 resolved（**`membarrier`**：**`ProcessData` 三注册位**；**`GLOBAL_EXPEDITED`/`PRIVATE_*`** 须先 **`REGISTER_*`** 否则 **`InvalidInput`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-110 resolved（**`timerfd_settime`**：**`flags` 仅允许 `TFD_TIMER_ABSTIME`**，未知位 **`InvalidInput`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-109 resolved（**`pidfd_open`**：**`pid==0` → `InvalidInput`**，对齐 Linux **EINVAL**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -92,6 +93,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-112 | io_uring_setup 写回 params 清零 sq_off/cq_off/resv | resolved | 2026-04-12 |
 | issue-101 | exit/exit_group mask status to low byte before <<8 | resolved | 2026-04-16 |
 | issue-100 | capget/capset V3 two __user_cap_data_struct slots | resolved | 2026-04-15 |
 | issue-099 | prctl PR_SET_NAME bounded 16-byte read + NUL | resolved | 2026-04-14 |
@@ -224,7 +226,7 @@
 - **`ioctl`（`kernel/src/file/fs.rs` 的 `File`）**：与 **`Tty`** 驱动已实现的终端/PTY 命令（**`TCGETS`**/**`TCSETS`** 族、**`TIOCGWINSZ`**、**`TIOCGPGRP`**、**`TIOCSCTTY`** 等）在 **`NodeType != CharacterDevice`** 时于转发 **`location().ioctl`** 前返回 **`NotATty`（ENOTTY）**；字符设备仍走 **`Device`**/**`DeviceOps`**（TTY 与其它设备各自处理）。
 - **`clock_gettime` / `clock_getres`**：未实现的 **`clockid_t`** 须 **`EINVAL`**，**勿**对未知 id 回退 **`wall_time()`**。**`clock_id_supported`** 与已实现时钟一致（**REALTIME/REALTIME_COARSE、MONOTONIC/RAW/COARSE、BOOTTIME、CPUTIME_ID** 等）；**`clock_getres`** 对不支持 id 同样 **`EINVAL`**（即使 **`res==NULL`**）。
 - **`nanosleep(2)`**/**`clock_nanosleep(2)`**：**`axtask::future::sleep`** 按**单调**时间推进；**`sleep_impl`** 应用 **`monotonic_time`** 测量 **`elapsed`** 与 **`rem`**。**`clock_nanosleep(CLOCK_MONOTONIC, …)`** 走 **`sleep_impl`**；**`CLOCK_REALTIME`** 且 **`dur` 非零**（相对睡眠或未到时的 **`TIMER_ABSTIME`**）→ **`Unsupported`**（无墙钟驱动睡眠）；**`dur==0`** → **`Ok(0)`**。
-- `bpf` / `userfaultfd`：未实现时返回 **`AxError::Unsupported`（ENOSYS）**，勿再 `sys_dummy_fd`；`perf_event_open` 可返回 **`PermissionDenied`（EPERM）** 以匹配测试与常见无能力场景。`io_uring_setup` 若仅消除 dummy 路径：最小桩返回 `anon_inode:[io_uring]` 的 `IoUringFd`，写回 `sq_entries`/`cq_entries`；真 io_uring 需 ring mmap 与提交队列。
+- `bpf` / `userfaultfd`：未实现时返回 **`AxError::Unsupported`（ENOSYS）**，勿再 `sys_dummy_fd`；`perf_event_open` 可返回 **`PermissionDenied`（EPERM）** 以匹配测试与常见无能力场景。**`io_uring_setup`**：桩实现返回 **`anon_inode:[io_uring]`** 的 **`IoUringFd`**，写回 **`sq_entries`/`cq_entries`**；成功路径须将 **`sq_off`/`cq_off`/`resv`/`sq_thread_*`** **清零**（无真实 ring 布局），勿把用户输入的布局垃圾写回，以免误导 **`mmap`**；真 io_uring 需 ring mmap 与提交队列。
 - `fsopen`：无 fs-context 实现时返回 **`NoSuchDevice`（ENODEV）**（或 EINVAL），勿发 `anon_inode:[dummy]`；`fspick`/`open_tree` 可 **`Unsupported`**。`memfd_secret` 在用户态常以两参探测（与 `memfd_create` 同形）时，可 **`sys_memfd_create` 复用** 以获得真实 memfd 路径。已移除 **`sys_dummy_fd`** 分配假 fd 的路径。
 - **`mount`/`umount2`**：**`sys_mount`** 仅允许 **`SUPPORTED_MOUNT_FSTYPES`**（当前 **`tmpfs`**）；空或未知 **`fstype`** → **`EINVAL`**。**`mount`** 的 **`flags`** 当前须为 **0**（未实现 **`MS_RDONLY`/`MS_BIND`/…**）；**`data`** 须为 **`NULL`** 或空 C 字符串（非空 **`tmpfs` 选项** → **`EINVAL`**）。**`sys_umount2`** 的 **`flags`** 须为 **`MNT_FORCE|DETACH|EXPIRE|UMOUNT_NOFOLLOW`** 子集，否则 **`EINVAL`**。未建模 **`CAP_SYS_ADMIN`** 等挂载权限。
 - `/proc/self/fd/N` 的 readlink 内容来自 `FileLike::path()`；`inotify_init1`/`fanotify_init` 须使用独立 `InotifyFd`/`FanotifyFd`（`anon_inode:[inotify]` / `anon_inode:[fanotify]`），不能再用 `anon_inode:[dummy]`，否则用户态假阳性。

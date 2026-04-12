@@ -6,7 +6,7 @@ use starry_vm::{VmMutPtr, VmPtr};
 use crate::file::{IoUringFd, add_file_like};
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub(crate) struct IoSqringOffsets {
     head: u32,
     tail: u32,
@@ -20,7 +20,7 @@ pub(crate) struct IoSqringOffsets {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub(crate) struct IoCqringOffsets {
     head: u32,
     tail: u32,
@@ -48,6 +48,9 @@ pub(crate) struct IoUringParams {
 
 /// Minimal `io_uring_setup`: validates entries, copies back adjusted queue sizes, returns an
 /// `anon_inode:[io_uring]` fd. Ring mmap and I/O are not supported.
+///
+/// On success, **`sq_off` / `cq_off` / `resv`** and thread fields are **zeroed** — there is no
+/// kernel ring layout to expose; userland must not `mmap` using garbage echoed from input.
 pub fn sys_io_uring_setup(entries: u32, params: *mut IoUringParams) -> AxResult<isize> {
     if params.is_null() {
         return Err(AxError::InvalidInput);
@@ -64,6 +67,11 @@ pub fn sys_io_uring_setup(entries: u32, params: *mut IoUringParams) -> AxResult<
     p.cq_entries = sqe.saturating_mul(2);
     p.features = 0;
     p.wq_fd = 0;
+    p.sq_thread_cpu = 0;
+    p.sq_thread_idle = 0;
+    p.resv = [0; 3];
+    p.sq_off = IoSqringOffsets::default();
+    p.cq_off = IoCqringOffsets::default();
     params.vm_write(p)?;
     add_file_like(Arc::new(IoUringFd), false).map(|fd| fd as isize)
 }

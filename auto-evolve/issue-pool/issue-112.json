@@ -1,0 +1,28 @@
+{
+  "id": "issue-112",
+  "title": "io_uring_setup 写回 IoUringParams 时保留用户态 sq_off/cq_off，与 Linux 填充 ring 布局不一致且易误导 mmap",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "resolved_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "成功路径在 **`vm_write`** 前将 **`sq_off`/`cq_off`** 置 **`Default`**（**`IoSqringOffsets`/`IoCqringOffsets`** 增加 **`derive(Default)`**），**`resv`** 与 **`sq_thread_cpu`/`sq_thread_idle`** 清零；文档注释说明 **无内核 ring 布局**、用户态**不得**按回传偏移 **`mmap`**。",
+  "files_changed": ["kernel/src/syscall/fs/io_uring.rs"],
+  "description": "**`sys_io_uring_setup`**（`kernel/src/syscall/fs/io_uring.rs`）用 **`params.vm_read_uninit`** 读入完整 **`IoUringParams`** 后，仅校验 **`flags==0`** 并改写 **`sq_entries`**、**`cq_entries`**、**`features`**、**`wq_fd`**，随后 **`params.vm_write(p)`** 写回**整个**结构体。**`sq_off`**、**`cq_off`** 以及部分 **`resv`** 仍为**用户态输入的任意值**。**Linux `io_uring_setup(2)`** 由内核写入确定的 **SQ/CQ ring** 与 **CQE** 区域偏移；用户态依赖这些字段做 **`mmap`**。Starry 注释写明 **ring mmap与 I/O 未实现**，但若 **`open`** 成功却回传**未初始化/伪造**的偏移，用户态（或通用库）可能按错误偏移映射并崩溃或行为未定义。与同 syscall 已对 **`params==NULL`**、**`flags`** 的严格校验相比，**布局字段**未清零或未标记为不可用，属于可观测的桩实现缺口。",
+  "category": "syscall-stub",
+  "affected_syscalls": ["io_uring_setup"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/io_uring.rs:51-68"],
+    "related_files": [],
+    "key_insight": "读入全结构后只改 entries/features/wq_fd；sq_off/cq_off 原样写回"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "**`io_uring_setup`**成功返回后检查 **`params.sq_off`/`cq_off`**：在 Starry 下是否与 Linux 一样为内核确定的布局；或向 **`sq_off` 注入非零垃圾** 后调用，若成功返回且字段未清零/未覆盖，则与 Linux 偏离。",
+    "expected_output_contains": "",
+    "pass_criteria": "成功路径将 **`sq_off`/`cq_off`**（及不适用时的 **`resv`**）**清零**、填充**文档化的 stub 常量**，或 **`Unsupported`** 直至实现 ring；勿回传未经验证的用户内容。",
+    "last_result": "2026-04-12：修复后 **`sq_off`/`cq_off`/`resv`/线程字段** 写回前清零；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** PASS；QEMU 未测"
+  },
+  "suggested_fix": "在 **`vm_write`** 前 **`p.sq_off = Default::default()`**、**`p.cq_off = Default::default()`**（或 **`zeroed`** 整块保留区），并在注释中说明 **mmap 未支持**；若需完全对齐 Linux，再实现真实偏移或返回 **`Unsupported`**。",
+  "references": ["man 2 io_uring_setup", "Linux io_uring/io_uring.c"]
+}
