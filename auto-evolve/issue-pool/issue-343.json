@@ -1,0 +1,32 @@
+{
+  "id": "issue-343",
+  "title": "`syslog(2)`：`sys_syslog` 对 `SYSLOG_ACTION_READ`/`READ_ALL`/`READ_CLEAR` 等路径直接返回 `Unsupported`，未检查 `buf`/`len`；当 `buf` 为 `NULL` 或用户不可写时，Linux `sys_syslog` 常在拷贝前返回 `EFAULT`，与本路径的 `Unsupported`/`ENOTSUP` 语义及错误优先级不一致",
+  "status": "resolved",
+  "created_at": "2026-04-15T18:00:00Z",
+  "resolved_at": "2026-05-22T00:00:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/sys.rs`** **`sys_syslog`** **（** **约** **278–296** **行** **）** **签名** **含** **`buf`/`len`** **，** **实现** **中** **为** **`_buf`/`_len`** **未** **使用** **。** **对** **需** **向** **用户** **`buf`** **写入** **的** **`action`** **（** **如** **`SYSLOG_ACTION_READ`** **）** **，** **本** **内核** **无** **printk** **环** **缓冲** **而** **返回** **`Unsupported`** **属** **预期** **，** **但** **在** **返回** **前** **未** **按** **Linux** **语义** **校验** **`buf`** **非** **空** **且** **可** **写** **（** **`len`** **足够** **等** **）** **。** **因此** **`buf==NULL`** **时** **Linux** **多** **为** **`EFAULT`** **，** **此处** **为** **`Unsupported`** **，** **与** **glibc** **`klogctl`** **/`strace`** **可见** **错误** **码** **可能** **不同** **。** **与** **issue-312** **`uname`** **/** **issue-285** **`getrandom`** **等** **`sys.rs`** **用户** **指针** **主题** **相邻** **。**\n\n**建议** **：** **在读** **`/`** **写** **用户** **`buf`** **的** **`action`** **上** **，** **先** **`buf.is_null()`** **或** **`vm_write`/`vm_read`** **边界** **→** **`BadAddress`/`InvalidInput`** **，** **再** **返回** **「** **无** **klog** **」** **的** **`Unsupported`** **；** **或** **注释** **说明** **Starry** **无** **日志** **环** **故** **不** **模拟** **`EFAULT`** **顺序** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["syslog"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/sys.rs:264-296"],
+    "related_files": [],
+    "key_insight": "syslog ignores buf/len; READ paths Unsupported vs Linux EFAULT on bad buf"
+  },
+  "fix_summary": "`sys_syslog`：`SYSLOG_ACTION_READ`/`READ_ALL`/`READ_CLEAR` 在 `buf.is_null()` 时返回 `BadAddress`（EFAULT），再返回无 printk 环的 `Unsupported`；注释 issue-343。`len` 仍仅占位至未来实现。",
+  "files_changed": [
+    "kernel/src/syscall/sys.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-343.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：`SYSLOG_ACTION_READ` + `buf==NULL` 对照 Linux 返回 `EFAULT`/`ENOTSUP`。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游对用户 `buf` 的校验顺序/errno 一致，或注释说明无 klog 时的差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在返回 `Unsupported` 前对需访问 `buf` 的 `action` 做 `NULL`/长度检查；或明确文档化 errno 与 Linux 的差异。",
+  "references": ["man 2 syslog", "man 3 klogctl", "kernel/src/syscall/sys.rs", "issue-312"]
+}

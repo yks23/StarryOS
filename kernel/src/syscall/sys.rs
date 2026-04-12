@@ -275,13 +275,19 @@ const SYSLOG_ACTION_CONSOLE_LEVEL: i32 = 8;
 const SYSLOG_ACTION_SIZE_UNREAD: i32 = 9;
 const SYSLOG_ACTION_SIZE_BUFFER: i32 = 10;
 
-pub fn sys_syslog(action: i32, _buf: *mut c_char, _len: usize) -> AxResult<isize> {
+#[allow(unused_variables)] // `len` only meaningful for READ* once klog exists; ABI always passes it.
+pub fn sys_syslog(action: i32, buf: *mut c_char, len: usize) -> AxResult<isize> {
     if !(SYSLOG_ACTION_CLOSE..=SYSLOG_ACTION_SIZE_BUFFER).contains(&action) {
         return Err(AxError::InvalidInput);
     }
 
     match action {
         SYSLOG_ACTION_READ | SYSLOG_ACTION_READ_ALL | SYSLOG_ACTION_READ_CLEAR => {
+            // Linux `do_syslog`: validate user buffer before discovering no printk ring (EFAULT vs
+            // ENOTSUP order; issue-343). Starry still has no klog → `Unsupported` after a non-NULL `buf`.
+            if buf.is_null() {
+                return Err(AxError::BadAddress);
+            }
             Err(AxError::Unsupported)
         }
         SYSLOG_ACTION_CLEAR
