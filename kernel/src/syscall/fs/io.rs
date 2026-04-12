@@ -475,10 +475,11 @@ pub fn sys_splice(
     }
 
     let src = if !off_in.is_null() {
+        let file = File::from_fd(fd_in)?;
         if off_in.vm_read()? < 0 {
             return Err(AxError::InvalidInput);
         }
-        SendFile::Offset(File::from_fd(fd_in)?, off_in.cast())
+        SendFile::Offset(file, off_in.cast())
     } else {
         if let Ok(src) = Pipe::from_fd(fd_in) {
             if !src.is_read() {
@@ -495,10 +496,11 @@ pub fn sys_splice(
     };
 
     let dst = if !off_out.is_null() {
+        let file = File::from_fd(fd_out)?;
         if off_out.vm_read()? < 0 {
             return Err(AxError::InvalidInput);
         }
-        SendFile::Offset(File::from_fd(fd_out)?, off_out.cast())
+        SendFile::Offset(file, off_out.cast())
     } else {
         if let Ok(dst) = Pipe::from_fd(fd_out) {
             if !dst.is_write() {
