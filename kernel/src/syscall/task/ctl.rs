@@ -11,6 +11,8 @@ use crate::{
 };
 
 const CAPABILITY_VERSION_3: u32 = 0x20080522;
+/// Linux `_LINUX_CAPABILITY_VERSION_3`: `_LINUX_CAPABILITY_U32S_3` consecutive `__user_cap_data_struct` slots (lower / upper u32 words per field).
+const CAP_V3_DATA_SLOTS: usize = 2;
 
 fn read_cap_header(header_ptr: *mut __user_cap_header_struct) -> AxResult<__user_cap_header_struct> {
     // FIXME: AnyBitPattern
@@ -55,6 +57,15 @@ pub fn sys_capget(
         permitted: p,
         inheritable: i,
     })?;
+    // Second slot: high 32 bits per field; ProcessData stores lower 32 only.
+    let zero = __user_cap_data_struct {
+        effective: 0,
+        permitted: 0,
+        inheritable: 0,
+    };
+    for k in 1..CAP_V3_DATA_SLOTS {
+        unsafe { data.add(k) }.vm_write(zero)?;
+    }
     Ok(0)
 }
 
@@ -65,8 +76,14 @@ pub fn sys_capset(
     let header = read_cap_header(header)?;
     let target = resolve_cap_target(&header)?;
     ensure_same_process_for_cap(&target)?;
-    let cap_data = unsafe { data.vm_read_uninit()?.assume_init() };
-    target.set_capabilities(cap_data.effective, cap_data.permitted, cap_data.inheritable)?;
+    let cap_low = unsafe { data.vm_read_uninit()?.assume_init() };
+    for k in 1..CAP_V3_DATA_SLOTS {
+        let cap_hi = unsafe { data.add(k).vm_read_uninit()?.assume_init() };
+        if cap_hi.effective != 0 || cap_hi.permitted != 0 || cap_hi.inheritable != 0 {
+            return Err(AxError::InvalidInput);
+        }
+    }
+    target.set_capabilities(cap_low.effective, cap_low.permitted, cap_low.inheritable)?;
     Ok(0)
 }
 
