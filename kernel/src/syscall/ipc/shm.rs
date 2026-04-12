@@ -13,7 +13,7 @@ use starry_process::Pid;
 
 use super::{IPC_PRIVATE, IPC_RMID, IPC_SET, IPC_STAT, IpcPerm, next_ipc_id};
 use crate::{
-    mm::{Backend, SharedPages, UserPtr, nullable},
+    mm::{AddrSpace, Backend, SharedPages, UserPtr, nullable},
     task::AsThread,
 };
 
@@ -28,6 +28,21 @@ bitflags::bitflags! {
         /* take-over region on attach */
         const SHM_REMAP = 0o40000;
     }
+}
+
+/// Linux `SHMLBA` for this port: shared memory attach addresses align to a 4 KiB boundary.
+const SHMLBA: usize = PAGE_SIZE_4K;
+
+fn shmat_range_has_mapping(aspace: &AddrSpace, start: VirtAddr, len: usize) -> bool {
+    let end = start.as_usize().saturating_add(len);
+    let mut pos = memory_addr::align_down_4k(start.as_usize());
+    while pos < end {
+        if aspace.find_area(VirtAddr::from(pos)).is_some() {
+            return true;
+        }
+        pos = pos.saturating_add(PAGE_SIZE_4K);
+    }
+    false
 }
 
 /// Data structure describing a shared memory segment.
@@ -418,46 +433,72 @@ pub fn sys_shmget(key: i32, size: usize, shmflg: usize) -> AxResult<isize> {
 }
 
 pub fn sys_shmat(shmid: i32, addr: usize, shmflg: u32) -> AxResult<isize> {
+    const VALID_SHMAT_FLAGS: u32 = ShmAtFlags::SHM_RDONLY.bits()
+        | ShmAtFlags::SHM_RND.bits()
+        | ShmAtFlags::SHM_REMAP.bits();
+    if shmflg & !VALID_SHMAT_FLAGS != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    let shm_flg = ShmAtFlags::from_bits(shmflg).ok_or(AxError::InvalidInput)?;
+
     let shm_inner = {
         let shm_manager = SHM_MANAGER.lock();
         shm_manager.get_inner_by_shmid(shmid).unwrap()
     };
     let mut shm_inner = shm_inner.lock();
     let mut mapping_flags = shm_inner.mapping_flags;
-    let shm_flg = ShmAtFlags::from_bits_truncate(shmflg);
 
     if shm_flg.contains(ShmAtFlags::SHM_RDONLY) {
         mapping_flags.remove(MappingFlags::WRITE);
     }
-
-    // TODO: solve shmflg: SHM_RND and SHM_REMAP
 
     let curr = current();
     let proc_data = &curr.as_thread().proc_data;
     let pid = proc_data.proc.pid();
     let mut aspace = proc_data.aspace.write();
 
-    let start_aligned = memory_addr::align_down_4k(addr);
     let length = shm_inner.page_num * PAGE_SIZE_4K;
 
     // alloc the virtual address range
     assert!(shm_inner.get_addr_range(pid).is_none());
-    let start_addr = aspace
-        .find_free_area(
-            VirtAddr::from(start_aligned),
-            length,
-            VirtAddrRange::new(aspace.base(), aspace.end()),
-            PAGE_SIZE_4K,
-        )
-        .or_else(|| {
-            aspace.find_free_area(
-                aspace.base(),
+    let start_addr = if addr == 0 {
+        aspace
+            .find_free_area(
+                VirtAddr::from(0usize),
                 length,
                 VirtAddrRange::new(aspace.base(), aspace.end()),
                 PAGE_SIZE_4K,
             )
-        })
-        .ok_or(AxError::NoMemory)?;
+            .or_else(|| {
+                aspace.find_free_area(
+                    aspace.base(),
+                    length,
+                    VirtAddrRange::new(aspace.base(), aspace.end()),
+                    PAGE_SIZE_4K,
+                )
+            })
+            .ok_or(AxError::NoMemory)?
+    } else {
+        let eff = if shm_flg.contains(ShmAtFlags::SHM_RND) {
+            addr & !(SHMLBA - 1)
+        } else if !addr.is_multiple_of(SHMLBA) {
+            return Err(AxError::InvalidInput);
+        } else {
+            addr
+        };
+        let start = VirtAddr::from(eff);
+        if !aspace.contains_range(start, length) {
+            return Err(AxError::NoMemory);
+        }
+        if shmat_range_has_mapping(&aspace, start, length) {
+            if shm_flg.contains(ShmAtFlags::SHM_REMAP) {
+                aspace.unmap(start, length)?;
+            } else {
+                return Err(AxError::InvalidInput);
+            }
+        }
+        start
+    };
     let end_addr = VirtAddr::from(start_addr.as_usize() + length);
     let va_range = VirtAddrRange::new(start_addr, end_addr);
 
