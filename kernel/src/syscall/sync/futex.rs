@@ -94,21 +94,24 @@ pub fn sys_futex(
             if command == FUTEX_CMP_REQUEUE && uaddr.vm_read()? != value3 {
                 return Err(AxError::WouldBlock);
             }
-            let value2 = assert_unsigned(timeout.addr() as u32)?;
+            // Linux ABI: `timeout` argument slot carries `nr_requeue` (`val2`) as `u32`, not a timespec.
+            let nr_requeue = assert_unsigned(timeout.addr() as u32)?;
 
             let futex = futex_table.get(&key);
             let key2 = FutexKey::new_current(uaddr2.addr());
             let table2 = futex_table_for(&key2);
             let futex2 = table2.get_or_insert(&key2);
 
-            let mut count = 0;
             if let Some(futex) = futex {
-                count = futex.wq.wake(value as _, u32::MAX);
-                if count == value as usize {
-                    count += futex.wq.requeue(value2 as _, &futex2.wq) as usize;
-                }
+                // Match kernel/futex/requeue.c: wake up to `nr_wake` waiters, then requeue up to
+                // `nr_requeue` of the *remaining* blocked waiters—unconditional on whether `nr_wake`
+                // was fully consumed.
+                let woke = futex.wq.wake(value as _, u32::MAX);
+                let requeued = futex.wq.requeue(nr_requeue as _, &futex2.wq);
+                Ok((woke + requeued) as _)
+            } else {
+                Ok(0)
             }
-            Ok(count as _)
         }
         _ => Err(AxError::Unsupported),
     }

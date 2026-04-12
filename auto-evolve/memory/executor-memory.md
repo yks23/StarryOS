@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-082 resolved（**`futex`** **`FUTEX_REQUEUE`/`CMP_REQUEUE`**：**`wake` 后无条件对剩余等待者 `requeue`（上限 `nr_requeue`）**；返回 **`woke + requeued`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-081 resolved（**`select`/`pselect6`** **`do_select`**：输出 **`fd_set`** 先在内核缓冲中构建，**仅在 `with_blocked_signals` 成功返回后**拷贝到用户；阻塞期间保留用户侧输入位图；空 **`FdPollSet`** 立即写回零并 **`Ok(0)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-080 resolved（**`poll`/`ppoll`** **`do_poll`**：不再因 **`POLLNVAL` 早退**；**`nval_ready` + `poll_io`**；**`fd_indices`** 写 **`revents`**；超时按全表 **`revents`** 计数；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-079 resolved（**`getcwd`**：**`buf==NULL`** 时 **`size>0` → `BadAddress`**、**`size==0` → `OutOfRange`**；成功返回**写入长度（含 NUL）**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -62,6 +63,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-082 | futex REQUEUE wake then always requeue | resolved | 2026-04-13 |
 | issue-081 | select fd_set kernel buffer, copy on return | resolved | 2026-04-12 |
 | issue-080 | poll POLLNVAL no early return + timeout count | resolved | 2026-04-12 |
 | issue-079 | getcwd NULL buf EFAULT/ERANGE + return length | resolved | 2026-04-12 |

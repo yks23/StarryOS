@@ -1,0 +1,28 @@
+{
+  "id": "issue-082",
+  "title": "futex FUTEX_REQUEUE/CMP_REQUEUE 仅在 wake 返回值等于 val 时才 requeue，与 Linux 两段式语义不完全对齐",
+  "status": "resolved",
+  "created_at": "2026-04-12T12:30:00Z",
+  "resolved_at": "2026-04-13T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`FUTEX_REQUEUE`/`FUTEX_CMP_REQUEUE`**：去掉 **`wake` 计数须等于 `nr_wake` 才 `requeue`** 的门控；在 **`wake(value, u32::MAX)`** 之后**始终**对源队列剩余等待者 **`requeue(nr_requeue, &futex2.wq)`**（**`nr_requeue`** 仍来自 **`timeout` 指针槽位 `u32`**，与 Linux ABI 一致并加注释）。返回值 **`woke + requeued`**，对齐 Linux两段式语义。",
+  "files_changed": ["kernel/src/syscall/sync/futex.rs"],
+  "description": "**`sys_futex`**（`kernel/src/syscall/sync/futex.rs`）在 **`FUTEX_REQUEUE`/`FUTEX_CMP_REQUEUE`** 分支中先 **`futex.wq.wake(value as _, u32::MAX)`**，**仅当** **`count == value as usize`** **时** **再** **`futex.wq.requeue(value2, &futex2.wq)`**（约 **104–109** 行）。Linux **`futex(7)`**/**`kernel/futex/requeue.c`** 语义为：先在源 futex 上 **wake** 至多 **`nr_wake`（`val`）** 个等待者，再对**源队列上仍阻塞的等待者**执行 **requeue**，数量上限为 **`nr_requeue`（第四参数，`val2`）**；**requeue** 阶段**不**以「已唤醒数是否等于 `nr_wake`」为条件。当前实现用 **`count == value`** 门控 **requeue**：在 **`wake` 返回值小于 `val` 但源队列上仍有未唤醒的等待者**的场景（例如未来 **`wake`** 使用非 `u32::MAX` 的位掩码、或等待条目 **`bitset`** 与掩码无交集导致部分条目无法被 **wake** 移出）时，可能与 Linux「**wake 之后仍对剩余等待者做 requeue（上限 `val2`）**」不一致。**当前** **`wake` 固定 `u32::MAX`**，且 **`WaitQueue::wake`** 在常见「等待者数 ≤ `val`」时 **`count == value`** 与「先 wake 再 requeue 剩余」在效果上常一致，属于**潜在/前瞻性**偏差。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["futex"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/sync/futex.rs:92-111"],
+    "related_files": ["kernel/src/task/futex.rs:71-104"],
+    "key_insight": "`if count == value` 才 `requeue`；Linux 为 wake 后对剩余等待者 requeue（上限 val2）"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "对照 Linux：`FUTEX_REQUEUE` 在 **`nr_wake` 未吃满** 但队列仍有阻塞线程时，是否仍 **`requeue` 至多 `nr_requeue` 条**；Starry 若因 **`count != val`** 跳过 **requeue** 则偏差成立。需可构造 **`wake` 与队列长度** 的测试夹具（当前实现下可能需改 **wake** 掩码才能暴露）。",
+    "expected_output_contains": "",
+    "pass_criteria": "**`wake` 之后无条件（在持有正确锁/原子语义下）对源队列剩余条目执行 `requeue`，上限为 `val2`，与 Linux `futex_requeue` 一致；或文档化刻意子集语义。",
+    "last_result": "2026-04-13：**`wake` 后无条件 `requeue`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** PASS"
+  },
+  "suggested_fix": "将 **`if count == value { ... requeue ... }`** 改为：先 **`wake`**，再 **`requeue(min(源队列剩余, val2))`**（或等价拆分），与 **`kernel/futex/requeue.c`** 顺序对齐；**`val2`** 继续从第四 syscall 参数按 **`u32`** 解释（当前 **`timeout.addr() as u32`** 与「指针槽位承载整数」的 Linux ABI 一致，可保留并加注释）。",
+  "references": ["man 2 futex", "man 7 futex", "Linux kernel futex/requeue.c"]
+}
