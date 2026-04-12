@@ -234,10 +234,12 @@ bitflags! {
 }
 
 pub fn sys_close_range(first: i32, last: i32, flags: u32) -> AxResult<isize> {
+    // Linux __sys_close_range: reject unknown flag bits before first/last range (EINVAL ordering;
+    // issue-324; same theme as issue-323/issue-317).
+    let flags = CloseRangeFlags::from_bits(flags).ok_or(AxError::InvalidInput)?;
     if first < 0 || last < first {
         return Err(AxError::InvalidInput);
     }
-    let flags = CloseRangeFlags::from_bits(flags).ok_or(AxError::InvalidInput)?;
     debug!("sys_close_range <= fds: [{first}, {last}], flags: {flags:?}");
     if flags.contains(CloseRangeFlags::UNSHARE) {
         // Linux `CLOSE_RANGE_UNSHARE`: private FD table for this task group slot (see `clone` without
