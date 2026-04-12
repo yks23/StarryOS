@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-035 resolved（**`clock_gettime`/`clock_getres`** 不支持 **`clock_id`** → **`EINVAL`**）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过
 - 日期：2026-04-13：issue-032 resolved（**`mount`** **`fstype`** 白名单 + **`umount2`** **`flags`** 掩码）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过
 - 日期：2026-04-13：issue-030 resolved（**`getpriority`** 返回 **`20-nice`**（Linux ABI）；**`setpriority`** 分发已存在）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过
 - 日期：2026-04-13：issue-029 resolved（**`getresuid`/`getresgid`** syscall + **`ProcessData::get_resuid`/`get_resgid`**）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过
@@ -13,6 +14,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-035 | clock_gettime 无效 clockid 回退墙钟 | resolved | 2026-04-13 |
 | issue-032 | mount fstype / umount2 flags 校验 | resolved | 2026-04-13 |
 | issue-030 | getpriority/setpriority nice ABI | resolved | 2026-04-13 |
 | issue-029 | getresuid/getresgid 缺失 ENOSYS | resolved | 2026-04-13 |
@@ -54,6 +56,7 @@
 - 全核 membarrier（多 hart）在 Linux 上依赖 IPI；若未来启用 `axfeat/smp` + `axfeat/ipi`，可在各核 IPI handler 中执行与 `sys_membarrier` 相同的 fence，并用同步原语等待全部完成。
 - `rt_sigreturn` 通过 `block_next_signal` 标记「下一次回到用户循环时跳过一次 `check_signals`」；该标志必须是 **per-thread**（`Thread::skip_next_signal_check`），不可用进程级或全局 AtomicBool。
 - timerfd：`TimerFd` 实现 `FileLike` + `Pollable`；到期逻辑在 `process_expirations` 中根据时钟纳秒与 `next_deadline_nanos` 比较；通过 `axtask::register_timer_callback`（首次创建时注册）在每次内核 timer tick 中扫描弱引用列表并 `wake` `PollSet`；创建 fd 用 `add_file_like`（与 eventfd2 相同），勿对 `Arc<TimerFd>` 误用 `add_to_fd_table(self)`。
+- **`clock_gettime` / `clock_getres`**：未实现的 **`clockid_t`** 须 **`EINVAL`**，**勿**对未知 id 回退 **`wall_time()`**。**`clock_id_supported`** 与已实现时钟一致（**REALTIME/REALTIME_COARSE、MONOTONIC/RAW/COARSE、BOOTTIME、CPUTIME_ID** 等）；**`clock_getres`** 对不支持 id 同样 **`EINVAL`**（即使 **`res==NULL`**）。
 - `bpf` / `userfaultfd`：未实现时返回 **`AxError::Unsupported`（ENOSYS）**，勿再 `sys_dummy_fd`；`perf_event_open` 可返回 **`PermissionDenied`（EPERM）** 以匹配测试与常见无能力场景。`io_uring_setup` 若仅消除 dummy 路径：最小桩返回 `anon_inode:[io_uring]` 的 `IoUringFd`，写回 `sq_entries`/`cq_entries`；真 io_uring 需 ring mmap 与提交队列。
 - `fsopen`：无 fs-context 实现时返回 **`NoSuchDevice`（ENODEV）**（或 EINVAL），勿发 `anon_inode:[dummy]`；`fspick`/`open_tree` 可 **`Unsupported`**。`memfd_secret` 在用户态常以两参探测（与 `memfd_create` 同形）时，可 **`sys_memfd_create` 复用** 以获得真实 memfd 路径。已移除 **`sys_dummy_fd`** 分配假 fd 的路径。
 - **`mount`/`umount2`**：**`sys_mount`** 仅允许 **`SUPPORTED_MOUNT_FSTYPES`**（当前 **`tmpfs`**）；空或未知 **`fstype`** → **`EINVAL`**。**`sys_umount2`** 的 **`flags`** 须为 **`MNT_FORCE|DETACH|EXPIRE|UMOUNT_NOFOLLOW`** 子集，否则 **`EINVAL`**。未建模 **`CAP_SYS_ADMIN`** 等挂载权限。
@@ -79,6 +82,7 @@
 - **`sysinfo(2)`**：**`totalram`** ← **`axhal::mem::total_ram_size()`**；**`freeram`** ← **`min(available_pages * PAGE_SIZE_4K, totalram)`**（**`axalloc::global_allocator()`** 空闲页池，近似值）；**`uptime`** ← **`monotonic_time_nanos / NANOS_PER_SEC`**；**`loads`/swap/buffer/high** 仍为 **0**；**`mem_unit=1`**。与 Linux **MemAvailable** 级统计仍有差距。
 
 ## 给 Debugger 的消息
+- issue-035：请跑 **`/bin/test_clock_gettime_invalid`**（无效 **`clock_gettime`** **`clockid`** → **`EINVAL`**）。
 - issue-032：请跑 **`/bin/test_mount_partial`**（非法 **`fstype`** → **`EINVAL`/`ENODEV`/`ENOENT`** 或 **`EPERM`** 跳过）。
 - issue-030：请跑 **`/bin/test_nice_enosys`**（**`setpriority` 非 ENOSYS**）；可配合 **`/bin/test_getpriority`** 核对 **`getpriority`** 与 **`nice`**。
 - issue-029：请跑 **`/bin/test_getresuid_enosys`**（**`getresuid`/`getresgid`** 返回 0 并写入三组 id）。
