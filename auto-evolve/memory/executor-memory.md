@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-041 resolved（**`Socket::stat`**：**`st_ino`** 自增、**`st_dev`** 伪 sockfs；**`path`** **`socket:[ino]`**）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过
 - 日期：2026-04-12：issue-039 resolved（**`times(2)`**：**`tms_utime`/`tms_stime`** 为线程组累计；**`tms_cutime`/`tms_cstime`** 为已 **`wait`** 子进程 CPU；僵尸 **`ProcessData`** 表 + **`waitpid`** 累加）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过
 - 日期：2026-04-12：issue-038 resolved（**`recvfrom`/`recvmsg`/`sendto`/`sendmsg`**：**`MSG_*`** 掩码校验，非法位 **`EINVAL`**；**`SendFlags`** 仍待 **`axnet-ng`** 扩展后再透传）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过
 - 日期：2026-04-12：issue-037 resolved（**`splice`/`copy_file_range`**：**`flags`** 掩码校验，非法位 **`EINVAL`**；**`SPLICE_F_*`** 来自 **`linux_raw_sys`**，**`COPY_FILE_RANGE_*`** 对齐 **`uapi/linux/fs.h`**）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过
@@ -17,6 +18,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-041 | Socket fstat 唯一 st_ino | resolved | 2026-04-12 |
 | issue-039 | times tms_cutime 子进程累计 | resolved | 2026-04-12 |
 | issue-038 | recv/send MSG_* 掩码 EINVAL | resolved | 2026-04-12 |
 | issue-037 | splice/copy_file_range flags 掩码 EINVAL | resolved | 2026-04-12 |
@@ -89,8 +91,10 @@
 - **`splice(2)` / `copy_file_range(2)`**：**`flags`** 须在 Linux 已知掩码内（**`SPLICE_F_MOVE|NONBLOCK|MORE|GIFT`**；**`copy_file_range`** 为 **`COPY_FILE_RANGE_COMPRESS|DEDUPE`**），否则 **`EINVAL`**。**`SPLICE_F_*`** 语义（如非阻塞）若与底层 **`do_send`** 未完全对齐，属后续增强；非法位须先拒绝。
 - **`recvmsg`/`recvfrom`/`sendmsg`/`sendto`**：**`flags`** 须在 **`linux_raw_sys::net::MSG_*`** 定义的 **接收** 与 **发送** 掩码内（**`RECVMSG_FLAGS_MASK`** 含 **`MSG_PEEK`**；**`SENDMSG_FLAGS_MASK`** 不含 **`MSG_PEEK`**），否则 **`EINVAL`**。**`axnet::SendFlags`** 仍为占位 **`bitflags!`**，合法 **`MSG_*`** 尚未透传到 **`SendOptions.flags`**；**`MSG_DONTWAIT`** 等语义需在 **`axnet-ng`** 扩展 **`SendFlags`** 并在各 **`SocketOps::send`/`recv`** 中实现。
 - **`times(2)`**：**`tms_utime`/`tms_stime`** = 线程组用户/系统时间（已退出线程计入 **`exited_threads_*_ns`**，存活线程取 **`TimeManager::cpu_nanos`**）；**`tms_cutime`/`tms_cstime`** = 已通过 **`wait`** 回收的子进程线程组 CPU 累计（**`waitpid`** 从僵尸 **`ProcessData`** 读 **`thread_group_cpu_nanos`** 后加到父 **`child_*_ns`**）。末线程退出时 **`register_zombie_process_data`**，**`wait`** **`free`** 后 **`remove_zombie_process_data`**。
+- **`Socket`/`fstat`**：每个 **`Socket::new`** 分配单调 **`sock_ino`**（**`AtomicU64`**）与固定 **`SOCKFS_STAT_DEV`**；**`FileLike::stat`** 填 **`Kstat::dev`/`ino`**；**`path`** 为 **`socket:[ino]`**，与 **`st_ino`** 一致。
 
 ## 给 Debugger 的消息
+- issue-041：请跑 **`/bin/test_socket_stat_unique_ino`**（两 **`socket(AF_INET,SOCK_STREAM)`** 的 **`fstat.st_ino`** 不同）。
 - issue-039：请跑 **`/bin/test_times_cutime`**（**`wait`** 后父 **`tms_cutime`** 相对 **`wait`** 前增加）。
 - issue-038：请跑 **`/bin/test_recvmsg_invalid_flags`**（**`recvmsg(..., 0x80000000)`** 有数据仍 **`EINVAL`**）。
 - issue-037：请跑 **`/bin/test_splice_flags_invalid`**（**`splice(..., flags=0xdeadbeef)`** → **`EINVAL`**）。

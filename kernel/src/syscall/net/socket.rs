@@ -55,7 +55,7 @@ pub fn sys_socket(domain: u32, raw_ty: u32, proto: u32) -> AxResult<isize> {
             return Err(AxError::from(LinuxError::EAFNOSUPPORT));
         }
     };
-    let socket = Socket(socket);
+    let socket = Socket::new(socket);
 
     if raw_ty & O_NONBLOCK != 0 {
         socket.set_nonblocking(true)?;
@@ -120,7 +120,7 @@ pub fn sys_accept4(
     let cloexec = flags & O_CLOEXEC != 0;
 
     let socket = Socket::from_fd(fd)?;
-    let socket = Socket(socket.accept()?);
+    let socket = Socket::new(socket.accept()?);
     if flags & O_NONBLOCK != 0 {
         socket.set_nonblocking(true)?;
     }
@@ -177,8 +177,8 @@ pub fn sys_socketpair(
             return Err(AxError::from(LinuxError::ESOCKTNOSUPPORT));
         }
     };
-    let sock1 = Socket(SocketInner::Unix(sock1));
-    let sock2 = Socket(SocketInner::Unix(sock2));
+    let sock1 = Socket::new(SocketInner::Unix(sock1));
+    let sock2 = Socket::new(SocketInner::Unix(sock2));
 
     if raw_ty & O_NONBLOCK != 0 {
         sock1.set_nonblocking(true)?;
