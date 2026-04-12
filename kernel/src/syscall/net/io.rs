@@ -115,12 +115,14 @@ pub fn sys_sendmsg(fd: i32, msg: UserConstPtr<msghdr>, flags: u32) -> AxResult<i
         return Err(AxError::InvalidInput);
     }
 
-    let msg = msg.get_as_ref()?;
+    // Whole-structure snapshot (like `copy_msghdr_from_user`): `msg_control` / `msg_controllen` /
+    // `msg_iov` / … come from one load sequence, not independent re-reads of user `msghdr` (issue-197).
+    let msg = *msg.get_as_ref()?;
     let mut cmsg = Vec::new();
     if !msg.msg_control.is_null() {
         let mut ptr = msg.msg_control as usize;
         let ptr_end = ptr
-            .checked_add(msg.msg_controllen as usize)
+            .checked_add(msg.msg_controllen)
             .ok_or(AxError::InvalidInput)?;
         while let Some(hdr_end) = ptr.checked_add(size_of::<cmsghdr>()) {
             if hdr_end > ptr_end {
@@ -146,7 +148,7 @@ pub fn sys_sendmsg(fd: i32, msg: UserConstPtr<msghdr>, flags: u32) -> AxResult<i
     send_on_socket(
         &socket,
         fd,
-        IoVectorBuf::new(msg.msg_iov as *const IoVec, msg.msg_iovlen)?.into_io(),
+        IoVectorBuf::new(msg.msg_iov.cast::<IoVec>(), msg.msg_iovlen)?.into_io(),
         flags,
         UserConstPtr::from(msg.msg_name as usize),
         msg.msg_namelen as socklen_t,
