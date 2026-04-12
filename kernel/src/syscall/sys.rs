@@ -1,7 +1,7 @@
 use alloc::vec;
 use core::{
     ffi::c_char,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use axalloc::global_allocator;
@@ -10,17 +10,17 @@ use axerrno::{AxError, AxResult};
 use axfs::FS_CONTEXT;
 use axhal::mem::{PAGE_SIZE_4K, total_ram_size};
 use axhal::time::{NANOS_PER_SEC, monotonic_time_nanos};
-use axtask::current;
+use axtask::{TaskState, current};
 use bytemuck::cast_slice;
 use linux_raw_sys::{
     general::{GRND_INSECURE, GRND_NONBLOCK, GRND_RANDOM},
-    system::{new_utsname, sysinfo},
+    system::{SI_LOAD_SHIFT, new_utsname, sysinfo},
 };
 use starry_vm::{VmMutPtr, vm_write_slice};
 
 use crate::{
     mm::{UserConstPtr, UserPtr},
-    task::{AsThread, processes},
+    task::{AsThread, processes, tasks},
 };
 
 pub fn sys_getuid() -> AxResult<isize> {
@@ -156,6 +156,72 @@ pub fn sys_uname(name: *mut new_utsname) -> AxResult<isize> {
     Ok(0)
 }
 
+/// Linux `sysinfo.loads` fixed-point: `floor(load * (1 << SI_LOAD_SHIFT))`.
+static SYSINFO_LOAD_LAST_NS: AtomicU64 = AtomicU64::new(0);
+static SYSINFO_LOAD_EMA_1: AtomicU64 = AtomicU64::new(0);
+static SYSINFO_LOAD_EMA_5: AtomicU64 = AtomicU64::new(0);
+static SYSINFO_LOAD_EMA_15: AtomicU64 = AtomicU64::new(0);
+
+/// UP：尚无 SMP 在线 CPU 导出时按 1 处理。
+const SYSINFO_LOAD_NCPUS: u64 = 1;
+
+const LOAD_TAU_1_NS: u64 = 60 * NANOS_PER_SEC;
+const LOAD_TAU_5_NS: u64 = 5 * 60 * NANOS_PER_SEC;
+const LOAD_TAU_15_NS: u64 = 15 * 60 * NANOS_PER_SEC;
+
+fn count_runnable_tasks() -> usize {
+    tasks()
+        .iter()
+        .filter(|t| matches!(t.state(), TaskState::Running | TaskState::Ready))
+        .count()
+}
+
+fn ema_load_u64(old: u64, sample: u64, tau_ns: u64, delta_ns: u64) -> u64 {
+    if delta_ns == 0 {
+        return old;
+    }
+    let den = (tau_ns as u128).saturating_add(delta_ns as u128);
+    let diff = sample as i128 - old as i128;
+    let adj = (diff * delta_ns as i128 / den as i128) as i64;
+    let v = (old as i128).saturating_add(adj as i128);
+    v.clamp(0, u64::MAX as i128) as u64
+}
+
+/// issue-218: 近似 1/5/15 分钟平均负载（runqueue 上 Ready/Running 计数 + EWMA），与 Linux 定点格式一致。
+fn sysinfo_load_avg_fixed() -> [u64; 3] {
+    let scale = 1u64
+        .checked_shl(SI_LOAD_SHIFT)
+        .expect("SI_LOAD_SHIFT must fit in u64");
+    let runnable = count_runnable_tasks() as u64;
+    let sample = (runnable as u128 * scale as u128 / SYSINFO_LOAD_NCPUS as u128)
+        .min(u64::MAX as u128) as u64;
+
+    let now = monotonic_time_nanos();
+    let last = SYSINFO_LOAD_LAST_NS.load(Ordering::Relaxed);
+    let delta = now.saturating_sub(last);
+    SYSINFO_LOAD_LAST_NS.store(now, Ordering::Relaxed);
+
+    if last == 0 {
+        SYSINFO_LOAD_EMA_1.store(sample, Ordering::Relaxed);
+        SYSINFO_LOAD_EMA_5.store(sample, Ordering::Relaxed);
+        SYSINFO_LOAD_EMA_15.store(sample, Ordering::Relaxed);
+        return [sample, sample, sample];
+    }
+
+    let step = |slot: &AtomicU64, tau: u64| {
+        let old = slot.load(Ordering::Relaxed);
+        let new = ema_load_u64(old, sample, tau, delta);
+        slot.store(new, Ordering::Relaxed);
+        new
+    };
+
+    [
+        step(&SYSINFO_LOAD_EMA_1, LOAD_TAU_1_NS),
+        step(&SYSINFO_LOAD_EMA_5, LOAD_TAU_5_NS),
+        step(&SYSINFO_LOAD_EMA_15, LOAD_TAU_15_NS),
+    ]
+}
+
 pub fn sys_sysinfo(info: *mut sysinfo) -> AxResult<isize> {
     let total = total_ram_size();
     let free_pool = global_allocator()
@@ -165,7 +231,8 @@ pub fn sys_sysinfo(info: *mut sysinfo) -> AxResult<isize> {
 
     let mut kinfo: sysinfo = unsafe { core::mem::zeroed() };
     kinfo.uptime = (monotonic_time_nanos() / NANOS_PER_SEC) as _;
-    kinfo.loads = [0, 0, 0];
+    let loads = sysinfo_load_avg_fixed();
+    kinfo.loads = [loads[0] as _, loads[1] as _, loads[2] as _];
     kinfo.totalram = total as _;
     kinfo.freeram = freeram as _;
     kinfo.sharedram = 0;

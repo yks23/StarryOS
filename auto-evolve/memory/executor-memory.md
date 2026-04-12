@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-218 resolved（**`sysinfo` `loads`**：`Ready`/`Running` 瞬时采样 + EWMA（1/5/15 分钟 τ），**`SI_LOAD_SHIFT`** 定点；UP 假定 **`NCPUS=1`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-217 resolved（**`setsockopt` `SO_RCVTIMEO`/`SO_SNDTIMEO`**：**`read_timeval_user`** + **`Duration::sys_to_rust`**，不经 **`get`/`get_as_ref` 整颗 `timeval`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-220 resolved（**`sendfile`**：去掉 **`offset > u32::MAX`** **`EINVAL`**，对齐 LP64 **`loff_t`/`sendfile64`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-216 resolved（**`epoll_pwait2` 超时**：**`read_timespec_user`** + **`try_into_time_value`**，与 **issue-215** 同源；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -199,6 +200,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-218 | sysinfo loads 1/5/15 分钟 EWMA + SI_LOAD_SHIFT | resolved | 2026-04-12 |
 | issue-217 | setsockopt timeval 与 read_timeval_user 一致 | resolved | 2026-04-12 |
 | issue-152 | shmctl IPC_STAT buf 非 NULL | resolved | 2026-04-12 |
 | issue-151 | getrandom len==0 仍先校验 flags | resolved | 2026-04-12 |
@@ -417,7 +419,7 @@
 - **`madvise` / `msync` / `mlock`**：**`advice`** 须为 **`linux_raw_sys::general`** 中 **`KNOWN_MADV_ADVICE`**（全部 **`MADV_*`**），否则 **`EINVAL`**；**`MADV_DONTNEED`/`MADV_FREE`** 对 **`CowBackend`** 调用 **`BackendOps::unmap`** 后由缺页 **`populate`** 再分配零页；**`Shared`/`File`/`Linear`** 不丢页（跳过）；其余已定义 **`MADV_*`** 当前 no-op **`Ok(0)`**。**`msync`** 校验 **`MS_ASYNC`与 `MS_SYNC` 二选一**、允许标志位及区间已映射可读；对重叠的 **`File`** VMA 经 **`AddrSpace::msync_file_mappings`** 去重后 **`CachedFile::sync`** 回写页缓存（**`MS_ASYNC`/`MS_SYNC`** 当前均走此路径；**`MS_INVALIDATE`** 未实现丢弃语义）。**`mlock`/`mlock2`** 仅校验 **`MLOCK_ONFAULT`**、**`len>0`**、映射可读；未接 **`RLIMIT_MEMLOCK`** 与物理钉页。
 - **`mremap`**：**`AddrSpace::mremap`** 要求 **`addr` 为 VMA 起点且 `old_size` 等于该 VMA 长度**。**缩小**：`unmap` 尾部。**原地放大**：尾部虚拟区间无其它映射时 **`unmap` 全段 + `map` 新尺寸**，**`FileBackend::remap_at`** / **`CowBackend::with_virt_start`** 保持同一 **`CachedFile`/文件偏移或 COW 状态**。**`MREMAP_MAYMOVE`**：尾部冲突时 **`read`→`find_free_area`→搬迁 `map`→`write`**。**`Shared`** 变长（缺页框）与 **`Linear`**：**`OperationNotSupported`**。**`MREMAP_FIXED`/`DONTUNMAP`**：**`EINVAL`**。
 - **`capget` / `capset`**：**`ProcessData`** 存 **`cap_effective`/`cap_permitted`/`cap_inheritable`**（**`AtomicU32`**，v3 低 32 位；默认 **`u32::MAX`**）。**`sys_capget`**/**`sys_capset`** 仅允许操作**当前进程**（**`header.pid==0` 或正 pid 解析到同一 `ProcessData`**，否则 **`PermissionDenied`**）。**`capset`** 要求 **`effective`/`inheritable` ⊆ `permitted`**；仅 **`euid==0`** 或当前 **`effective`** 含 **`CAP_SETPCAP`（1<<8）** 可改，否则 **`EPERM`**。未实现 64 位第二组 **`__user_cap_data_struct`**。
-- **`sysinfo(2)`**：**`totalram`** ← **`axhal::mem::total_ram_size()`**；**`freeram`** ← **`min(available_pages * PAGE_SIZE_4K, totalram)`**（**`axalloc::global_allocator()`** 空闲页池，近似值）；**`uptime`** ← **`monotonic_time_nanos / NANOS_PER_SEC`**；**`loads`/swap/buffer/high** 仍为 **0**；**`mem_unit=1`**。与 Linux **MemAvailable** 级统计仍有差距。
+- **`sysinfo(2)`**：**`totalram`** ← **`axhal::mem::total_ram_size()`**；**`freeram`** ← **`min(available_pages * PAGE_SIZE_4K, totalram)`**（**`axalloc::global_allocator()`** 空闲页池，近似值）；**`uptime`** ← **`monotonic_time_nanos / NANOS_PER_SEC`**；**`loads[0..3]`** 为 **`SI_LOAD_SHIFT`** 定点，由 **`tasks()`** 中 **`Running`/`Ready`** 计数经 **1/5/15 分钟 τ** 的 **EWMA**（**`sys_sysinfo`** 调用时推进；**`NCPUS=1`** UP 假定，issue-218）；**`swap`/buffer/high** 仍为 **0**；**`mem_unit=1`**。与 Linux **MemAvailable** 级统计仍有差距。
 - **`syslog(2)`/`klogctl`**：**`action`** 须在 **`SYSLOG_ACTION_CLOSE`..=`SIZE_BUFFER`（0..=10）**，否则 **`InvalidInput`**。无 printk 环：**`READ`/`READ_ALL`/`READ_CLEAR`** 与 **`CLEAR`/`CONSOLE_*`** → **`Unsupported`**；**`SIZE_UNREAD`/`SIZE_BUFFER`** 返回 **0**（空环）；**`OPEN`/`CLOSE`** → **`Ok(0)`**。勿对任意参数无条件 **`Ok(0)`**。
 - **`splice(2)` / `copy_file_range(2)`**：**`flags`** 须在 Linux 已知掩码内（**`SPLICE_F_MOVE|NONBLOCK|MORE|GIFT`**；**`copy_file_range`** 为 **`COPY_FILE_RANGE_COMPRESS|DEDUPE`**），否则 **`EINVAL`**。**`SPLICE_F_*`** 语义（如非阻塞）若与底层 **`do_send`** 未完全对齐，属后续增强；非法位须先拒绝。**`splice`**：**`off_in`/`off_out` 非空**时须先 **`File::from_fd`**（**`EBADF`**）再读用户偏移（**EFAULT** 类），与 **Linux `do_splice`** / **issue-122** 同类顺序。**`sendfile(2)`**：**`offset` 非空**时同样先 **`File::from_fd(in_fd)`** 再 **`offset.vm_read`**（**`offset==NULL`** 分支仍为 **`get_file_like(in_fd)`** 在前）。
 - **`pwrite64(2)`**：**`offset < 0` → `InvalidInput`**（issue-108）；**`len == 0`** 仍须先 **`File::from_fd`** 再 **`Ok(0)`**，勿在 **`from_fd`** 前早退，以便无效 fd 得 **EBADF**（issue-125，对齐 Linux **`vfs_write`/`fget`**）。
