@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-264 resolved（**`mmap`**：**`MAP_ANONYMOUS`** 时忽略 **`fd`**（不 **`File::from_fd`**），**`offset==0`**；非匿名 **`fd<=0`** → **`InvalidInput`**；**`mmap.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-263 resolved（**`clock_nanosleep`**：**`CLOCK_BOOTTIME`**/**`MONOTONIC_RAW`**/**`MONOTONIC_COARSE`** 与 **`CLOCK_MONOTONIC`** 同用 **`monotonic_time`**，与 **`clock_gettime`** 对齐；**`schedule.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-262 resolved（**`clock_gettime`**：**`CLOCK_PROCESS_CPUTIME_ID`** → **`thread_group_cpu_nanos`** 聚合；**`CLOCK_THREAD_CPUTIME_ID`** → 当前线程 **`TimeManager`**；**`time.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-261 resolved（**`listen`**：TCP **`tcp_listen_syn_queue_cap`** 对齐 Linux **`__sys_listen_socket`**，**`backlog`** 先 **`as u32`** 再 **`min(SOMAXCONN)`**，负值不再 **`EINVAL`**；**`axnet-ng`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -277,6 +278,7 @@
 | issue-261 | listen TCP 负 backlog 无符号截断非 EINVAL | resolved | 2026-04-12 |
 | issue-262 | clock_gettime PROCESS/THREAD CPU 语义拆分 | resolved | 2026-04-12 |
 | issue-263 | clock_nanosleep BOOTTIME/RAW/COARSE 与 gettime 单调线对齐 | resolved | 2026-04-12 |
+| issue-264 | mmap MAP_ANONYMOUS 忽略 fd，非匿名 fd>0 | resolved | 2026-04-12 |
 | issue-219 | waitpid __WNOTHREAD → Unsupported | resolved | 2026-04-12 |
 | issue-225 | fallocate FALLOC_FL 掩码 + 非零 EOPNOTSUPP | resolved | 2026-04-12 |
 | issue-227 | shmat 无效 shmid 不 unwrap（EINVAL） | resolved | 2026-04-12 |
@@ -442,6 +444,7 @@
 - **`tkill(2)`/`tgkill(2)`**：**`tid`** 须为非零有效线程 ID；**`tid==0` → `InvalidInput`（EINVAL）**，勿走 **`get_task(0)`→`current()`**（issue-249）。**`get_task(0)`** 仍保留给其它需「当前任务」的 syscall；**`kill`/`get_process_data(0)`** 等 **PID 0** 语义与此不同。
 - timerfd：`TimerFd` 实现 `FileLike` + `Pollable`；到期逻辑在 `process_expirations` 中根据时钟纳秒与 `next_deadline_nanos` 比较；通过 `axtask::register_timer_callback`（首次创建时注册）在每次内核 timer tick 中扫描弱引用列表并 `wake` `PollSet`；创建 fd 用 `add_file_like`（与 eventfd2 相同），勿对 `Arc<TimerFd>` 误用 `add_to_fd_table(self)`。**`timerfd_settime`**：**`new_value.is_null()` → `InvalidInput`**。**`timerfd_gettime`**：**`curr_value.is_null()` → `BadAddress`**（Linux **EFAULT**），在 **`from_fd`** 之后、**`gettime`/`vm_write`** 之前校验，避免先算定时器再因用户指针失败。
 - **`mmap(2)` `flags`**：先 **`flags & !ALLOWED_MAP_FLAGS`**（**`MAP_TYPE|MAP_FIXED|MAP_ANONYMOUS|…|MAP_DROPPABLE|(MAP_HUGE_MASK<<MAP_HUGE_SHIFT)`** 等 uapi 位），非零 → **`InvalidInput`**；**`MmapFlags::from_bits(flags)`**，**`None`** 时 **`MAP_SHARED_VALIDATE` 类型 → `OperationNotSupported`**，否则 **`InvalidInput`**；勿在未知/非法组合上 **`from_bits_truncate`**。合法 **`MAP_HUGE_*`** 等须在 **`MmapFlags`** 中声明以便 **`from_bits`** 成功。
+- **`mmap(2)` `MAP_ANONYMOUS`/`fd`**：与 Linux 2.6.12+ 一致，**`MAP_ANONYMOUS`** 时 **`fd` 被忽略**（匿名路径不 **`File::from_fd`**），**`offset` 须为 0**；无 **`MAP_ANONYMOUS`** 时 **`fd <= 0`** → **`InvalidInput`**（issue-264）。
 - **`mprotect(2)`**：**`length == 0`** → **`InvalidInput`**（**EINVAL**），与 **`sys_mmap`** 对零长度一致（issue-229）。**`munmap(2)`**：**`length == 0`** → **`InvalidInput`**（**EINVAL**）（issue-234）。
 - **`brk(2)`**：非零 **`addr`** 须 **4K 页对齐**（**`VirtAddr::is_aligned(PAGE_SIZE_4K)`**），否则 **`InvalidInput`（EINVAL）**；成功路径 **`set_heap_top`/`return`** 均为对齐地址（issue-253；**`USER_HEAP_BASE`/`heap_limit`** 等仍见 issue-089）。
 - **`openat(2)`/`open(2)`**（**`fs/fd_ops.rs`**）：**`validate_open_flags`** 先于 **`flags_to_options`**；若 **`O_PATH`**，**`flags`** 须为 Linux **`O_PATH_FLAGS`**（**`O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC|O_PATH`**）子集，否则 **`InvalidInput`（EINVAL）**（**`fs/open.c` `build_open_flags`**，issue-259；含 **`O_PATH|O_CREAT`** 等）。

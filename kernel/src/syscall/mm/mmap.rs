@@ -169,10 +169,13 @@ pub fn sys_mmap(
     ) {
         return Err(AxError::InvalidInput);
     }
-    if map_flags.contains(MmapFlags::ANONYMOUS) != (fd <= 0) {
-        return Err(AxError::InvalidInput);
-    }
-    if fd <= 0 && offset != 0 {
+    // Linux 2.6.12+: `MAP_ANONYMOUS` ignores `fd` (may be any value); still require `offset == 0`.
+    // File-backed mmap without `MAP_ANONYMOUS` needs a positive fd (issue-264).
+    if map_flags.contains(MmapFlags::ANONYMOUS) {
+        if offset != 0 {
+            return Err(AxError::InvalidInput);
+        }
+    } else if fd <= 0 {
         return Err(AxError::InvalidInput);
     }
     let offset: usize = offset.try_into().map_err(|_| AxError::InvalidInput)?;
@@ -221,10 +224,11 @@ pub fn sys_mmap(
             .ok_or(AxError::NoMemory)?
     };
 
-    let file = if fd > 0 {
-        Some(File::from_fd(fd)?)
-    } else {
+    // Anonymous mappings never use `fd` as a backing file descriptor (match Linux).
+    let file = if map_flags.contains(MmapFlags::ANONYMOUS) {
         None
+    } else {
+        Some(File::from_fd(fd)?)
     };
 
     let backend = match map_type {
