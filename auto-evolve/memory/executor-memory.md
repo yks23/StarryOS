@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-235 resolved（**`sendfile`**：**`in_fd == out_fd` → `InvalidInput`（EINVAL）**，与 Linux 一致；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-234 resolved（**`munmap`**：**`length == 0` → `InvalidInput`（EINVAL）**，与 **`mmap`**/**`mprotect`**（**issue-229**）对称；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-233 resolved（**`msgctl`**：**`IPC_INFO`/`MSG_INFO`/`MSG_STAT`/`IPC_STAT`/`IPC_SET`** 在访问用户 **`buf` 前 `buf==0` → `BadAddress`**；**`IPC_RMID`** 不检查 **`buf`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-232 resolved（**`getitimer`**：**`curr_value` `NULL` → `BadAddress`**；**`setitimer`** **`old_value`** 仍 **`nullable()`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -219,6 +220,7 @@
 | issue-232 | getitimer curr_value NULL → BadAddress | resolved | 2026-04-12 |
 | issue-233 | msgctl IPC_INFO/MSG_* 等 buf==0 → BadAddress | resolved | 2026-04-12 |
 | issue-234 | munmap length==0 → EINVAL（对齐 mmap/mprotect） | resolved | 2026-04-12 |
+| issue-235 | sendfile in_fd==out_fd → EINVAL | resolved | 2026-04-12 |
 | issue-219 | waitpid __WNOTHREAD → Unsupported | resolved | 2026-04-12 |
 | issue-225 | fallocate FALLOC_FL 掩码 + 非零 EOPNOTSUPP | resolved | 2026-04-12 |
 | issue-227 | shmat 无效 shmid 不 unwrap（EINVAL） | resolved | 2026-04-12 |
@@ -449,7 +451,7 @@
 - **`capget` / `capset`**：**`ProcessData`** 存 **`cap_effective`/`cap_permitted`/`cap_inheritable`**（**`AtomicU32`**，v3 低 32 位；默认 **`u32::MAX`**）。**`sys_capget`**/**`sys_capset`** 仅允许操作**当前进程**（**`header.pid==0` 或正 pid 解析到同一 `ProcessData`**，否则 **`PermissionDenied`**）。**`capset`** 要求 **`effective`/`inheritable` ⊆ `permitted`**；仅 **`euid==0`** 或当前 **`effective`** 含 **`CAP_SETPCAP`（1<<8）** 可改，否则 **`EPERM`**。未实现 64 位第二组 **`__user_cap_data_struct`**。
 - **`sysinfo(2)`**：**`totalram`** ← **`axhal::mem::total_ram_size()`**；**`freeram`** ← **`min(available_pages * PAGE_SIZE_4K, totalram)`**（**`axalloc::global_allocator()`** 空闲页池，近似值）；**`uptime`** ← **`monotonic_time_nanos / NANOS_PER_SEC`**；**`loads[0..3]`** 为 **`SI_LOAD_SHIFT`** 定点，由 **`tasks()`** 中 **`Running`/`Ready`** 计数经 **1/5/15 分钟 τ** 的 **EWMA**（**`sys_sysinfo`** 调用时推进；**`NCPUS=1`** UP 假定，issue-218）；**`swap`/buffer/high** 仍为 **0**；**`mem_unit=1`**。与 Linux **MemAvailable** 级统计仍有差距。
 - **`syslog(2)`/`klogctl`**：**`action`** 须在 **`SYSLOG_ACTION_CLOSE`..=`SIZE_BUFFER`（0..=10）**，否则 **`InvalidInput`**。无 printk 环：**`READ`/`READ_ALL`/`READ_CLEAR`** 与 **`CLEAR`/`CONSOLE_*`** → **`Unsupported`**；**`SIZE_UNREAD`/`SIZE_BUFFER`** 返回 **0**（空环）；**`OPEN`/`CLOSE`** → **`Ok(0)`**。勿对任意参数无条件 **`Ok(0)`**。
-- **`splice(2)` / `copy_file_range(2)`**：**`flags`** 须在 Linux 已知掩码内（**`SPLICE_F_MOVE|NONBLOCK|MORE|GIFT`**；**`copy_file_range`** 为 **`COPY_FILE_RANGE_COMPRESS|DEDUPE`**），否则 **`EINVAL`**。**`SPLICE_F_*`** 语义（如非阻塞）若与底层 **`do_send`** 未完全对齐，属后续增强；非法位须先拒绝。**`splice`**：**`off_in`/`off_out` 非空**时须先 **`File::from_fd`**（**`EBADF`**）再读用户偏移（**EFAULT** 类），与 **Linux `do_splice`** / **issue-122** 同类顺序。**`sendfile(2)`**：**`offset` 非空**时同样先 **`File::from_fd(in_fd)`** 再 **`offset.vm_read`**（**`offset==NULL`** 分支仍为 **`get_file_like(in_fd)`** 在前）。
+- **`splice(2)` / `copy_file_range(2)`**：**`flags`** 须在 Linux 已知掩码内（**`SPLICE_F_MOVE|NONBLOCK|MORE|GIFT`**；**`copy_file_range`** 为 **`COPY_FILE_RANGE_COMPRESS|DEDUPE`**），否则 **`EINVAL`**。**`SPLICE_F_*`** 语义（如非阻塞）若与底层 **`do_send`** 未完全对齐，属后续增强；非法位须先拒绝。**`splice`**：**`off_in`/`off_out` 非空**时须先 **`File::from_fd`**（**`EBADF`**）再读用户偏移（**EFAULT** 类），与 **Linux `do_splice`** / **issue-122** 同类顺序。**`sendfile(2)`**：**`in_fd == out_fd` → `InvalidInput`**（**EINVAL**）（issue-235）。**`offset` 非空**时同样先 **`File::from_fd(in_fd)`** 再 **`offset.vm_read`**（**`offset==NULL`** 分支仍为 **`get_file_like(in_fd)`** 在前）。
 - **`fallocate(2)`**：**`mode`** 未知 **`FALLOC_FL_*`** 位 → **`EINVAL`**；**`mode == 0`** 仅扩展逻辑长度（**`set_len(max(current, offset+len))`**）；其它已知标志（**`KEEP_SIZE`/打洞/零范围等**）尚无稀疏 extent → **`EOPNOTSUPP`**（issue-225），勿与非法位混为同一 **`EINVAL`**。
 - **`getdents64(2)`**：**`linux_dirent64`** 中 **`d_name`** 长度 ≤ **`NAME_MAX`**；记录总长 **`d_reclen`** 用 **`u16::try_from(aligned_len)`**，目录 cookie **`d_off`** 用 **`i64::try_from(VFS offset)`**，溢出/超长 → **`EINVAL`**（issue-221）；**`unsafe`** 写入前有 **`SAFETY`** 说明。
 - **`pwrite64(2)`**：**`offset < 0` → `InvalidInput`**（issue-108）；**`len == 0`** 仍须先 **`File::from_fd`** 再 **`Ok(0)`**，勿在 **`from_fd`** 前早退，以便无效 fd 得 **EBADF**（issue-125，对齐 Linux **`vfs_write`/`fget`**）。

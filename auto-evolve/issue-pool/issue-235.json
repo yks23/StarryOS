@@ -1,0 +1,27 @@
+{
+  "id": "issue-235",
+  "title": "sendfile：`in_fd` 与 `out_fd` 相同未拒绝，Linux 返回 EINVAL",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`sys_sendfile`**：入口 **`in_fd == out_fd` → `AxError::InvalidInput`**（**EINVAL**），与 Linux **`sendfile(2)`** 一致；**`copy_file_range`** 仍另做同 inode 重叠区间检查。",
+  "files_changed": ["kernel/src/syscall/fs/io.rs"],
+  "description": "**`kernel/src/syscall/fs/io.rs`** **`sys_sendfile`**（约 **389–410** 行）在构造 **`SendFile::Offset`/`Direct`** 前**未** 校验 **`in_fd == out_fd`**。\n\n**Linux `sendfile(2)`** / **POSIX**：**`in_fd` 与 `out_fd` 不得指向同一文件**；常见情形为**同一描述符**（**`in_fd == out_fd`**）时返回 **`EINVAL`**。同文件 **`sys_copy_file_range`**（约 **441–460** 行）对**同一 inode 且重叠区间**有 **`InvalidInput`** 防护；**`sendfile`** 若允许**自拷**可能产生未定义或与 **Linux** 不一致的行为。\n\n**建议**：在 **`sys_sendfile` 入口** **`if in_fd == out_fd { return Err(AxError::InvalidInput); }`**（**EINVAL**）；若需与内核一致再扩展为 **`File::from_fd` 两次后比较 inode/device**（**dup** 到同一文件）。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["sendfile"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/io.rs:389-410"],
+    "related_files": ["kernel/src/syscall/fs/io.rs:412-476"],
+    "key_insight": "copy_file_range 有同文件重叠检查；sendfile 无 in/out 关系检查"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；`sendfile(out, in, NULL, n)` 且 `in==out`。",
+    "expected_output_contains": "",
+    "pass_criteria": "`in_fd == out_fd` → EINVAL/InvalidInput。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos：通过（exit 0）"
+  },
+  "suggested_fix": "`if in_fd == out_fd { return Err(AxError::InvalidInput); }` 于 `sys_sendfile` 开头（可再加强为同 inode 检测）。",
+  "references": ["man 2 sendfile", "issue-220"]
+}

@@ -395,6 +395,12 @@ pub fn sys_sendfile(out_fd: c_int, in_fd: c_int, offset: *mut u64, len: usize) -
         len
     );
 
+    // Linux `sendfile(2)`: `in_fd` and `out_fd` must not refer to the same file description; same
+    // descriptor → EINVAL.
+    if in_fd == out_fd {
+        return Err(AxError::InvalidInput);
+    }
+
     let src = if !offset.is_null() {
         // LP64: user `offset` is `loff_t*` / updated `u64` — no 4GiB cap (issue-220); `read_at`/`write_at`
         // enforce any file-size limits.
