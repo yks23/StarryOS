@@ -1,0 +1,27 @@
+{
+  "id": "issue-255",
+  "title": "recvfrom/recvmsg：TCP 与 Unix stream 未填充对端地址，仍写回占位 IPv4（与 Linux 不一致）",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "medium",
+  "fix_summary": "`recv_on_socket`：若 `recv` 后地址仍为内核占位（`0.0.0.0:0`），则用 `socket.peer_addr()` 写回用户，使 TCP/Unix stream/vsock 与 Linux `recvfrom`/`getpeername` 一致；数据报路径仍由 transport 覆盖 `from`。",
+  "files_changed": ["kernel/src/syscall/net/io.rs"],
+  "description": "**`kernel/src/syscall/net/io.rs`** **`recv_on_socket`**（约 **171–204** 行）在 **`addr` 非空** 时用占位 **`SocketAddrEx::Ip((Ipv4Addr::UNSPECIFIED, 0).into())`** 作为 **`RecvOptions::from`** 的可变引用目标；**`recv` 返回后** 调用 **`remote_addr.write_to_user(addr, addrlen)`**。\n\n**`vendor/axnet-ng`**：**`DgramTransport::recv`**（**`unix/dgram.rs`** 约 **262–264** 行）会 **`**from = SocketAddrEx::Unix(sender)`**，占位被覆盖，**与 Linux** 行为一致。**`TcpSocket::recv`**（**`tcp.rs`** 约 **398–449** 行）与 **`StreamTransport::recv`**（**`unix/stream.rs`** 约 **268–308** 行）**未** 写入 **`options.from`**，占位 **IPv4 UNSPECIFIED** **原样** 经 **`write_to_user`** 拷回用户态。\n\n**Linux `recvfrom(2)`**：在 **已连接** **SOCK_STREAM** 上若提供 **`src_addr`**，应填入 **对端** 地址（与 **`getpeername`** 一致）。**当前** **TCP/Unix stream** 路径用户得到 **错误 family/内容**。\n\n**建议**：在 **`recv` 成功后**、**`write_to_user` 前**，对 **未** 被 **transport** 更新 **`from`** 的套接字调用 **`socket.peer_addr()`**（或 **在 axnet `TcpSocket::recv`/`StreamTransport::recv` 内填充 `from`**），再 **序列化** 到用户 **`sockaddr`**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["recvfrom", "recvmsg"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/io.rs:171-204"],
+    "related_files": ["vendor/axnet-ng/src/tcp.rs:398-449", "vendor/axnet-ng/src/unix/stream.rs:268-308", "vendor/axnet-ng/src/unix/dgram.rs:262-264"],
+    "key_insight": "仅 datagram recv 填 from"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；已连接 TCP `recvfrom(buf, len, flags, &addr, &addrlen)` 与 Linux 对照。",
+    "expected_output_contains": "",
+    "pass_criteria": "stream 套接字写回真实 peer 地址。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0）"
+  },
+  "suggested_fix": "`recv` 后 `peer_addr()` + `write_to_user`，或 axnet stream recv 填 `from`。",
+  "references": ["man 2 recvfrom", "Linux net/socket.c"]
+}

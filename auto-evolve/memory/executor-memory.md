@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-255 resolved（**`recvfrom`/`recvmsg`**：流式套接字 **`msg_name`/`addr` 非空**时写回 **`peer_addr()`**（与 **`getpeername`** 一致）；占位 **`0.0.0.0:0`** 仅在 transport 未填 **`RecvOptions::from`** 时替换；**`net/io.rs` `recv_on_socket`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-254 resolved（**`listen`**：**`AF_UNIX` `SOCK_DGRAM`** → **`OperationNotSupported`（EOPNOTSUPP）**；**`axnet-ng` `UnixSocket`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-253 resolved（**`brk`**：非零 **`addr`** 须 **4K 页对齐**，否则 **`InvalidInput`（EINVAL）**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-252 resolved（**`fcntl` `F_GETFL`/`F_SETFL`**：**`File`/`Memfd`** 从 **`axfs::FileFlags`** 回 **`O_APPEND`**/**`O_PATH`** 等；**`F_SETFL`** 掩码 + **`O_APPEND`** 不可变则 **`EOPNOTSUPP`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -259,6 +260,7 @@
 | issue-252 | fcntl F_GETFL/F_SETFL 与 axfs 打开标志对齐 | resolved | 2026-04-12 |
 | issue-253 | brk 非零 addr 须 4K 对齐 → EINVAL | resolved | 2026-04-12 |
 | issue-254 | AF_UNIX SOCK_DGRAM listen → EOPNOTSUPP | resolved | 2026-04-12 |
+| issue-255 | recvfrom/recvmsg 流式套接字写回 peer 地址 | resolved | 2026-04-12 |
 | issue-219 | waitpid __WNOTHREAD → Unsupported | resolved | 2026-04-12 |
 | issue-225 | fallocate FALLOC_FL 掩码 + 非零 EOPNOTSUPP | resolved | 2026-04-12 |
 | issue-227 | shmat 无效 shmid 不 unwrap（EINVAL） | resolved | 2026-04-12 |
@@ -483,7 +485,7 @@
 - **`bind(2)`/`connect(2)`**（**`socket.rs`**）：**`Socket::from_fd`** 须早于 **`SocketAddrEx::read_from_user`**，无效 **`fd`** 先 **`BadFileDescriptor`**（**EBADF**），与 Linux **`sockfd_lookup`** 及 **`sys_accept4`** 顺序一致（issue-132）。
 - **`sendto(2)`**（**`net/io.rs`**）：**`send_impl`**：**`SENDMSG_FLAGS_MASK`** 后 **`Socket::from_fd`**，再 **`send_on_socket`**（**`msg_name`** **`read_from_user`** + **`send`**），对齐 **`__sys_sendto`**（issue-133）。
 - **`sendmsg(2)`**：**`Socket::from_fd`** → **`SENDMSG_FLAGS_MASK`** → **`msghdr.get_as_ref`** / cmsg / **`IoVectorBuf::new`** → **`send_on_socket`**（无二次 **`from_fd`**），对齐 **`__sys_sendmsg`** **`sockfd_lookup` 先于 `copy_msghdr_from_user`**（issue-134）。
-- **`recvmsg(2)`**：**`validate_recvmsg_flags`**（**`RECVMSG_FLAGS_MASK`** + **`RECVMSG_FLAGS_UNSUPPORTED`**）→ **`Socket::from_fd`** → **`msghdr.get_as_mut`** / **`IoVectorBuf::new`** → **`recv_on_socket`**，与 **`__sys_recvmsg`** 及 issue-134 **`sendmsg`** 对称（issue-135）。**`recvfrom`** 仍走 **`recv_impl`**（相同校验 + **`recv_on_socket`**）。
+- **`recvmsg(2)`**：**`validate_recvmsg_flags`**（**`RECVMSG_FLAGS_MASK`** + **`RECVMSG_FLAGS_UNSUPPORTED`**）→ **`Socket::from_fd`** → **`msghdr.get_as_mut`** / **`IoVectorBuf::new`** → **`recv_on_socket`**，与 **`__sys_recvmsg`** 及 issue-134 **`sendmsg`** 对称（issue-135）。**`recvfrom`** 仍走 **`recv_impl`**（相同校验 + **`recv_on_socket`**）。**`recv_on_socket`**：用户 **`msg_name`/`addr` 非空**时用占位 **`RecvOptions::from`**；数据报 **`recv`** 会覆盖为发送方；**TCP/Unix stream/vsock** 不覆盖时，若仍为占位 **`0.0.0.0:0`** 则 **`peer_addr()`** 写回（对齐 Linux **`recvfrom(2)`** 与 **`getpeername`**，issue-255）。
 - **`bind`/`connect`/`sendto` 等 INET 地址**：**`SocketAddrV4`/`SocketAddrV6::read_from_user`** 要求 **`addrlen >= sizeof(sockaddr_in|sockaddr_in6)`**，只按固定布局读 **`sockaddr_in`/`sockaddr_in6`**；**`addrlen` 大于结构体**时与 Linux 一样忽略尾部字节。**vsock** **`sockaddr_vm`** 同理。
 - **`sendmsg` / `recvmsg` 与 ancillary**：控制缓冲区须与 Linux 一致使用 **`CMSG_ALIGN(sizeof(cmsghdr)+payload)`** 作为**占用步长**；**`cmsg_len`** 仍为含头的逻辑长度。遍历下一条头用 **`ptr += CMSG_ALIGN(cmsg_len)`**；**`CMsgBuilder::push`** 在 **`msg_controllen`** 与下一 **`cmsghdr`** 指针上前移对齐后长度，**`cmsg_len` 至对齐边界**建议填 **0**。**`CMsg::parse`（`sendmsg`）** 仅实现 **`(SOL_SOCKET, SCM_RIGHTS)`**；**`SCM_CREDENTIALS`/`SCM_TIMESTAMP`/`SCM_TIMESTAMPNS`/`SCM_TIMESTAMPING`/`SCM_SECURITY`** → **`Unsupported`**，勿与格式错误混用 **`EINVAL`**。
 - **`sched_getaffinity` / `sched_setaffinity`**：`pid==0` 为当前任务；非零先 **`get_task(pid)`**，失败再 **`get_process_data(pid)`** 取 **`proc.threads()` 最小 tid** 定位线程组代表线程。set 时当前任务走 **`set_current_affinity`**（SMP 迁移），其它任务仅 **`set_cpumask`**。**`sched_getaffinity`** 成功 **`Ok(0)`**，掩码仅经 **`vm_write_slice`**（issue-242）。**`sched_setaffinity`** 须先 **`sched_resolve_task`**（**`ESRCH`**）再 **`vm_load(user_mask)`**（**EFAULT** 类），与 Linux 一致（issue-142）。未完整建模 CAP、僵尸 **`ESRCH`** 等。

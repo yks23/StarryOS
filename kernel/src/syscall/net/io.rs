@@ -167,6 +167,17 @@ fn validate_recvmsg_flags(flags: u32) -> AxResult<()> {
     Ok(())
 }
 
+/// `recv_on_socket` uses this as `RecvOptions::from` when the user supplies `msg_name`/`addr`.
+/// Datagram transports overwrite it with the sender; stream transports (TCP, Unix stream, vsock)
+/// leave it unchanged. Linux `recvfrom(2)` then returns the connected peer (same as `getpeername`).
+#[inline]
+fn recv_addr_is_kernel_placeholder(addr: &SocketAddrEx) -> bool {
+    matches!(
+        addr,
+        SocketAddrEx::Ip(sa) if sa.ip().is_unspecified() && sa.port() == 0
+    )
+}
+
 /// After [`validate_recvmsg_flags`], [`Socket::from_fd`], and (for `recvmsg`) user `msghdr` setup.
 fn recv_on_socket(
     socket: &Socket,
@@ -199,7 +210,12 @@ fn recv_on_socket(
         },
     )?;
 
-    if let Some(remote_addr) = remote_addr {
+    if let Some(mut remote_addr) = remote_addr {
+        if recv_addr_is_kernel_placeholder(&remote_addr)
+            && let Ok(peer) = socket.peer_addr()
+        {
+            remote_addr = peer;
+        }
         remote_addr.write_to_user(addr, addrlen.get_as_mut()?)?;
     }
 
