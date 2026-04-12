@@ -1,0 +1,28 @@
+{
+  "id": "issue-054",
+  "title": "faccessat2 未校验 flags，非法 AT_* 位经 resolve_at 忽略，应对齐 Linux EINVAL",
+  "status": "resolved",
+  "created_at": "2026-04-17T16:00:00Z",
+  "resolved_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "description": "Linux **`faccessat2(2)`** 的 **`flags`** 只能是 **`AT_EACCESS`**、**`AT_SYMLINK_NOFOLLOW`**、**`AT_EMPTY_PATH`** 等已定义位的组合；含未知位须 **`EINVAL`**（本环境 **`syscall(__NR_faccessat2, AT_FDCWD, path, R_OK, 0x80000000)`** → **`errno=22`**）。**`sys_faccessat2`**（`kernel/src/syscall/fs/stat.rs`）将 **`flags`** 直接传入 **`resolve_at`**，未知位被静默忽略，可能仍 **`Ok(0)`** 或 **`PermissionDenied`**，与 Linux 先校验 flags 的行为不一致；与 issue-052 **`fchownat`**、issue-049 **`fchmodat`** 同类。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["faccessat2"],
+  "fix_summary": "**`sys_faccessat2`**：按 Linux **`VALID_FACCESSAT_FLAGS`**（**`AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH | AT_EACCESS`**）校验，未知位 **`AxError::InvalidInput`**（**`EINVAL`**），早于 **`resolve_at`**。",
+  "files_changed": ["kernel/src/syscall/fs/stat.rs"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/stat.rs:108-133"],
+    "related_files": ["kernel/src/file/fs.rs:resolve_at"],
+    "key_insight": "入口校验 `flags` ⊆ `{0, AT_SYMLINK_NOFOLLOW, AT_EMPTY_PATH, AT_EACCESS}`（按内核支持）"
+  },
+  "test": {
+    "source_file": "auto-evolve/tests/test_faccessat2_invalid_flags.c",
+    "build_command": "riscv64-linux-musl-gcc -static -Wall -o test_faccessat2_invalid_flags test_faccessat2_invalid_flags.c",
+    "run_method": "放入 rootfs /bin/ 后在 QEMU 运行",
+    "expected_output_contains": "SUMMARY",
+    "pass_criteria": "非法 flags 时返回 -1、errno=EINVAL",
+    "last_result": "未在 QEMU 运行；`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` 通过"
+  },
+  "suggested_fix": "在 **`sys_faccessat2`** 开头用 Linux **`VALID_FACCESSAT_FLAGS`** 等价掩码校验；非法位 **`AxError::InvalidInput`**。",
+  "references": ["man 2 faccessat2"]
+}

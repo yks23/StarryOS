@@ -4,7 +4,8 @@ use axerrno::{AxError, AxResult};
 use axfs::FS_CONTEXT;
 use axfs_ng_vfs::{Location, NodePermission};
 use linux_raw_sys::general::{
-    __kernel_fsid_t, AT_EMPTY_PATH, R_OK, W_OK, X_OK, stat, statfs, statx,
+    __kernel_fsid_t, AT_EACCESS, AT_EMPTY_PATH, AT_SYMLINK_NOFOLLOW, R_OK, W_OK, X_OK, stat, statfs,
+    statx,
 };
 use starry_vm::{VmMutPtr, VmPtr};
 
@@ -35,7 +36,7 @@ pub fn sys_fstat(fd: i32, statbuf: *mut stat) -> AxResult<isize> {
 /// Return 0 if success.
 #[cfg(target_arch = "x86_64")]
 pub fn sys_lstat(path: *const c_char, statbuf: *mut stat) -> AxResult<isize> {
-    use linux_raw_sys::general::{AT_FDCWD, AT_SYMLINK_NOFOLLOW};
+    use linux_raw_sys::general::AT_FDCWD;
 
     sys_fstatat(AT_FDCWD, path, statbuf, AT_SYMLINK_NOFOLLOW)
 }
@@ -108,6 +109,12 @@ pub fn sys_access(path: *const c_char, mode: u32) -> AxResult<isize> {
 pub fn sys_faccessat2(dirfd: c_int, path: *const c_char, mode: u32, flags: u32) -> AxResult<isize> {
     let path = path.nullable().map(vm_load_string).transpose()?;
     debug!("sys_faccessat2 <= dirfd: {dirfd}, path: {path:?}, mode: {mode}, flags: {flags}");
+
+    // Linux VALID_FACCESSAT_FLAGS (see open.c): AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH | AT_EACCESS.
+    const VALID_FACCESSAT_FLAGS: u32 = AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH | AT_EACCESS;
+    if flags & !VALID_FACCESSAT_FLAGS != 0 {
+        return Err(AxError::InvalidInput);
+    }
 
     let file = resolve_at(dirfd, path.as_deref(), flags)?;
 
