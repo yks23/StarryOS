@@ -1,6 +1,7 @@
 use alloc::vec;
 use core::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    sync::atomic::{AtomicBool, Ordering},
     task::Context,
 };
 
@@ -41,6 +42,10 @@ pub struct UdpSocket {
     peer_addr: RwLock<Option<(IpEndpoint, IpAddress)>>,
 
     general: GeneralOptions,
+    /// `shutdown(SHUT_RD)` / `SHUT_RDWR` — further `recv` rejected (Linux-style, issue-274).
+    rx_shut: AtomicBool,
+    /// `shutdown(SHUT_WR)` / `SHUT_RDWR` — further `send` rejected (`EPIPE`-class).
+    tx_shut: AtomicBool,
 }
 
 impl UdpSocket {
@@ -56,6 +61,8 @@ impl UdpSocket {
             peer_addr: RwLock::new(None),
 
             general: GeneralOptions::new(),
+            rx_shut: AtomicBool::new(false),
+            tx_shut: AtomicBool::new(false),
         }
     }
 
@@ -170,6 +177,9 @@ impl SocketOps for UdpSocket {
         if options.flags.contains(SendFlags::OOB) {
             return Err(AxError::InvalidInput);
         }
+        if self.tx_shut.load(Ordering::Acquire) {
+            return Err(AxError::BrokenPipe);
+        }
         let (remote_addr, source_addr) = match options.to {
             Some(addr) => {
                 let addr = IpEndpoint::from(addr.into_ip()?);
@@ -223,6 +233,9 @@ impl SocketOps for UdpSocket {
     fn recv(&self, mut dst: impl Write + IoBufMut, options: RecvOptions) -> AxResult<usize> {
         if self.local_addr.read().is_none() {
             ax_bail!(NotConnected);
+        }
+        if self.rx_shut.load(Ordering::Acquire) {
+            return Err(AxError::InvalidInput);
         }
 
         enum ExpectedRemote<'a> {
@@ -307,14 +320,24 @@ impl SocketOps for UdpSocket {
             .map(SocketAddrEx::Ip)
     }
 
-    fn shutdown(&self, _how: Shutdown) -> AxResult {
-        // TODO(mivik): shutdown
+    fn shutdown(&self, how: Shutdown) -> AxResult {
         poll_interfaces();
-
-        self.with_smol_socket(|socket| {
-            debug!("UDP socket {}: shutting down", self.handle);
-            socket.close();
-        });
+        match how {
+            Shutdown::Read => {
+                self.rx_shut.store(true, Ordering::Release);
+            }
+            Shutdown::Write => {
+                self.tx_shut.store(true, Ordering::Release);
+            }
+            Shutdown::Both => {
+                self.rx_shut.store(true, Ordering::Release);
+                self.tx_shut.store(true, Ordering::Release);
+                self.with_smol_socket(|socket| {
+                    debug!("UDP socket {}: shutting down (both)", self.handle);
+                    socket.close();
+                });
+            }
+        }
         Ok(())
     }
 }
@@ -327,9 +350,11 @@ impl Pollable for UdpSocket {
         }
 
         let mut events = IoEvents::empty();
+        let rx = self.rx_shut.load(Ordering::Acquire);
+        let tx = self.tx_shut.load(Ordering::Acquire);
         self.with_smol_socket(|socket| {
-            events.set(IoEvents::IN, socket.can_recv());
-            events.set(IoEvents::OUT, socket.can_send());
+            events.set(IoEvents::IN, !rx && socket.can_recv());
+            events.set(IoEvents::OUT, !tx && socket.can_send());
         });
         events
     }
