@@ -24,6 +24,10 @@ const COPY_FILE_RANGE_COMPRESS: u32 = 1 << 0;
 const COPY_FILE_RANGE_DEDUPE: u32 = 1 << 2;
 const COPY_FILE_RANGE_MASK: u32 = COPY_FILE_RANGE_COMPRESS | COPY_FILE_RANGE_DEDUPE;
 
+/// Linux `POSIX_FADV_*` through `POSIX_FADV_WIPEONFORK` (`uapi/linux/fadvise.h`, values 0..=7).
+/// Larger `advice` values are EINVAL until extended in the uapi.
+const POSIX_FADV_MAX: u32 = 7;
+
 /// Linux `fallocate(2)` `FALLOC_FL_*` bits (`uapi/linux/fs.h` / `linux_raw_sys`); unknown bits → EINVAL.
 /// `FALLOC_FL_ALLOCATE_RANGE` is **0** (default); non-zero modes are not implemented yet (issue-225).
 const FALLOC_FL_KNOWN_MASK: u32 = FALLOC_FL_KEEP_SIZE
@@ -223,7 +227,7 @@ pub fn sys_fadvise64(
         // Linux: fadvise on non-seekable fd (pipe, etc.) → ESPIPE, not EPIPE (broken pipe).
         return Err(LinuxError::ESPIPE.into());
     }
-    if advice > 5 {
+    if advice > POSIX_FADV_MAX {
         return Err(AxError::InvalidInput);
     }
     // Stub: no VFS hook yet, but reject invalid intervals like Linux `vfs_fadvise` (EINVAL).

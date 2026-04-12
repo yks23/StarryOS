@@ -1,0 +1,27 @@
+{
+  "id": "issue-239",
+  "title": "fadvise64：`advice > 5` 一律 EINVAL，拒绝 Linux 的 POSIX_FADV_COLD/WIPEONFORK（6/7）",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`sys_fadvise64`**：合法 **`advice`** 上界改为 **`POSIX_FADV_MAX`（7，`POSIX_FADV_WIPEONFORK`）**，与 **`uapi/linux/fadvise.h`** 一致；**6/7** 桩 **`Ok(0)`**；**`advice > 7` → `InvalidInput`**。",
+  "files_changed": ["kernel/src/syscall/fs/io.rs"],
+  "description": "**`kernel/src/syscall/fs/io.rs`** **`sys_fadvise64`**（约 **215–238** 行）在 **`advice > 5`** 时返回 **`AxError::InvalidInput`**（**EINVAL**）。\n\n**Linux `include/uapi/linux/fadvise.h`**：在 **POSIX** 的 **0–5**（**NORMAL/RANDOM/SEQUENTIAL/WILLNEED/DONTNEED/NOREUSE**）之外，内核还定义 **`POSIX_FADV_COLD`**（**6**）、**`POSIX_FADV_WIPEONFORK`**（**7**）等合法 **`advice`**；**`vfs_fadvise`** 对 **6/7** 走对应实现或 **no-op** 成功，**不** 因「数值大于 5」而 **`EINVAL`**。当前实现虽为 **stub**（**0–5** 亦 **`Ok(0)`**），但对 **6/7** **错误拒绝**，与 **glibc**/**musl** 使用 **`POSIX_FADV_*` 全量** 的程序行为不一致。\n\n**建议**：将合法集合改为 **`linux/uapi`** 掩码或 **`advice <= 7`**（并随内核扩展更新），或 **`match`/`contains`** 白名单；未知 **`advice`** 再 **`EINVAL`**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["fadvise64"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/io.rs:215-238"],
+    "related_files": [],
+    "key_insight": "advice>5 误杀 6/7；Linux uapi 已扩展"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；`posix_fadvise(fd, 0, 0, POSIX_FADV_COLD)`。",
+    "expected_output_contains": "",
+    "pass_criteria": "`advice` 6/7 与 Linux 一致（成功或一致 errno），非一律 EINVAL。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos：通过（exit 0）"
+  },
+  "suggested_fix": "对齐 `linux/uapi/linux/fadvise.h` 合法 `POSIX_FADV_*` 常量集合；stub 可对 6/7 `Ok(0)`。",
+  "references": ["man 2 posix_fadvise", "linux uapi fadvise.h"]
+}

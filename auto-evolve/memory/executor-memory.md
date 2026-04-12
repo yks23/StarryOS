@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-239 resolved（**`fadvise64`**：**`advice`** 合法至 **7**（**`POSIX_FADV_WIPEONFORK`**），**6/7** 不再误 **EINVAL**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-238 resolved（**`clone3`**：**`MIN_CLONE_ARGS_SIZE = size_of::<Clone3Args>()`**（**88**），过短 **`size` → EINVAL**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-237 resolved（**`io_uring_setup`**：**`params==NULL` → `BadAddress`（EFAULT）**，非 **EINVAL**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-236 resolved（**`splice`**：**`fd_in == fd_out` → `InvalidInput`（EINVAL）**，与 Linux/**issue-235** 对称；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -227,6 +228,7 @@
 | issue-236 | splice fd_in==fd_out → EINVAL | resolved | 2026-04-12 |
 | issue-237 | io_uring_setup params NULL → BadAddress | resolved | 2026-04-12 |
 | issue-238 | clone3 args_size 下限 sizeof(Clone3Args) | resolved | 2026-04-12 |
+| issue-239 | fadvise64 advice 0..=7（uapi） | resolved | 2026-04-12 |
 | issue-219 | waitpid __WNOTHREAD → Unsupported | resolved | 2026-04-12 |
 | issue-225 | fallocate FALLOC_FL 掩码 + 非零 EOPNOTSUPP | resolved | 2026-04-12 |
 | issue-227 | shmat 无效 shmid 不 unwrap（EINVAL） | resolved | 2026-04-12 |
@@ -414,7 +416,7 @@
 - **`prlimit64`**：对齐 Linux **`do_prlimit`**（issue-141）：**`old_limit` 非空**时先在进程内保存变更前的 **`rlimit64`**；**`new_limit` 非空**时先 **`vm_read`** 并校验（**`rlim_cur`≤`rlim_max`**、非法抬高硬上限 **`EPERM`**，同 issue-044），成功后再更新内核 **`rlimit`**；最后再 **`vm_write(old_limit)`** 写出快照。**`new_limit`** 读/校验失败时不应已写出 **`old`**。可降低硬上限或保持不变并更新 **`rlim_cur`**（在 **`rlim_cur <= rlim_max`** 前提下）。
 - **`ioctl(FIONBIO)`**：第三参为 **`int *`**（Linux）；用 **`(arg as *const c_int).vm_read()`** 读整型，**`set_nonblocking(value != 0)`**；勿只读单字节、勿将取值限制为 0/1（**`2`**、**`256`** 等小端首字节为 0 的非零值须启用 **`O_NONBLOCK`**）。
 - **`getrandom(2)`**：**`flags`** 须为 **`linux_raw_sys::general`** 中 **`GRND_NONBLOCK|GRND_RANDOM|GRND_INSECURE`** 的子集（与 **`uapi/linux/random.h`** 一致），否则 **`EINVAL`**；掩码校验须先于 **`len==0`** 的 **`Ok(0)`** 早退（issue-151，与 issue-042 互补）。勿用 **`from_bits_retain`** 静默丢弃未知位。
-- **`fadvise64`**：管道等不可 seek 的 fd 上 Linux 为 **`ESPIPE`**（非法 seek），非 **`EPIPE`**（断管）。实现上 **`Pipe::from_fd`** 分支返回 **`LinuxError::ESPIPE.into()`**（**`axerrno::LinuxError`**），勿用 **`AxError::BrokenPipe`**。真 **`fadvise`** 语义仍为桩；**`advice≤5`** 且非 pipe 时 **`offset`/`len`** 须非负，且 cast 为 **`u64`** 后 **`checked_add`** 不溢出，否则 **`InvalidInput`**（**EINVAL**），与 **`sys_fallocate`** 一致。
+- **`fadvise64`**：管道等不可 seek 的 fd 上 Linux 为 **`ESPIPE`**（非法 seek），非 **`EPIPE`**（断管）。实现上 **`Pipe::from_fd`** 分支返回 **`LinuxError::ESPIPE.into()`**（**`axerrno::LinuxError`**），勿用 **`AxError::BrokenPipe`**。真 **`fadvise`** 语义仍为桩；**`advice`** 须 **≤ `POSIX_FADV_WIPEONFORK`（7）**（**`uapi/linux/fadvise.h`**，含 **COLD/WIPEONFORK**，issue-239），否则 **`EINVAL`**；非 pipe 时 **`offset`/`len`** 须非负，且 cast 为 **`u64`** 后 **`checked_add`** 不溢出，否则 **`InvalidInput`**（**EINVAL**），与 **`sys_fallocate`** 一致。
 - **`fsync(2)`/`fdatasync(2)`**：须 **`get_file_like`** 后对 **`File`** 或 **`MemfdCreatedFile`**（包装 **`File`**）调用 **`axfs::File::sync`**；**pipe**、**socket**、**目录**、**epoll** 等其它 **`FileLike`** → **`InvalidInput`**（**EINVAL**），勿用 **`File::from_fd`**（会得到 **`BrokenPipe`**/**`IsADirectory`**，issue-130）。无效 **`fd`** 仍为 **`BadFileDescriptor`**（**EBADF**）。
 - **`read(2)`/`write(2)`**（经 **`readv`/`writev`**）：**`Directory`** **`FileLike::read`/`write`** 须 **`IsADirectory`**（**EISDIR**），勿 **`BadFileDescriptor`**（**EBADF**），与 Linux 及 **`pread`/`pwrite`** 经 **`File::from_fd`** 行为一致（issue-143）。
 - **`renameat2(2)`**：**`flags`** 掩码、**`NOREPLACE`+`EXCHANGE`** 互斥、**`WHITEOUT`** 须在 **`vm_load_string(old_path/new_path)`** 之前完成（issue-138）。**`flags`** 须为 **`linux_raw_sys::general`** 中 **`RENAME_NOREPLACE|RENAME_EXCHANGE|RENAME_WHITEOUT`** 的子集，否则 **`EINVAL`**；**`WHITEOUT`** 未建模 overlay → **`EINVAL`**。**`RENAME_NOREPLACE`** 且 **`new_dir.lookup_no_follow(new_name)`** 已存在 → **`EEXIST`**。**`RENAME_EXCHANGE`**：两端须存在（否则 **`ENOENT`**）；同目录同名 → **`EINVAL`**；交换以临时名三次 **`Location::rename`**（非崩溃原子）。**`new_path`** 用 **`resolve_parent`**。
