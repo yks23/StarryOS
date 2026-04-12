@@ -7,9 +7,9 @@ use axtask::{
     future::{self, block_on},
 };
 use linux_raw_sys::general::{
-    MINSIGSTKSZ, SI_TKILL, SI_USER, SIG_BLOCK, SIG_SETMASK, SIG_UNBLOCK, __kernel_sighandler_t,
-    __sifields, kernel_sigaction, kernel_sigset_t, siginfo, siginfo__bindgen_ty_1,
-    siginfo__bindgen_ty_1__bindgen_ty_1, timespec,
+    MINSIGSTKSZ, SI_TKILL, SI_USER, SIGRTMAX, SIG_BLOCK, SIG_SETMASK, SIG_UNBLOCK,
+    __kernel_sighandler_t, __sifields, kernel_sigaction, kernel_sigset_t, siginfo,
+    siginfo__bindgen_ty_1, siginfo__bindgen_ty_1__bindgen_ty_1, timespec,
 };
 #[cfg(any(
     target_arch = "x86_64",
@@ -153,6 +153,15 @@ pub(crate) fn check_sigset_size(size: usize) -> AxResult<()> {
 }
 
 fn parse_signo(signo: u32) -> AxResult<Signo> {
+    // Linux `kill`/`do_sigaction`: no silent truncation (`257` must not become SIGHUP), and
+    // `signo` must be in `1..=SIGRTMAX` (uAPI; `SIGRTMAX` matches target `linux_raw_sys::general`).
+    // issue-414.
+    if signo != signo as u8 as u32 {
+        return Err(AxError::InvalidInput);
+    }
+    if signo == 0 || signo > SIGRTMAX {
+        return Err(AxError::InvalidInput);
+    }
     Signo::from_repr(signo as u8).ok_or(AxError::InvalidInput)
 }
 

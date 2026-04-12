@@ -1,0 +1,27 @@
+{
+  "id": "issue-414",
+  "title": "`rt_sigaction`/`kill` 等：`parse_signo` 将 `u32` 截断为 `u8`，大号 `signo` 可误映射到另一信号，与 Linux `1.._NSIG` 边界 `EINVAL` 不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T23:50:00Z",
+  "severity": "low",
+  "description": "`kernel/src/syscall/signal.rs` **`parse_signo`**（**约** **155–157** **行** **）** **：**\n\n```rust\nfn parse_signo(signo: u32) -> AxResult<Signo> {\n    Signo::from_repr(signo as u8).ok_or(AxError::InvalidInput)\n}\n```\n\n**`signo as u8`** **按** **Rust** **/ C** **规则** **取** **低** **8** **位** **。** **例如** **`signo == 257`** **时** **得到** **`1`** **，** **`from_repr(1)`** **可** **成功** **解析** **为** **SIGHUP** **；** **Linux** **`do_sigaction`/`kill`** **等** **路径** **对** **`sig`** **要求** **通常在** **`1.._NSIG`** **（** **如** **`sig >= _NSIG`** **`→`** **`-EINVAL`** **）** **，** **不会** **把** **257** **当成** **SIGHUP** **。** **同理** **`0x1_0000_0044`** **等** **高位** **非** **零** **的** **值** **会** **折叠** **到** **错误** **的** **枚举** **编号** **。**\n\n**调用点** **包括** **`sys_rt_sigaction`** **、** **`make_siginfo`/`sys_kill`** **、** **`sys_tgkill`** **等** **（** **同** **文件** **内** **`parse_signo`** **引用** **）** **。**\n\n建议：**在** **`from_repr`** **之前** **拒绝** **截断** **：** **`signo != signo as u8 as u32`** **`→`** **`InvalidInput`** **；** **并** **与** **Linux** **`_NSIG`** **对齐** **增加** **上界** **`signo >= _NSIG`** **`→`** **`InvalidInput`** **（** **或** **依赖** **`Signo::from_repr`** **仅** **覆盖** **合法** **子集** **且** **显式** **文档化** **）** **。** **注释** **引用** **issue-414** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["rt_sigaction", "kill", "tgkill", "tkill"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/signal.rs:155-157"],
+    "related_files": ["kernel/src/syscall/signal.rs:203-238", "kernel/src/syscall/signal.rs:250-275"],
+    "key_insight": "`signo as u8` 折叠高位；Linux 对 `sig` 有 `_NSIG` 上界，不将256+k 解释为 k号信号"
+  },
+  "fix_summary": "`parse_signo`：拒绝 `signo != signo as u8 as u32`（防257→SIGHUP）；拒绝 `signo==0` 或 `signo > SIGRTMAX`（`linux_raw_sys::general`，riscv上 `SIGRTMAX==64` 含 RT 上界；勿用 `signo >= _NSIG` 因该目标 `_NSIG` 与 `SIGRTMAX` 同为 64）；再 `from_repr`。issue-414。",
+  "files_changed": ["kernel/src/syscall/signal.rs"],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：`rt_sigaction(257, ...)` / `kill(pid, 257)` 对照 Linux `EINVAL` 与 Starry 返回值。",
+    "expected_output_contains": "",
+    "pass_criteria": "凡 Linux 拒绝的越界/畸形 `signo` 均返回 `EINVAL`（`InvalidInput`），不得误绑定到低位信号。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过"
+  },
+  "suggested_fix": "`parse_signo`：先 `if signo != signo as u8 as u32 { return Err(InvalidInput); }`，再按需比对 `_NSIG`，最后 `Signo::from_repr(signo as u8)` 或改为 `u32`/`usize` 安全的 `TryFrom`。",
+  "references": ["man 2 rt_sigaction", "man 2 kill", "kernel/signal.c", "kernel/src/syscall/signal.rs", "issue-249"]
+}
