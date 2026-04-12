@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-065 resolved（**`mmap`**：**`MmapProt::from_bits`** 与 **`mprotect`** 一致；**`PROT_GROWSDOWN`/`GROWSUP`** 在 **`mmap`** 拒绝；**`mprotect`** 用 **`intersects`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-064 resolved（**`copy_file_range`**：常规文件 + 同 inode 区间重叠 **`EINVAL`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-063 resolved（**`clone3`**：**`set_tid`**/**`set_tid_size`**/**`cgroup`** 非零 → **`InvalidInput`**，勿仅 **`warn`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-062 resolved（**`statfs`**/**`fstatfs`**：**`f_fsid`** 由 **`device`/`f_type`** 双字编码；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -46,6 +47,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-065 | mmap prot from_bits 与 mprotect 一致 | resolved | 2026-04-13 |
 | issue-064 | copy_file_range 重叠/常规文件 EINVAL | resolved | 2026-04-13 |
 | issue-063 | clone3 set_tid/cgroup 非零 EINVAL | resolved | 2026-04-13 |
 | issue-062 | statfs/fstatfs f_fsid 双字编码 | resolved | 2026-04-13 |

@@ -100,7 +100,10 @@ pub fn sys_mmap(
 
     let curr = current();
     let mut aspace = curr.as_thread().proc_data.aspace.write();
-    let permission_flags = MmapProt::from_bits_truncate(prot);
+    let permission_flags = MmapProt::from_bits(prot).ok_or(AxError::InvalidInput)?;
+    if permission_flags.intersects(MmapProt::GROWDOWN | MmapProt::GROWSUP) {
+        return Err(AxError::InvalidInput);
+    }
     // TODO: check illegal flags for mmap
     let map_flags = match MmapFlags::from_bits(flags) {
         Some(flags) => flags,
@@ -265,7 +268,7 @@ pub fn sys_mprotect(addr: usize, length: usize, prot: u32) -> AxResult<isize> {
     };
     debug!("sys_mprotect <= addr: {addr:#x}, length: {length:x}, prot: {permission_flags:?}");
 
-    if permission_flags.contains(MmapProt::GROWDOWN | MmapProt::GROWSUP) {
+    if permission_flags.intersects(MmapProt::GROWDOWN | MmapProt::GROWSUP) {
         return Err(AxError::InvalidInput);
     }
 
