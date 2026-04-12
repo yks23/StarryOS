@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-052 resolved（**`fchownat`**：**`flags`** 须为 **`VALID_FCHOWNAT_FLAGS`**（**`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW`**），未知位 **`EINVAL`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过）
 - 日期：2026-04-12：issue-051 resolved（**`utimensat`**：**`path==NULL`** 时并入 **`AT_EMPTY_PATH`** 后，按 **`VALID_UTIMENSAT_FLAGS`**（**`AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH`**）校验，未知位 **`EINVAL`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过）
 - 日期：2026-04-12：issue-049 resolved（**`fchmodat`**：**`flags`** 须为 Linux **`VALID_FCHMODAT_FLAGS`**（**`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW`**），未知位 **`EINVAL`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过）
 - 日期：2026-04-12：issue-048 resolved（**`unlinkat`**：**`flags`** 仅 **`0`** 或 **`AT_REMOVEDIR`**，否则 **`EINVAL`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过）
@@ -32,6 +33,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-052 | fchownat AT_* flags 掩码 EINVAL | resolved | 2026-04-12 |
 | issue-051 | utimensat AT_* flags 掩码 EINVAL | resolved | 2026-04-12 |
 | issue-049 | fchmodat AT_* flags 掩码 EINVAL | resolved | 2026-04-12 |
 | issue-048 | unlinkat flags 仅 0 或 AT_REMOVEDIR | resolved | 2026-04-12 |
@@ -97,6 +99,7 @@
 - **`unlinkat(2)`**：**`flags`** 仅 **`0`** 或 **`AT_REMOVEDIR`**，否则 **`EINVAL`**；勿将未知位当作「删文件」分支。
 - **`fchmodat(2)`** / **`fchmod`**： **`flags`** 须为 Linux **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW`** 的子集（**`sys_fchmod`** 用 **`AT_EMPTY_PATH`**），否则 **`EINVAL`**；勿未校验即传入 **`resolve_at`**。
 - **`utimensat(2)`**：**`path==NULL`** 时逻辑上含 **`AT_EMPTY_PATH`**；**`flags`** 须为 **`AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH`** 的子集（与 Linux **`VALID_UTIMENSAT_FLAGS`**），在 **`update_times`/`resolve_at`** 前校验，非法位 **`EINVAL`**（含双 **`UTIME_OMIT`** 时亦应先拒绝非法 **`flags`**）。
+- **`fchownat(2)`** / **`fchown`** / **`lchown`**：**`flags`** 须为 **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW`** 的子集（**`VALID_FCHOWNAT_FLAGS`**），否则 **`EINVAL`**；**`sys_fchown`** 用 **`AT_EMPTY_PATH`**，**`lchown`** 用 **`AT_SYMLINK_NOFOLLOW`**。
 - **`getrusage(RUSAGE_CHILDREN)`**：须为 **`wait`** 回收子进程的 **CPU** 累计（**`ProcessData::child_utime_ns`/`child_stime_ns`**），与 **`times`/`waitpid`** 累加路径一致；**勿**把 **`proc.threads()`** 中除当前线程外的 **pthread** 当作子进程。
 - **`prlimit64`**：若 **`new_limit.rlim_max >`** 当前硬 **`limit.max`**（无 **`CAP_SYS_RESOURCE`** 等能力建模时视为非法抬高），须 **`OperationNotPermitted`（EPERM）**；勿静默 **`Ok(0)`**。可降低硬上限或保持不变并更新 **`rlim_cur`**（在 **`rlim_cur <= rlim_max`** 前提下）。
 - **`ioctl(FIONBIO)`**：第三参为 **`int *`**（Linux）；用 **`(arg as *const c_int).vm_read()`** 读整型，**`set_nonblocking(value != 0)`**；勿只读单字节、勿将取值限制为 0/1（**`2`**、**`256`** 等小端首字节为 0 的非零值须启用 **`O_NONBLOCK`**）。
@@ -136,6 +139,7 @@
 - **`get_mempolicy(2)`**：无 NUMA 建模时 **`policy`** 写入 **`MPOL_DEFAULT`（0）**；若 **`nodemask`/`maxnode`** 有效则清零 **`maxnode`** 位对应字节（上限 8192 字节）以匹配 **默认** 策略的空节点掩码。
 
 ## 给 Debugger 的消息
+- issue-052：请跑 **`/bin/test_fchownat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`uid`/`gid`** 不变）。
 - issue-051：请跑 **`/bin/test_utimensat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`mtime`** 不变）。
 - issue-049：请跑 **`/bin/test_fchmodat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`st_mode`** 不变）。
 - issue-048：请跑 **`/bin/test_unlinkat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，目标文件未删）。

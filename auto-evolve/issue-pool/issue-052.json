@@ -1,0 +1,28 @@
+{
+  "id": "issue-052",
+  "title": "fchownat 未校验 flags，非法 AT_* 位经 resolve_at 忽略，应对齐 Linux EINVAL",
+  "status": "resolved",
+  "created_at": "2026-04-17T12:00:00Z",
+  "resolved_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "description": "Linux **`fchownat(2)`** 的 **`flags`** 只能是 **`0`**、**`AT_EMPTY_PATH`** 与 **`AT_SYMLINK_NOFOLLOW`** 的合法组合；含未知位须 **`EINVAL`**（本环境 **`fchownat(..., -1, -1, 0x80000000)`** → **`errno=22`**）。**`sys_fchownat`** 将 **`flags`** 直接传入 **`resolve_at`**，未知位被静默忽略，可能仍 **`Ok(0)`**，与 Linux 不符；与 issue-049 **`fchmodat`**、issue-051 **`utimensat`** 同类。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["fchownat"],
+  "fix_summary": "**`sys_fchownat`**：按 Linux **`VALID_FCHOWNAT_FLAGS`**（**`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW`**）校验，未知位 **`AxError::InvalidInput`**（**`EINVAL`**）；保留 **`sys_fchown`**/**`lchown`** 的 **`AT_EMPTY_PATH`**/**`AT_SYMLINK_NOFOLLOW`** 用法。",
+  "files_changed": ["kernel/src/syscall/fs/ctl.rs"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/ctl.rs:331-360"],
+    "related_files": ["kernel/src/file/fs.rs:resolve_at"],
+    "key_insight": "入口校验 `flags` 为 Linux 允许的 AT_* 子集"
+  },
+  "test": {
+    "source_file": "auto-evolve/tests/test_fchownat_invalid_flags.c",
+    "build_command": "riscv64-linux-musl-gcc -static -Wall -o test_fchownat_invalid_flags test_fchownat_invalid_flags.c",
+    "run_method": "放入 rootfs /bin/ 后在 QEMU 运行",
+    "expected_output_contains": "SUMMARY",
+    "pass_criteria": "非法 flags 时返回 -1、errno=EINVAL，且 uid/gid 不变",
+    "last_result": "未在 QEMU 运行；`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` 通过"
+  },
+  "suggested_fix": "在 **`sys_fchownat`**：`if flags & !(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH) != 0 { return Err(InvalidInput); }`（若不支持某组合再细化）。",
+  "references": ["man 2 fchownat"]
+}
