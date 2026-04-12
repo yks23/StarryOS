@@ -577,6 +577,12 @@ pub fn sys_splice(
         return Err(AxError::OperationNotSupported);
     }
 
+    // Linux `do_splice` (`fs/splice.c`): `if (!len) return 0;` before pipe vs non-pipe routing — avoid
+    // `EINVAL` when neither end is a pipe but `len == 0` (issue-377).
+    if len == 0 {
+        return Ok(0);
+    }
+
     let mut has_pipe = false;
 
     let src = if !off_in.is_null() {

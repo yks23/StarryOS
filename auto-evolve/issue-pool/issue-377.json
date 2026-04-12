@@ -1,0 +1,32 @@
+{
+  "id": "issue-377",
+  "title": "`splice(2)`：`len == 0` 时 Linux `do_splice` 早返回 0；`sys_splice` 在无 pipe 端点对上仍先 `InvalidInput`（EINVAL）",
+  "status": "resolved",
+  "created_at": "2026-04-13T12:00:00Z",
+  "resolved_at": "2026-04-13T12:30:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/fs/io.rs`** **`sys_splice`**（**约** **538–631** **行**）**：** **上游** **Linux** **`do_splice`** **在** **进入** **管道** **/** **`splice`** **文件** **操作** **前** **对** **`!len`** **早** **返回** **0** **（** **见** **内核** **`fs/splice.c`** **及** **LKML** **说明** **：** **`splice`** **自** **引入** **起** **即** **`if (!len) return 0;`** **）** **。** **即** **两** **个** **非** **pipe** **`fd`** **、** **无** **有效** **splice** **路径** **时** **，** **`len == 0`** **仍** **应** **成功** **返回** **0** **，** **而非** **「** **无** **pipe** **」** **类** **EINVAL** **。**\n\n**当前** **Starry** **在** **构造** **`src`/`dst`** **后** **以** **`has_pipe`** **门控** **（** **约** **626–628** **行** **）** **：** **`!has_pipe`** **→** **`Err(InvalidInput)`** **，** **发生在** **`do_send`** **（** **`len`** **可为** **0** **）** **之前** **。** **故** **`splice(fd1, NULL, fd2, NULL, 0, 0)`** **在** **两** **端** **均** **非** **pipe** **时** **可能** **得到** **`EINVAL`** **，** **与** **Linux** **早** **返回** **0** **分叉** **。** **与** **issue-280** **`mprotect`** **`len==0`** **no-op** **、** **issue-247** **`SPLICE_F_*`** **桩** **注释** **正交** **。**\n\n**建议** **：** **在** **`has_pipe`** **/`InvalidInput`** **分支** **之前** **（** **或** **`do_send`** **入口** **）** **若** **`len == 0`** **则** **`Ok(0)`** **；** **或** **对照** **Linux** **`do_splice`** **将** **`!len`** **与** **fd** **/`flags`** **校验** **顺序** **一次性** **对齐** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["splice"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/io.rs:538-631"],
+    "related_files": ["kernel/src/syscall/fs/io.rs:401-430"],
+    "key_insight": "Linux early return 0 for len==0 before pipe requirement; Starry rejects non-pipe pair first"
+  },
+  "fix_summary": "**`sys_splice`**：**`flags`** **校验** **后**、**`has_pipe`/`src`/`dst`** **构造** **前** **`len == 0`** **→** **`Ok(0)`** **（** **对齐** **`do_splice` `!len`** **）**；**避免** **无** **pipe** **对** **先** **`EINVAL`**。**issue-377**。**",
+  "files_changed": [
+    "kernel/src/syscall/fs/io.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-377.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：用户态 `splice` 两普通文件/非 pipe fd、`len=0` 对照 Linux `errno`/`返回值`。",
+    "expected_output_contains": "",
+    "pass_criteria": "`len==0` 时与 Linux 一致返回 0（在无额外约束时），不因缺少 pipe 先 EINVAL。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `sys_splice` 中于 `has_pipe` 门控之前对 `len == 0` 返回 `Ok(0)`，或整体对齐 `do_splice` 的分支顺序。",
+  "references": ["man 2 splice", "Linux fs/splice.c (do_splice)", "kernel/src/syscall/fs/io.rs"]
+}
