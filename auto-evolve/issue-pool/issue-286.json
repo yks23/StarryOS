@@ -1,0 +1,27 @@
+{
+  "id": "issue-286",
+  "title": "socketpair：用户 `fds` 非法时仍先创建一对 Unix socket，再 `get_as_mut`，错误顺序可与 Linux 分叉",
+  "status": "resolved",
+  "created_at": "2026-04-13T01:10:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_socketpair`：在 `domain`/`proto`/`ty` 校验通过后立即 `fds.get_as_mut()?`（用户区可写检查），再 `StreamTransport`/`DgramTransport::new_pair` 与 `Socket::new`；移除末尾重复的 `get_as_mut`，仍用提前得到的 `out` 写回 `[fd1, fd2]`。",
+  "files_changed": ["kernel/src/syscall/net/socket.rs"],
+  "description": "**`kernel/src/syscall/net/socket.rs`** **`sys_socketpair`**（约 **181–235** 行）在 **`validate_socket_type`** **与** **`AF_UNIX`/`proto`** **校验** **之后** **，** **先** **`StreamTransport::new_pair`** **或** **`DgramTransport::new_pair`** **构造** **传输** **，** **再** **`Socket::new`** **包装** **，** **设置** **`O_NONBLOCK`/`O_CLOEXEC`** **，** **最后** **`fds.get_as_mut()?`** **才** **解析** **用户** **`fds`** **指针** **并** **`add_to_fd_table`** **。**\n\n**当** **`fds`** **为** **NULL** **或** **不可写** **时** **，** **失败** **发生** **在** **已** **完成** **一对** **Unix** **socket** **内核** **对象** **分配** **之后** **。** **Linux** **`socketpair(2)`** **路径** **通常** **在** **创建** **套接字** **或** **尽早** **阶段** **对** **输出** **指针** **做** **`access_ok`/`put_user`** **探测** **；** **`EFAULT`** **与** **`EAFNOSUPPORT`/`ESOCKTNOSUPPORT`** **等** **的** **先后** **可能** **与** **「** **先** **建** **完整** **一对** **再** **`EFAULT`****」** **不同** **（** **与** **issue-281**/**284** **类** **输出** **/****用户** **指针** **早退** **策略** **同类** **）** **。** **当前** **无** **fd** **泄漏** **（** **未** **入** **表** **前** **失败** **）** **，** **但** **错误** **顺序** **与** **多余** **内核** **工作** **仍** **可能** **与** **Linux** **分叉** **。**\n\n**建议**：在 **`StreamTransport::new_pair`** **/`DgramTransport::new_pair`** **之前** **或** **紧接** **参数** **校验** **之后** **，** **对** **`fds`** **做** **`get_as_mut()`** **或** **等价** **可写** **探测** **（** **仅** **校验** **指针** **合法性** **，** **勿** **提前** **占用** **fd** **槽** **）** **；** **或** **文档化** **与** **Linux** **在** **EFAULT** **顺序** **上的** **差异** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["socketpair"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/socket.rs:181-235"],
+    "related_files": [],
+    "key_insight": "socketpair 先建传输与 Socket 再 fds.get_as_mut，非法 fds 时错误顺序与 Linux 可能不同"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 Linux socketpair 对用户输出指针的校验顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "非法 fds 时错误码与顺序与目标 Linux 一致，或显式文档化差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在创建传输/`Socket::new` 之前对 `fds` 做 `get_as_mut()` 或等价 access_ok，与 issue-281/284 输出缓冲早退策略一致。",
+  "references": ["man 2 socketpair", "kernel/src/syscall/net/socket.rs", "issue-251", "issue-281", "issue-284"]
+}

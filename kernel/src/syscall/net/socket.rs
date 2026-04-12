@@ -195,6 +195,10 @@ pub fn sys_socketpair(
         return Err(AxError::from(LinuxError::EPROTONOSUPPORT));
     }
 
+    // Validate user `fds` before allocating the pair (issue-286; same class as issue-281 output
+    // buffer ordering).
+    let out = fds.get_as_mut()?;
+
     let pid = current().as_thread().proc_data.proc.pid();
     let (sock1, sock2) = match ty {
         SOCK_STREAM => {
@@ -221,7 +225,6 @@ pub fn sys_socketpair(
     }
     let cloexec = raw_ty & O_CLOEXEC != 0;
 
-    let out = fds.get_as_mut()?;
     let fd1 = sock1.add_to_fd_table(cloexec)?;
     let fd2 = match sock2.add_to_fd_table(cloexec) {
         Ok(fd) => fd,
