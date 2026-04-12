@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-278 resolved（**`pidfd_getfd`**：**`flags` 须为 0**，否则 **`InvalidInput`（EINVAL）**；**`pidfd.rs`**（与 **`pidfd_send_signal`** 同）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-276 resolved（**`sendmsg`/`recvmsg`**：**`msghdr`** **`msg_control`/`msg_name` 为 NULL 时对应长度须为 0**，否则 **`InvalidInput`（EINVAL）**；**`net/io.rs` `validate_msghdr_ptr_len_consistency`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-277 resolved（**`get_robust_list`**：跨 **`tid`** 须 **`may_peer_process_by_cred`**（同 **`prlimit64`/`pidfd_open`**），否则 **`EPERM`**；**`sync/futex.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-275 resolved（**`pidfd_open`**：跨进程须 **`may_peer_process_by_cred`**（与 **`prlimit64`** 同：**`euid==0`** / **`CAP_SYS_RESOURCE`** / **`ruid` 相同**），否则 **`EPERM`**；**`task/ops.rs`**/**`pidfd.rs`**/**`resources.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -301,6 +302,7 @@
 | issue-271 | mlock/mlock2 addr 须页对齐 EINVAL | resolved | 2026-04-12 |
 | issue-272 | lseek SEEK_SET 负 offset EINVAL | resolved | 2026-04-12 |
 | issue-273 | prlimit64 跨 pid 权限 EPERM | resolved | 2026-04-12 |
+| issue-278 | pidfd_getfd flags 非零 EINVAL | resolved | 2026-04-12 |
 | issue-276 | sendmsg/recvmsg msghdr 指针长度 EINVAL | resolved | 2026-04-12 |
 | issue-277 | get_robust_list 跨 tid 凭证 EPERM | resolved | 2026-04-12 |
 | issue-275 | pidfd_open 凭证门禁 EPERM | resolved | 2026-04-12 |
@@ -528,6 +530,7 @@
 - **`socket(2)`/`socketpair(2)`**：**`type`** 仅允许 **`SOCK_TYPE_MASK`（0xf）** 内 **`SOCK_*`** 与 **`O_CLOEXEC|O_NONBLOCK`**；其它位 **`InvalidInput`**（对齐 Linux **`EINVAL`**）。**`ty`** 取 **`raw_ty & SOCK_TYPE_MASK`**。**`AF_UNIX`**：**`proto` 须为 0**，否则 **`EPROTONOSUPPORT`**（issue-241；**`AF_INET`** 仍按 **`IPPROTO_TCP`/`UDP`**）。**`AF_UNIX` `SOCK_SEQPACKET`**：未实现 Unix SEQPACKET 传输；**`socket`** 与 **`socketpair`** 均 **`ESOCKTNOSUPPORT`**，勿将 **`SOCK_SEQPACKET`** 与 **`DgramTransport`** 混用（issue-251）。**`socketpair`**：先 **`fds.get_as_mut()`** 再依次 **`add_to_fd_table`**；第二端失败须 **`close_file_like`** 已装第一端（issue-150，与 issue-148 **`pipe2`** 同类）。
 - **`shutdown(2)`**（**`AF_INET` UDP**）：**`UdpSocket`** **`SHUT_RD`/`SHUT_WR`** 分别置 **`rx_shut`/`tx_shut`**，**`recv`**/**`send`** 失败（**`EINVAL`/`EPIPE`** 类），**`poll`** 不再对关闭侧置 **`IN`/`OUT`**；**`SHUT_RDWR`** 置两标志并 **`smoltcp` `close()`**（issue-274；此前凡 **`how`** 均 **`close()`**）。
 - **`pidfd_open(2)`**：解析 **`get_task`/`get_process_data`** 后、装 **`PidFd`** 前须 **`may_peer_process_by_cred`**（与 **`prlimit64`** 同：**`euid==0`** / **`CAP_SYS_RESOURCE`** / **`ruid` 相同**），否则 **`EPERM`**（issue-275；**`pid==0`** 仍 **`EINVAL`**，issue-109）。
+- **`pidfd_getfd(2)`**：**`flags` 须为 0**（Linux 当前无定义标志位；与 **`pidfd_send_signal`** 同），否则 **`InvalidInput`（EINVAL）**（issue-278）。
 - **`get_robust_list(2)`**：**`get_task(tid)`** 后、写用户 **`head`/`size`** 前须 **`may_peer_process_by_cred`**（同线程组即同一 **`ProcessData`** 则允许；跨进程须特权或同 **`ruid`**），否则 **`EPERM`**（issue-277）。**`set_robust_list`** 仍仅 **`current()`**。
 - **`listen(2)`**：**`AF_UNIX` `SOCK_DGRAM`**（**`Transport::Dgram`**）→ **`OperationNotSupported`（EOPNOTSUPP）**；**`SOCK_STREAM`** 仍为 **`Ok`**（**`vendor/axnet-ng` `UnixSocket::listen`**，issue-254）。TCP：**`tcp_listen_syn_queue_cap`** 按 Linux **`(unsigned int)backlog`** 与 **`SOMAXCONN`** 取 **`min`**（issue-156、issue-261）。
 - **`setsockopt(2)`**：**`optlen`** 须 **`>=`** 选项值 **`sizeof(T)`**（与 Linux / **`getsockopt`** 侧一致），只使用缓冲区前 **`sizeof(T)`** 字节；**`optlen < sizeof(T)`** → **`EINVAL`**。**`SO_RCVTIMEO`/`SO_SNDTIMEO`**（**`SOL_SOCKET`**）用户 **`timeval`** 须经 **`read_timeval_user`** 字段读，勿经 **`UserConstPtr::get_as_ref::<timeval>`** 整结构拷贝（issue-217）。
