@@ -1,0 +1,32 @@
+{
+  "id": "issue-198",
+  "title": "recvmsg：`get_as_mut` 持有用户态 `&mut msghdr`，`iov`/`msg_control`/`msg_controllen` 与 Linux拷贝语义不一致，存在字段级 TOCTOU",
+  "status": "resolved",
+  "created_at": "2026-04-15T04:00:00Z",
+  "severity": "medium",
+  "fix_summary": "**`sys_recvmsg`**：`fd` 查找后 **`let m = *msg.get_as_mut()?`** 整 **`msghdr`** 快照到内核栈；**`msg` 用户基址** + **`offset_of!`** 构造 **`msg_namelen`/`msg_controllen`/`msg_flags`** 的 **`UserPtr`**，不再在 **`recv_on_socket` 全程持有 `&mut msghdr`**。**`CMsgBuilder`** 改为 **`UserPtr<usize>`** 存 **`msg_controllen`**，**`new`/`commit`** 经 **`get_as_mut`** 读写用户长度；去掉 **`'a` + `&mut usize`**。**`recv_on_socket`** 的 **`msg_flags`** 改为 **`Option<UserPtr<u32>>`**。**`IoVectorBuf`** 仍按快照 **`m.msg_iov`/`msg_iovlen`** 在用户侧逐项读 **`iovec`**（与 **issue-197** 相同残余模型）。**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过。",
+  "files_changed": [
+    "kernel/src/syscall/net/io.rs",
+    "kernel/src/syscall/net/cmsg.rs",
+    "auto-evolve/issue-pool/issue-198.json",
+    "auto-evolve/memory/executor-memory.md"
+  ],
+  "description": "**`kernel/src/syscall/net/io.rs`** **`sys_recvmsg`** 在 **`Socket::from_fd`** 之后执行 **`msg.get_as_mut()?`**，得到指向**用户缓冲**的 **`&mut msghdr`**，并把它拆成 **`IoVectorBuf::new(msg.msg_iov, msg.msg_iovlen)`**、**`UserPtr::from(msg.msg_name ...)`**、**`CMsgBuilder::new(UserPtr::from(msg.msg_control ...), &mut msg.msg_controllen)`** 以及 **`&mut msg.msg_flags`** 传入 **`recv_on_socket`**。在 **`socket.recv`** 及后续写地址/ancillary 的全过程中，**`msg` 各字段多次经 `&mut` 解引用从用户页读出**；用户线程可并发改写 **`msg_iov`/`msg_control`/`msg_controllen`** 等，使内核侧基于「早期看到的指针/长度」的 **`check_region`** 与后续实际访问脱节（与 **issue-197** **`sendmsg` 侧 `get_as_ref`** 对偶）。**Linux `__sys_recvmsg`** 通常在 **`copy_msghdr_from_user`/`import_iovec`** 等路径把 **`struct msghdr` 与 iovec 拷贝/钉扎** 后再收包与 **`copy_to_user`**，不长期依赖未钉扎的用户 **`&mut msghdr`**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["recvmsg"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/io.rs:302-321"],
+    "related_files": ["kernel/src/syscall/net/io.rs:166-276"],
+    "key_insight": "`&mut msghdr` 指用户页；iov/cmsg/flags 贯穿 `recv_on_socket`"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "双线程：一线程 **`recvmsg`**，另一线程在阻塞 **`recv`** 期间改写 **`msghdr.msg_iovlen`**、**`msg_control`** 或 **`msg_controllen`**；对照 **Linux** 在 **`import_single_range`/`copy_msghdr_from_user`** 后的行为。",
+    "expected_output_contains": "",
+    "pass_criteria": "与 **Linux** 一致地快照/导入 **`msghdr`/`iovec`**；或文档化可接受的竞态模型（**issue-197** 同策略）。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（2026-04-12）"
+  },
+  "suggested_fix": "将 **`msghdr` 主字段**读入内核（或 **`pin_user_pages`/`copy_iovec_from_user`** 等价物），**`recv` 与 ancillary 写回**仅基于内核副本，最后再 **`copy_to_user`** 需要暴露的字段。",
+  "references": ["man 2 recvmsg", "Linux __sys_recvmsg", "issue-197"]
+}

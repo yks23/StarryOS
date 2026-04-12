@@ -1,5 +1,5 @@
 use alloc::{boxed::Box, vec::Vec};
-use core::mem::size_of;
+use core::mem::{offset_of, size_of};
 use core::net::Ipv4Addr;
 
 use axerrno::{AxError, AxResult};
@@ -176,7 +176,7 @@ fn recv_on_socket(
     addr: UserPtr<sockaddr>,
     addrlen: UserPtr<socklen_t>,
     cmsg_builder: Option<CMsgBuilder>,
-    msg_flags_out: Option<&mut u32>,
+    msg_flags_out: Option<UserPtr<u32>>,
 ) -> AxResult<isize> {
     debug!("sys_recv <= fd: {fd}, flags: {flags}");
 
@@ -255,7 +255,7 @@ fn recv_on_socket(
         if iter.next().is_some() {
             cmsg_trunc = true;
         }
-        builder.commit();
+        builder.commit()?;
     } else if !cmsg.is_empty() {
         cmsg_trunc = true;
     }
@@ -268,7 +268,7 @@ fn recv_on_socket(
         if cmsg_trunc {
             mf |= MSG_CTRUNC;
         }
-        *out = mf;
+        *out.get_as_mut()? = mf;
     }
 
     debug!("sys_recv => fd: {fd}, recv: {recv}");
@@ -303,20 +303,25 @@ pub fn sys_recvmsg(fd: i32, msg: UserPtr<msghdr>, flags: u32) -> AxResult<isize>
     // Linux __sys_recvmsg: flags + sockfd_lookup before copy_msghdr_from_user (EINVAL/EBADF before EFAULT).
     validate_recvmsg_flags(flags)?;
     let socket = Socket::from_fd(fd)?;
-    let msg = msg.get_as_mut()?;
+    // Snapshot `msghdr` + field addresses: avoid holding `&mut msghdr` across `recv` (issue-198).
+    let base = msg.address().as_usize();
+    let m = *msg.get_as_mut()?;
+    let cmsg_builder = if m.msg_control.is_null() {
+        None
+    } else {
+        Some(CMsgBuilder::new(
+            UserPtr::<cmsghdr>::from(m.msg_control as usize),
+            UserPtr::<usize>::from(base + offset_of!(msghdr, msg_controllen)),
+        )?)
+    };
     recv_on_socket(
         &socket,
         fd,
-        IoVectorBuf::new(msg.msg_iov as *mut IoVec, msg.msg_iovlen)?.into_io(),
+        IoVectorBuf::new(m.msg_iov.cast::<IoVec>(), m.msg_iovlen)?.into_io(),
         flags,
-        UserPtr::from(msg.msg_name as usize),
-        UserPtr::from(&mut msg.msg_namelen as *mut _ as *mut socklen_t),
-        (!msg.msg_control.is_null()).then(|| {
-            CMsgBuilder::new(
-                UserPtr::from(msg.msg_control as *mut cmsghdr),
-                &mut msg.msg_controllen,
-            )
-        }),
-        Some(&mut msg.msg_flags),
+        UserPtr::from(m.msg_name as usize),
+        UserPtr::<socklen_t>::from(base + offset_of!(msghdr, msg_namelen)),
+        cmsg_builder,
+        Some(UserPtr::<u32>::from(base + offset_of!(msghdr, msg_flags))),
     )
 }

@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-198 resolved（**`recvmsg`**：**`msghdr`** 快照 + **`offset_of!` `UserPtr`** 写 **`msg_namelen`/`msg_controllen`/`msg_flags`**；**`CMsgBuilder`**用 **`UserPtr<usize>`**替代 **`&mut msg.msg_controllen`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-197 resolved（**`sendmsg`**：**`*msg.get_as_ref()?`** 整 **`msghdr`** 拷内核栈后再解析 **`msg_control`**与组 **`IoVectorBuf`/地址**；缓解 **`msghdr` 字段级 TOCTOU**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-196 resolved（**`renameat2` `RENAME_EXCHANGE`**：**`ctl.rs`** 文档化 **三次 `rename` + 临时名** 实现 **非 crash-atomic**、与 Linux **VFS 交换** 故障语义可能不同；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-195 resolved（**`sendmsg` `msg_control`**：**`cmsghdr`** 内核栈快照 + **`CMsg::parse(&hdr, ptr)`** 用快照 **`cmsg_len`** 与用户 **`ptr` 取 payload**；消除 **`cmsg_len` TOCTOU**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
