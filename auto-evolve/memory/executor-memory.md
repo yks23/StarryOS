@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-05-16：issue-337 resolved（**`sigaltstack`**：**`read_signal_stack_user`/`MINSIGSTKSZ`** **先于** **`old_ss.vm_write`**，失败路径不写 **`old`**；**`signal.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-05-15：issue-336 resolved（**`sched_setaffinity`**：**`cpusetsize * 8 < cpu_num`** **→** **`EINVAL`** **先于** **`sched_resolve_task`**（**`ESRCH`**），与 **`sched_getaffinity`** **对称**；**`schedule.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-05-14：issue-335 resolved（**`brk`**：**4K 页对齐** **先于** **`addr > heap_limit`**（**`EINVAL`** **先于** **`ENOMEM`**）；**`brk.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-05-13：issue-334 resolved（**`ppoll`**：**`fds`/`nfds`** **切片** **先于** **`check_sigset_size`**；**`poll.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -360,6 +361,7 @@
 | issue-271 | mlock/mlock2 addr 须页对齐 EINVAL | resolved | 2026-04-12 |
 | issue-272 | lseek SEEK_SET 负 offset EINVAL | resolved | 2026-04-12 |
 | issue-273 | prlimit64 跨 pid 权限 EPERM | resolved | 2026-04-12 |
+| issue-337 | sigaltstack 校验新 ss 后再写 old_ss（失败不写 old） | resolved | 2026-05-16 |
 | issue-336 | sched_setaffinity cpusetsize 先于 sched_resolve_task（EINVAL 先于 ESRCH） | resolved | 2026-05-15 |
 | issue-335 | brk 页对齐先于 heap_limit（EINVAL 先于 ENOMEM） | resolved | 2026-05-14 |
 | issue-334 | ppoll fds 切片先于 check_sigset_size | resolved | 2026-05-13 |
@@ -582,7 +584,7 @@
 - `rt_sigreturn` 通过 `block_next_signal` 标记「下一次回到用户循环时跳过一次 `check_signals`」；该标志必须是 **per-thread**（`Thread::skip_next_signal_check`），不可用进程级或全局 AtomicBool。
 - **`rt_sigpending`**：**`set`** 为必填输出（Linux **`NULL` → EFAULT**），**`set.is_null()` → `BadAddress`**，须在 **`vm_write`** 前校验。**`rt_sigprocmask(2)`**：**`set==NULL`** 时仅 **`copy_to_user(old)`**（若 **`oldset` 非空**），**`how`** 忽略；**`set` 非空**时须先校验 **`how`**（**`SIG_BLOCK`/`SIG_UNBLOCK`/`SIG_SETMASK`**）再 **`vm_read(set)`**，成功后再 **`vm_write(oldset)`** 与 **`set_blocked`**，非法 **`how`** 或 **`set`** 读失败不得改写 **`oldset`**（issue-146）。**`rt_sigaction(2)`**：持锁后先 **`clone`** 当前表项为 **`old`**；**`act` 非空**时先 **`vm_read(act)`** 并写回 **`actions[signo]`**，再 **`vm_write(oldact)`**（**`old.into()`**）；**`act`** 读失败不得改写 **`oldact`**（issue-147）。**`act==NULL`** 时仅 **`vm_write(oldact)`** 查询。**`oldact`** 仍为 **`nullable()`**。
 - **`signalfd4`**：**`mask.is_null()` → `BadAddress`** **先于** **`check_sigset_size`**/**`SignalfdFlags`**/**`CLOEXEC`** **组合** **的** **`EINVAL`**（**issue-321**；**`mask`** **为** **必填** **用户** **指针**）。**`fd != -1`**：**`Signalfd::from_fd(fd)`** **先于** **`read_signal_set_user`**，**`EBADF`** **先于** **不可读** **`mask`** **的** **`BadAddress`**（**issue-319**）。**`read_signal_set_user`** 与 **`rt_sigprocmask`** 同字级路径（**issue-210**）。
-- **`sigaltstack(2)`**：**`ss==NULL`** 时 **`set_stack(SignalStack::default())`**（**`SS_DISABLE`**），禁用备用栈（issue-244）；非空 **`ss`** 且 **`ss.size < MINSIGSTKSZ` → EINVAL**（issue-098）。
+- **`sigaltstack(2)`**：非空 **`ss`** 时先 **`read_signal_stack_user`** 与 **`ss.size >= MINSIGSTKSZ`**，再 **`old_ss.vm_write`**（若 **`old_ss` 非空**）、再 **`set_stack`**，与 Linux **`do_sigaltstack`** 一致：**`EFAULT`/`EINVAL`** 于新 **`stack_t`** 时不写出 **`old`**（**issue-337**）。**`ss==NULL`** 时 **`set_stack(SignalStack::default())`**（**`SS_DISABLE`**）（issue-244）；**`ss.size < MINSIGSTKSZ` → EINVAL**（issue-098）。
 - **`rt_sigtimedwait`/`rt_sigsuspend`**：**`set`** 为必填可读 **`sigset_t`**（**`NULL` → EFAULT**），**`set.is_null()` → `BadAddress`**，须在 **`vm_read_uninit`** 前校验；**`timeout`/`info`** 等仍 **`nullable()`**。
 - **`rt_sigqueueinfo`/`rt_tgsigqueueinfo`**：Linux 分别为 **3/4 个**用户参数（**`uinfo`** 为最后一参），**无** **`sigsetsize`**；勿从 **`a3`/`a4`** 读 **`sigsetsize`** 或调用 **`check_sigset_size`**（残留寄存器会误 **EINVAL**）。**`rt_sig*`** 中带 **`sigsetsize`** 的是 **`rt_sigprocmask`**、**`rt_sigaction`**、**`rt_sigpending`**、**`rt_sigtimedwait`**、**`rt_sigsuspend`** 等，勿与 queueinfo 混淆。**`make_queue_signal_info`**：**`signo==0`** → **`Ok(None)`**；否则 **`parse_signo`** 后 **`uinfo==NULL` → `BadAddress`** 再 **`vm_read`**（**`pidfd_send_signal`** 同路径）。
 - **`tkill(2)`/`tgkill(2)`**：**`tid`** 须为非零有效线程 ID；**`tid==0` → `InvalidInput`（EINVAL）**，勿走 **`get_task(0)`→`current()`**（issue-249）。**`get_task(0)`** 仍保留给其它需「当前任务」的 syscall；**`kill`/`get_process_data(0)`** 等 **PID 0** 语义与此不同。

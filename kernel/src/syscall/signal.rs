@@ -468,19 +468,23 @@ pub fn sys_sigaltstack(ss: *const SignalStack, old_ss: *mut SignalStack) -> AxRe
     let curr = current();
     let sig = &curr.as_thread().signal;
 
-    if let Some(old_ss) = old_ss.nullable() {
-        old_ss.vm_write(sig.stack())?;
-    }
-
+    // Linux `do_sigaltstack`: validate/read new `stack_t` before `copy_to_user(old)` so EFAULT/EINVAL
+    // on the new `ss` does not expose a partially updated `old_ss` (issue-337; issue-244/098 semantics).
     if let Some(ss) = ss.nullable() {
         let ss = read_signal_stack_user(ss)?;
         // Linux EINVAL for ss_size below MINSIGSTKSZ (illegal stack_t), not ENOMEM.
         if ss.size < MINSIGSTKSZ as usize {
             return Err(AxError::InvalidInput);
         }
+        if let Some(old_ss) = old_ss.nullable() {
+            old_ss.vm_write(sig.stack())?;
+        }
         sig.set_stack(ss);
     } else {
         // Linux `sigaltstack(2)`: `ss == NULL` disables the alternate stack (equivalent to `SS_DISABLE`).
+        if let Some(old_ss) = old_ss.nullable() {
+            old_ss.vm_write(sig.stack())?;
+        }
         sig.set_stack(SignalStack::default());
     }
     Ok(0)
