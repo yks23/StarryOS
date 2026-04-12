@@ -1,6 +1,8 @@
+use core::mem::size_of;
+
 use axerrno::{AxError, AxResult, LinuxError};
 use axnet::options::{Configurable, GetSocketOption, SetSocketOption};
-use linux_raw_sys::net::{socklen_t, IP_TTL, TCP_INFO};
+use linux_raw_sys::net::{socklen_t, tcp_info, IP_TTL, TCP_INFO};
 
 use crate::{
     file::{FileLike, Socket},
@@ -155,13 +157,20 @@ pub fn sys_getsockopt(
 
     let socket = Socket::from_fd(fd)?;
     let optlen = optlen.get_as_mut()?;
-    // `GetSocketOption::TcpInfo` uses `()`; generic `get()` would set `*optlen = 0` before we know
-    // success. Handle before touching `optval`/`optlen` (issue-167).
+    // `TCP_INFO`: validate length first; only set `*optlen` after a successful fill (issue-167).
+    // Pass a real `&mut [u8]` so axnet cannot return Ok(0) without writing `struct tcp_info` (issue-191).
     if level == PROTO_TCP && optname == TCP_INFO {
-        let mut dummy = ();
-        return socket
-            .get_option(GetSocketOption::TcpInfo(&mut dummy))
-            .map(|_| 0);
+        let need = size_of::<tcp_info>();
+        if (*optlen as usize) < need {
+            return Err(AxError::InvalidInput);
+        }
+        let buf = optval.get_as_mut_slice(need)?;
+        let mut opt = GetSocketOption::TcpInfo(buf);
+        if socket.get_option_inner(&mut opt)? {
+            *optlen = need as socklen_t;
+            return Ok(0);
+        }
+        return Err(AxError::from(LinuxError::ENOPROTOOPT));
     }
     if level == PROTO_IP && optname == IP_TTL {
         let mut val = 0u8;

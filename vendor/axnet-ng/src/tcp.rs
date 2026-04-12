@@ -192,8 +192,10 @@ impl Configurable for TcpSocket {
             O::ReceiveBuffer(size) => {
                 **size = TCP_RX_BUF_LEN;
             }
-            O::TcpInfo(_) => {
-                // Not implemented; Ok(true) would fake success with empty output (issue-167).
+            O::TcpInfo(buf) => {
+                // Not implemented. If adding TCP_INFO, fill `buf` (Linux `struct tcp_info`) then
+                // return Ok(true); never return Ok(true) with uninitialized `buf` (issue-191).
+                let _ = buf;
                 return Ok(false);
             }
             _ => return Ok(false),

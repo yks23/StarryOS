@@ -67,7 +67,8 @@ define_options! {
     // --- TCP level options (TCP_*) ----
     NoDelay(bool),
     MaxSegment(usize),
-    TcpInfo(()),
+    // Linux TCP_INFO: `&mut [u8]` sized to `struct tcp_info`; Ok(true) only after filling `buf`.
+    TcpInfo([u8]),
 
     // ---- IP level options (IP_*) ----
     Ttl(u8),

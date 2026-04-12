@@ -1,0 +1,33 @@
+{
+  "id": "issue-191",
+  "title": "getsockopt：`TCP_INFO` 早退仍用 `()` 占位，若底层改为支持将形成「成功但不写 `optval`」陷阱",
+  "status": "resolved",
+  "created_at": "2026-04-14T02:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`GetSocketOption::TcpInfo`** 由 **`()`** 改为 **`&mut [u8]`**（**`vendor/axnet-ng/src/options.rs`**）。**`sys_getsockopt` `TCP_INFO`**（**`kernel/src/syscall/net/opt.rs`**）：先校验 **`*optlen ≥ sizeof(tcp_info)`**，再 **`get_as_mut_slice`**，**`get_option_inner`** 仅在 **`Ok(true)`** 时设置 **`*optlen`** 并 **`Ok(0)`**；未实现仍 **`ENOPROTOOPT`** 且不提前改 **`*optlen`**。**`TcpSocket`**（**`tcp.rs`**）注释要求：**`Ok(true)` 前必须填满 `buf`**。**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过。",
+  "files_changed": [
+    "kernel/src/syscall/net/opt.rs",
+    "vendor/axnet-ng/src/options.rs",
+    "vendor/axnet-ng/src/tcp.rs",
+    "auto-evolve/issue-pool/issue-191.json",
+    "auto-evolve/memory/executor-memory.md"
+  ],
+  "description": "**`kernel/src/syscall/net/opt.rs`** **`sys_getsockopt`** 对 **`TCP_INFO`** 在通用 **`get()`** 之前早退：**`let mut dummy = ();`** **`socket.get_option(GetSocketOption::TcpInfo(&mut dummy))?`** **`map(|_| 0)`**。**`vendor/axnet-ng`** 当前 **`TcpInfo` 返回 `Ok(false)`** → **`ENOPROTOOPT`**，故用户态尚不致误判。**一旦 `get_option_inner` 对 `TcpInfo` 改为 `Ok(true)`**（开始填充统计），**`dummy` 仍为 `()`**，**`map(|_| 0)`仍不向 `optval` 拷贝 `struct tcp_info`**，会与 **Linux `getsockopt(TCP_INFO)`** 及调用方 **`optlen`/`optval`** 契约严重偏离，属于 **issue-167** 注释已点名的 **接口陷阱**。**修复方向**：实现 **`TCP_INFO`** 时删除 **`()`** 路径，按 **`linux_raw_sys`/`axnet`** 真实缓冲区 **`vm_write`**，并与 **`*optlen`** 同步。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["getsockopt"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/opt.rs:158-165"],
+    "related_files": ["vendor/axnet-ng/src/tcp.rs", "vendor/axnet-ng/src/options.rs"],
+    "key_insight": "`TcpInfo(&mut ())` + `map(|_| 0)` 与将来 `Ok(true)` 不兼容"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "在 **`axnet` 暂存分支** 将 **`O::TcpInfo` 改为 `Ok(true)`** 后跑 **`getsockopt(TCP_INFO)`**，断言 **用户缓冲被写入** 或 **内核显式拒绝**；禁止 **`syscall` 成功而 `optval` 未定义**。",
+    "expected_output_contains": "",
+    "pass_criteria": "**支持 `TCP_INFO`** 时 **`optval`/`optlen` 与 Linux 一致**；或保持 **`ENOPROTOOPT` 直至实现完整**。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（2026-04-12）"
+  },
+  "suggested_fix": "实现 **`TCP_INFO`** 时用真实 **`struct tcp_info`/`MaybeUninit`** 从 **`Configurable::get_option`** 填回，再 **`optval` 写入**；在此之前可在注释中写明 **禁止** 在 **`()` 占位下返回 **`Ok(0)`**。",
+  "references": ["man 7 tcp", "issue-167"]
+}
