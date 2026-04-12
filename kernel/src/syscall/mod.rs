@@ -218,6 +218,9 @@ pub fn handle_syscall(uctx: &mut UserContext) {
         ),
 
         // io mpx
+        // Legacy `poll(2)` syscall number exists only on ABIs where `syscalls::Sysno` defines
+        // `Sysno::poll` (x86/x86_64). Linux riscv64/aarch64 have no separate `__NR_poll`; libc
+        // implements `poll(2)` via `__NR_ppoll` → `sys_ppoll` below (issue-291).
         #[cfg(target_arch = "x86_64")]
         Sysno::poll => sys_poll(uctx.arg0().into(), uctx.arg1() as _, uctx.arg2() as _),
         Sysno::ppoll => sys_ppoll(

@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-291 resolved（**`poll(2)`** **riscv64**：Linux ABI **无** 独立 **`__NR_poll`**；**`syscalls::Sysno`** **亦无** **`poll`**；**`poll(2)`** 由 **libc** 走 **`__NR_ppoll`** → **`sys_ppoll`**；**`mod.rs`** 注释说明 **`Sysno::poll`** 仅 **x86_64**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-290 resolved（**`fadvise64`**：**`get_file_like`** 后 **`Pipe`→ESPIPE**；仅 **`File`/`MemfdCreatedFile`** 桩 **`Ok(0)`**；socket/timerfd/epoll 等 → **`EINVAL`**；**`fs/io.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-289 resolved（**`pipe2`**：**`UserPtr::from(fds).get_as_mut()`** 先于 **`Pipe::new`**/**`add_to_fd_table`**（与 **issue-286** **`socketpair`** 同类）；**`fs/pipe.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-288 resolved（**`gettimeofday(2)`** **`struct timezone *tz`**：**`tz != NULL`** 时 **`vm_write`** 全零 **`timezone`**；**`mod.rs`** 转发 **`uctx.arg1()`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -314,6 +315,7 @@
 | issue-271 | mlock/mlock2 addr 须页对齐 EINVAL | resolved | 2026-04-12 |
 | issue-272 | lseek SEEK_SET 负 offset EINVAL | resolved | 2026-04-12 |
 | issue-273 | prlimit64 跨 pid 权限 EPERM | resolved | 2026-04-12 |
+| issue-291 | poll riscv64：ABI 无 poll 号，libc 走 ppoll | resolved | 2026-04-13 |
 | issue-290 | fadvise64 非 File/Memfd 非 pipe → EINVAL | resolved | 2026-04-13 |
 | issue-289 | pipe2 fds get_as_mut 先于 Pipe::new | resolved | 2026-04-13 |
 | issue-288 | gettimeofday tz 非 NULL 写全零 timezone | resolved | 2026-04-13 |
@@ -501,7 +503,7 @@
 - **`brk(2)`**：非零 **`addr`** 须 **4K 页对齐**（**`VirtAddr::is_aligned(PAGE_SIZE_4K)`**），否则 **`InvalidInput`（EINVAL）**；成功路径 **`set_heap_top`/`return`** 均为对齐地址（issue-253；**`USER_HEAP_BASE`/`heap_limit`** 等仍见 issue-089）。
 - **`openat(2)`/`open(2)`**（**`fs/fd_ops.rs`**）：**`validate_open_flags`** 先于 **`flags_to_options`**；若 **`O_PATH`**，**`flags`** 须为 Linux **`O_PATH_FLAGS`**（**`O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC|O_PATH`**）子集，否则 **`InvalidInput`（EINVAL）**（**`fs/open.c` `build_open_flags`**，issue-259；含 **`O_PATH|O_CREAT`** 等）。
 - **`pipe2`**：**`flags`** 仅允许 **`O_CLOEXEC`/`O_NONBLOCK`**（**`PipeFlags`**）；用 **`from_bits(...).ok_or(InvalidInput)`**，勿 **`from_bits_truncate`**（与 **`eventfd2`/`epoll_create1`** 一致）。**`UserPtr::from(fds).get_as_mut()`** 先于 **`Pipe::new`**/**`add_to_fd_table`**（issue-289，与 issue-286 **`socketpair`** 输出顺序同类）。**`add_to_fd_table`** 成功后若 **`fds.vm_write`** 失败（**EFAULT** 等），须 **`close_file_like`** 已安装的读/写 **fd**，勿留孤儿表项（issue-148）；第二端分配失败时仍应关闭已装读端，勿对 **`close_file_like`** **`unwrap`**。
-- **`poll(2)`/`ppoll(2)`**：**`pollfd.fd < 0`** 的条目被忽略，**`revents`** 须置 **0**（勿保留陈旧位）。
+- **`poll(2)`/`ppoll(2)`**：**`pollfd.fd < 0`** 的条目被忽略，**`revents`** 须置 **0**（勿保留陈旧位）。Linux **riscv64**/**aarch64** 等 **无** 独立 **`poll`** 系统调用号（**`syscalls::Sysno`** **亦无** **`poll`**；**`mod.rs`** 中 **`Sysno::poll`** 仅 **`#[cfg(target_arch = "x86_64")]`**）；**glibc**/**musl** 的 **`poll(2)`** 走 **`__NR_ppoll`** → **`sys_ppoll`**；与上游 **Linux** 一致（issue-291）。**`select`**/**`pipe`** 等 legacy 号同理 **仅** **x86** **ABI** 有 **`Sysno::select`/`Sysno::pipe`**。
 - **`epoll_ctl(2)`**：**`fd == epfd` → `InvalidInput`**（**EINVAL**），勿将 epoll 实例加入自身（issue-240）。**`EPOLL_CTL_ADD`/`MOD`** 须先 **`get_file_like(fd)`**（无效目标 fd → **EBADF**），再 **`event.get_as_ref`**/**`parse_event`**（**EFAULT**/**EINVAL** 类），与 Linux 顺序一致（issue-144）；**`events`** 未知位等仍按 issue-078 **`KNOWN_EPOLL_EVENTS_MASK`**。**`EPOLL_CTL_DEL`** 不读 **`event`**。
 - **`readlink(2)`/`readlinkat(2)`**：**`bufsiz`**（**`size`**）须 **> 0**，否则 **`InvalidInput`**（**EINVAL**），须在 **`vm_load_string(path)`** 与 **`resolve_no_follow`/`read_link`** 之前校验（issue-140）；勿对 **`size==0`** 返回成功 **0**。**`size>0`** 时 **`buf == NULL`** → **`BadAddress`（EFAULT）**，先于 **`vm_load_string`**（issue-282；与 issue-281 同类）。
 - **`linkat(2)`**：**`flags`** 仅允许 **`AT_EMPTY_PATH | AT_SYMLINK_FOLLOW`**（与 Linux **`VALID_LINKAT_FLAGS`**），否则 **`EINVAL`**；上述与 **`resolve_flags`**（**`FOLLOW` ↔ `NOFOLLOW`** 映射）须在 **`vm_load_string(old_path/new_path)`** 之前完成（issue-137，非法 flags 先 **EINVAL**）。**`resolve_at`** 仍用 **`AT_SYMLINK_NOFOLLOW`** 表示「不 follow」。
