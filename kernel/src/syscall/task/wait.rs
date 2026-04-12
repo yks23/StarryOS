@@ -16,7 +16,7 @@ use starry_vm::{VmMutPtr, VmPtr};
 use crate::task::{AsThread, get_process_data, remove_zombie_process_data};
 
 bitflags! {
-    #[derive(Debug)]
+    #[derive(Debug, Clone, Copy)]
     struct WaitOptions: u32 {
         /// Do not block when there are no processes wishing to report status.
         const WNOHANG = WNOHANG;
@@ -60,6 +60,28 @@ impl WaitPid {
     }
 }
 
+/// Linux `waitpid(2)` / `wait4(2)` child-kind filtering (`__WALL` / `__WCLONE`).
+///
+/// - **`__WALL`**: wait for any matching child; `__WCLONE` is ignored (Linux).
+/// - **`__WCLONE` only**: only "clone" children (`ProcessData::is_clone_child`).
+/// - **Neither**: only traditional children (`SIGCHLD` delivery), i.e. not `is_clone_child`.
+///
+/// **`__WNOTHREAD`** is accepted in [`WaitOptions`] but not used: we do not track which
+/// thread created each child, so per-thread exclusion is not implemented.
+fn wait_child_matches_kind(child: &Process, options: &WaitOptions) -> bool {
+    let is_clone = get_process_data(child.pid())
+        .map(|pd| pd.is_clone_child())
+        .unwrap_or(false);
+
+    if options.contains(WaitOptions::WALL) {
+        true
+    } else if options.contains(WaitOptions::WCLONE) {
+        is_clone
+    } else {
+        !is_clone
+    }
+}
+
 pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isize> {
     let options = WaitOptions::from_bits(options).ok_or(AxError::InvalidInput)?;
     info!("sys_waitpid <= pid: {pid:?}, options: {options:?}");
@@ -78,12 +100,10 @@ pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isiz
         WaitPid::Pgid(-pid as _)
     };
 
-    // FIXME: add back support for WALL & WCLONE, since ProcessData may drop before
-    // Process now.
     let children = proc
         .children()
         .into_iter()
-        .filter(|child| pid.apply(child))
+        .filter(|child| pid.apply(child) && wait_child_matches_kind(child, &options))
         .collect::<Vec<_>>();
     if children.is_empty() {
         return Err(AxError::from(LinuxError::ECHILD));
