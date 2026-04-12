@@ -1,4 +1,5 @@
 use axerrno::{AxError, AxResult};
+use axtask::current;
 use linux_raw_sys::general::{
     IN_CLOEXEC, IN_NONBLOCK,
     O_ACCMODE, O_APPEND, O_CLOEXEC, O_DSYNC, O_LARGEFILE, O_NOATIME, O_NONBLOCK as O_NONBLOCK_OPEN,
@@ -6,7 +7,10 @@ use linux_raw_sys::general::{
     __O_SYNC,
 };
 
-use crate::file::{FanotifyFd, InotifyFd, add_file_like};
+use crate::{
+    file::{FanotifyFd, InotifyFd, add_file_like},
+    task::AsThread,
+};
 
 /// `linux/fanotify.h` — flags for `fanotify_init()` (through `FAN_REPORT_MNT`).
 const FAN_CLOEXEC: u32 = 0x0000_0001;
@@ -16,6 +20,9 @@ const FAN_CLASS_PRE_CONTENT: u32 = 0x0000_0008;
 const FAN_UNLIMITED_QUEUE: u32 = 0x0000_0010;
 const FAN_UNLIMITED_MARKS: u32 = 0x0000_0020;
 const FAN_ENABLE_AUDIT: u32 = 0x0000_0040;
+
+/// Linux `CAP_AUDIT_WRITE` (`include/uapi/linux/capability.h`).
+const CAP_AUDIT_WRITE: u32 = 30;
 const FAN_REPORT_PIDFD: u32 = 0x0000_0080;
 const FAN_REPORT_TID: u32 = 0x0000_0100;
 const FAN_REPORT_FID: u32 = 0x0000_0200;
@@ -111,6 +118,23 @@ fn validate_fanotify_init_combined(flags: u32, event_f_flags: u32) -> AxResult<(
     Ok(())
 }
 
+/// Linux `fanotify_init`: `FAN_ENABLE_AUDIT` requires `capable(CAP_AUDIT_WRITE)` → EPERM
+/// (`fanotify_user.c`; issue-411; issue-409 `EINVAL` rules orthogonal).
+fn require_cap_audit_write_if_fanotify_audit(flags: u32) -> AxResult<()> {
+    if flags & FAN_ENABLE_AUDIT == 0 {
+        return Ok(());
+    }
+    let eff = current()
+        .as_thread()
+        .proc_data
+        .get_capabilities()
+        .0;
+    if eff & (1 << CAP_AUDIT_WRITE) == 0 {
+        return Err(AxError::PermissionDenied);
+    }
+    Ok(())
+}
+
 pub fn sys_inotify_init1(flags: i32) -> AxResult<isize> {
     let f = flags as u32;
     if f & !(IN_NONBLOCK | IN_CLOEXEC) != 0 {
@@ -127,6 +151,7 @@ pub fn sys_fanotify_init(flags: u32, event_f_flags: u32) -> AxResult<isize> {
         return Err(AxError::InvalidInput);
     }
     validate_fanotify_init_combined(flags, event_f_flags)?;
+    require_cap_audit_write_if_fanotify_audit(flags)?;
     let cloexec = flags & FAN_CLOEXEC != 0;
     let nonblock = flags & FAN_NONBLOCK != 0;
     let fd = FanotifyFd::new(nonblock, event_f_flags);
