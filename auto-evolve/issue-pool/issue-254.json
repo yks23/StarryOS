@@ -1,0 +1,27 @@
+{
+  "id": "issue-254",
+  "title": "listen：`AF_UNIX` `SOCK_DGRAM` 上 `listen` 静默成功，与 Linux `EOPNOTSUPP` 不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`axnet-ng` `UnixSocket::listen`：对 `Transport::Dgram` 返回 `OperationNotSupported`（EOPNOTSUPP），`Stream` 仍为 `Ok(())`，与 Linux 在 `SOCK_DGRAM` 上 `listen` 行为一致。",
+  "files_changed": ["vendor/axnet-ng/src/unix/mod.rs"],
+  "description": "**`kernel/src/syscall/net/socket.rs`** **`sys_listen`**（约 **116–122** 行）将 **`backlog`** 交给 **`Socket::from_fd(fd)?.listen(backlog)?`**。\n\n在 **`axnet`** 中，**`UdpSocket`** 未覆写 **`listen`**，走 **`SocketOps`** 默认实现 → **`OperationNotSupported`**，与 **Linux** 在 **UDP** 上 **`listen`** → **`EOPNOTSUPP`** 一致。但 **`UnixSocket`**（**`vendor/axnet-ng/src/unix/mod.rs`** 约 **203–205** 行）将 **`listen`** 实现为 **`Ok(())` 空操作**，**不**区分 **`StreamTransport`** 与 **`DgramTransport`**。\n\n**Linux `listen(2)`**：套接字类型须为 **`SOCK_STREAM`**、**`SOCK_SEQPACKET`** 等支持监听的类型；**`SOCK_DGRAM`**（含 **`AF_UNIX` 数据报**）→ **`EOPNOTSUPP`**。**当前** **`AF_UNIX`+`SOCK_DGRAM`** 上 **`listen`** **成功返回 0**，与 **Linux** **`errno`** 分叉。\n\n**建议**：在 **`UnixSocket::listen`** 内 **`match self.transport`**（或对 **`Transport::Dgram`**）返回 **`Err(AxError::OperationNotSupported)`**；**`Stream`** 侧保留现有语义或补全「已 bind + listening」状态机。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["listen"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/socket.rs:116-122"],
+    "related_files": ["vendor/axnet-ng/src/unix/mod.rs:203-205"],
+    "key_insight": "Unix listen 对 DGRAM 亦为 Ok"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；`socket(AF_UNIX, SOCK_DGRAM, 0)` + `bind` + `listen` 与 Linux 对照。",
+    "expected_output_contains": "",
+    "pass_criteria": "UNIX DGRAM 上 listen → EOPNOTSUPP。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0）"
+  },
+  "suggested_fix": "`Transport::Dgram` 上 `listen` → `OperationNotSupported`。",
+  "references": ["man 2 listen", "Linux net/unix/af_unix.c"]
+}

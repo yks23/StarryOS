@@ -201,7 +201,11 @@ impl SocketOps for UnixSocket {
     }
 
     fn listen(&self, _backlog: i32) -> AxResult {
-        Ok(())
+        // Linux `listen(2)` on `SOCK_DGRAM` (including `AF_UNIX`) → `EOPNOTSUPP`; stream accepts.
+        match &self.transport {
+            Transport::Stream(_) => Ok(()),
+            Transport::Dgram(_) => Err(AxError::OperationNotSupported),
+        }
     }
 
     fn accept(&self) -> AxResult<Socket> {

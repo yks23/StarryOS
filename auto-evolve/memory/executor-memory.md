@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-254 resolved（**`listen`**：**`AF_UNIX` `SOCK_DGRAM`** → **`OperationNotSupported`（EOPNOTSUPP）**；**`axnet-ng` `UnixSocket`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-253 resolved（**`brk`**：非零 **`addr`** 须 **4K 页对齐**，否则 **`InvalidInput`（EINVAL）**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-252 resolved（**`fcntl` `F_GETFL`/`F_SETFL`**：**`File`/`Memfd`** 从 **`axfs::FileFlags`** 回 **`O_APPEND`**/**`O_PATH`** 等；**`F_SETFL`** 掩码 + **`O_APPEND`** 不可变则 **`EOPNOTSUPP`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-251 resolved（**`socketpair`**：**`AF_UNIX`+`SOCK_SEQPACKET`** 不再走 **`DgramTransport`**，与 **`socket`** 同为 **`ESOCKTNOSUPPORT`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -257,6 +258,7 @@
 | issue-251 | AF_UNIX SOCK_SEQPACKET socket 与 socketpair 同拒 | resolved | 2026-04-12 |
 | issue-252 | fcntl F_GETFL/F_SETFL 与 axfs 打开标志对齐 | resolved | 2026-04-12 |
 | issue-253 | brk 非零 addr 须 4K 对齐 → EINVAL | resolved | 2026-04-12 |
+| issue-254 | AF_UNIX SOCK_DGRAM listen → EOPNOTSUPP | resolved | 2026-04-12 |
 | issue-219 | waitpid __WNOTHREAD → Unsupported | resolved | 2026-04-12 |
 | issue-225 | fallocate FALLOC_FL 掩码 + 非零 EOPNOTSUPP | resolved | 2026-04-12 |
 | issue-227 | shmat 无效 shmid 不 unwrap（EINVAL） | resolved | 2026-04-12 |
@@ -475,6 +477,7 @@
 - **`accept` / `accept4`**：向用户写入的 sockaddr 必须是 **`peer_addr()`**（远端），勿用 **`local_addr()`**（本端监听地址）；与 **`getpeername(accepted_fd)`** 一致。**`accept4`** 第四参 **`flags`** 须为 **`O_CLOEXEC | O_NONBLOCK`**（与 Linux **`SOCK_CLOEXEC`/`SOCK_NONBLOCK`** 同值），否则 **`EINVAL`**。**`addr` 非空**时须先 **`write_to_user`**/**`addrlen`**（**`get_as_mut`**）再 **`add_to_fd_table`**，避免 **`copy_to_user`** 失败时已装新 **fd** 却未返回 **fd** 号（issue-149，与 issue-148 **`pipe2`** 同类）。**`addr==NULL`** 无地址写回，仍直接装表。
 - **`getsockname`/`getpeername`**（**`net/name.rs`**）：**`addrlen.get_as_mut()`** 须在 **`local_addr`/`peer_addr`** 之前，使 **NULL** 或不可写的 **`addrlen`** 尽早 **EFAULT**，再取内核地址并 **`write_to_user`**（**`addr`** 仍在 **`fill_addr`** 写回时访问）。
 - **`socket(2)`/`socketpair(2)`**：**`type`** 仅允许 **`SOCK_TYPE_MASK`（0xf）** 内 **`SOCK_*`** 与 **`O_CLOEXEC|O_NONBLOCK`**；其它位 **`InvalidInput`**（对齐 Linux **`EINVAL`**）。**`ty`** 取 **`raw_ty & SOCK_TYPE_MASK`**。**`AF_UNIX`**：**`proto` 须为 0**，否则 **`EPROTONOSUPPORT`**（issue-241；**`AF_INET`** 仍按 **`IPPROTO_TCP`/`UDP`**）。**`AF_UNIX` `SOCK_SEQPACKET`**：未实现 Unix SEQPACKET 传输；**`socket`** 与 **`socketpair`** 均 **`ESOCKTNOSUPPORT`**，勿将 **`SOCK_SEQPACKET`** 与 **`DgramTransport`** 混用（issue-251）。**`socketpair`**：先 **`fds.get_as_mut()`** 再依次 **`add_to_fd_table`**；第二端失败须 **`close_file_like`** 已装第一端（issue-150，与 issue-148 **`pipe2`** 同类）。
+- **`listen(2)`**：**`AF_UNIX` `SOCK_DGRAM`**（**`Transport::Dgram`**）→ **`OperationNotSupported`（EOPNOTSUPP）**；**`SOCK_STREAM`** 仍为 **`Ok`**（**`vendor/axnet-ng` `UnixSocket::listen`**，issue-254）。TCP **`backlog`**/**`syn_queue`** 见 issue-156。
 - **`setsockopt(2)`**：**`optlen`** 须 **`>=`** 选项值 **`sizeof(T)`**（与 Linux / **`getsockopt`** 侧一致），只使用缓冲区前 **`sizeof(T)`** 字节；**`optlen < sizeof(T)`** → **`EINVAL`**。**`SO_RCVTIMEO`/`SO_SNDTIMEO`**（**`SOL_SOCKET`**）用户 **`timeval`** 须经 **`read_timeval_user`** 字段读，勿经 **`UserConstPtr::get_as_ref::<timeval>`** 整结构拷贝（issue-217）。
 - **`getsockopt(2)`**（**`net/opt.rs`**）：**`Socket::from_fd`** 须早于 **`optlen.get_as_mut`**，使无效 **`fd`** 先 **`EBADF`**，再触碰 **`optlen`/`optval`**（与 Linux **`sockfd_lookup`** 顺序及 **`setsockopt`** 对称）；日志仅用 **`UserPtr::address`** 避免提前用户读。**`SO_RCVTIMEO`/`SO_SNDTIMEO`**：**`GetSocketOption::ReceiveTimeout`/`SendTimeout`** + **`write_timeval_user`** 字段写 **`timeval`**，**`*optlen = sizeof(timeval)`**（issue-223，与 issue-217 **`setsockopt`** 对称）。
 - **`bind(2)`/`connect(2)`**（**`socket.rs`**）：**`Socket::from_fd`** 须早于 **`SocketAddrEx::read_from_user`**，无效 **`fd`** 先 **`BadFileDescriptor`**（**EBADF**），与 Linux **`sockfd_lookup`** 及 **`sys_accept4`** 顺序一致（issue-132）。
