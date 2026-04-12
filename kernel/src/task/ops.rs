@@ -108,7 +108,7 @@ pub fn get_process_data(pid: Pid) -> AxResult<Arc<ProcessData>> {
         .ok_or(AxError::NoSuchProcess)
 }
 
-/// Linux-aligned peer access for `prlimit(2)`, `pidfd_open(2)`, and similar paths that mirror
+/// Linux-aligned peer access for `prlimit(2)`, `pidfd_open(2)`, `get_robust_list(2)`, and similar paths that mirror
 /// `ptrace_may_access` / `PTRACE_MODE_ATTACH_REALCREDS`-style checks: same process,
 /// root effective uid, `CAP_SYS_RESOURCE`, or matching real uid (`man 2 prlimit`,
 /// `man 2 pidfd_open`; kernel `do_prlimit` / `pidfd_open`).

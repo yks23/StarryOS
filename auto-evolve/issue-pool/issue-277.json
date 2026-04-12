@@ -1,0 +1,27 @@
+{
+  "id": "issue-277",
+  "title": "get_robust_list：对任意 tid 可读 robust 指针，未做 Linux 式线程组/权限校验",
+  "status": "resolved",
+  "created_at": "2026-04-12T22:00:00Z",
+  "severity": "medium",
+  "fix_summary": "`sys_get_robust_list` 在 `get_task` 成功后比较调用者与目标线程的 `ProcessData`：复用 `may_peer_process_by_cred`（与 `prlimit64`/`pidfd_open` 同：同进程、euid==0、`CAP_SYS_RESOURCE`、或与目标 ruid 相同），未通过则 `OperationNotPermitted`（EPERM）。同一线程组内线程共享 `ProcessData` 故仍可互查。",
+  "files_changed": ["kernel/src/syscall/sync/futex.rs", "kernel/src/task/ops.rs"],
+  "description": "**`kernel/src/syscall/sync/futex.rs`** **`sys_get_robust_list`**（约 **119–128** 行）在 **`get_task(tid)?`** 成功后，将 **`task.as_thread().robust_list_head()`** 写入用户 **`head`**/**`size`**，**未** 校验 **调用者** 是否 **有权** **观测** **该** **`tid`** **的** **robust** **futex** **链表** **头**。\n\n**Linux `get_robust_list(2)`**（**`kernel/futex.c` `sys_get_robust_list`** **路径**）：对 **非** **本线程** **目标** 通常要求 **同一** **线程组**/**进程** **或** **具备** **相应** **能力**（**如** **`CAP_SYS_PTRACE`** **等**，**以** **当前** **内核/LSM** **为准**），**否则** **`EPERM`**/**`ESRCH`**。**当前** **Starry** **只要** **`tid`** **在** `TASK_TABLE` **中存在** **即** **可** **读出** **指针**，**与** **Linux** **隔离** **语义** **分叉**，**属** **信息泄露/安全** **语义** **问题**（**与** **issue-273** **`prlimit64`**、**issue-275** **`pidfd_open`** **同类**）。\n\n**对照**：**`sys_set_robust_list`** **仅** **作用于** **`current()`**，**无** **跨** **任务** **问题**。\n\n**建议**：在 **`get_task`** **之后** **增加** `caller` **与** `target` **线程** **是否** **同** **线程组/同** **凭证** **或** **cap** **检查**（**对齐** **`ptrace_may_access`**/**`thread_group`** **语义**）。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["get_robust_list"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/sync/futex.rs:119-128"],
+    "related_files": ["kernel/src/task/ops.rs:85-89"],
+    "key_insight": "get_robust_list 跨 tid 无权限门控"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 Linux `get_robust_list` 对其他 tid 的 EPERM。",
+    "expected_output_contains": "",
+    "pass_criteria": "未授权跨 tid 读 robust 头 → EPERM（或等价），或与 Linux 一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `sys_get_robust_list` 中校验 `tid` 为当前线程或同线程组，或具备 CAP_SYS_PTRACE 等（与内核策略一致）。",
+  "references": ["man 2 get_robust_list", "kernel/src/syscall/sync/futex.rs", "Linux kernel sys_get_robust_list"]
+}

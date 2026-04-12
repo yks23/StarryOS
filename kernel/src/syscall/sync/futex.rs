@@ -9,7 +9,7 @@ use linux_raw_sys::general::{
 use starry_vm::{VmMutPtr, VmPtr};
 
 use crate::{
-    task::{AsThread, FutexKey, futex_table_for, get_task},
+    task::{AsThread, FutexKey, futex_table_for, get_task, may_peer_process_by_cred},
     time::{TimeValueLike, read_timespec_user},
 };
 
@@ -122,6 +122,11 @@ pub fn sys_get_robust_list(
     size: *mut usize,
 ) -> AxResult<isize> {
     let task = get_task(tid)?;
+    let caller_pd = current().as_thread().proc_data.clone();
+    let target_pd = task.as_thread().proc_data.clone();
+    if !may_peer_process_by_cred(&caller_pd, &target_pd) {
+        return Err(AxError::OperationNotPermitted);
+    }
     head.vm_write(task.as_thread().robust_list_head() as _)?;
     size.vm_write(size_of::<robust_list_head>())?;
 
