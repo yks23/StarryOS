@@ -1,5 +1,5 @@
 use core::{
-    sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+    sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering},
     task::Waker,
     time::Duration,
 };
@@ -25,6 +25,9 @@ pub(crate) struct GeneralOptions {
     recv_timeout_nanos: AtomicU64,
 
     device_mask: AtomicU32,
+
+    /// Pending socket error for `SO_ERROR` (Linux: returned and cleared by `getsockopt`).
+    so_error: AtomicI32,
 }
 impl Default for GeneralOptions {
     fn default() -> Self {
@@ -41,6 +44,15 @@ impl GeneralOptions {
             recv_timeout_nanos: AtomicU64::new(0),
 
             device_mask: AtomicU32::new(0),
+
+            so_error: AtomicI32::new(0),
+        }
+    }
+
+    /// Record an asynchronous socket error (positive Linux `errno` value), e.g. failed `connect`.
+    pub(crate) fn record_so_error(&self, errno: i32) {
+        if errno != 0 {
+            self.so_error.store(errno, Ordering::Release);
         }
     }
 
@@ -105,8 +117,7 @@ impl Configurable for GeneralOptions {
         use GetSocketOption as O;
         match option {
             O::Error(error) => {
-                // TODO(mivik): actual logic
-                **error = 0;
+                **error = self.so_error.swap(0, Ordering::AcqRel);
             }
             O::NonBlocking(nonblock) => {
                 **nonblock = self.nonblocking();

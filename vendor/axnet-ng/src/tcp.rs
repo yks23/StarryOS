@@ -27,6 +27,9 @@ use crate::{
     state::*,
 };
 
+/// Linux uapi `ECONNREFUSED` for `SO_ERROR` on failed outbound connects (approximation).
+const SO_ERROR_ECONNREFUSED: i32 = 111;
+
 pub(crate) fn new_tcp_socket() -> smol::Socket<'static> {
     smol::Socket::new(
         smol::SocketBuffer::new(vec![0; TCP_RX_BUF_LEN]),
@@ -130,6 +133,7 @@ impl TcpSocket {
                 true
             }
             _ => {
+                self.general.record_so_error(SO_ERROR_ECONNREFUSED);
                 self.state.set(State::Closed); // connection failed
                 true
             }
@@ -302,6 +306,7 @@ impl SocketOps for TcpSocket {
                                 ax_err_type!(AlreadyConnected)
                             }
                             smol::ConnectError::Unaddressable => {
+                                self.general.record_so_error(SO_ERROR_ECONNREFUSED);
                                 ax_err_type!(ConnectionRefused, "unaddressable")
                             }
                         })?;
