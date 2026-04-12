@@ -1,19 +1,32 @@
 {
   "id": "issue-010",
   "title": "timerfd_create 返回 DummyFd，poll 永不就绪、定时器永不触发",
-  "status": "open",
+  "status": "resolved",
   "created_at": "2026-04-12T12:00:00Z",
+  "resolved_at": "2026-04-12T18:00:00Z",
   "severity": "high",
   "description": "timerfd 系列经 sys_dummy_fd 创建 DummyFd，Pollable::poll 返回空事件，epoll_wait + timerfd 的事件循环永久阻塞。影响 libuv、tokio 等依赖 timerfd 的栈。",
   "category": "syscall-stub",
-  "affected_syscalls": ["timerfd_create", "timerfd_settime", "timerfd_gettime"],
+  "affected_syscalls": [
+    "timerfd_create",
+    "timerfd_settime",
+    "timerfd_gettime"
+  ],
+  "fix_summary": "主线已用 `TimerFd`（`FileLike` + `Pollable`）替代 DummyFd：`timerfd_settime` 维护 `next_deadline_nanos` / `interval_nanos`；`process_expirations` 在到期时累加 `pending_expirations` 并 `PollSet::wake`；首次创建时 `register_timer_callback` 周期性扫描弱引用列表；`poll` 在有待读到期次数时返回 IN；`read` 写出小端 u64 计数。`Sysno::timerfd_*` 已直连 `sys_timerfd_create/settime/gettime`，不再走 `sys_dummy_fd`。",
+  "files_changed": [
+    "kernel/src/file/timerfd.rs",
+    "kernel/src/file/mod.rs",
+    "kernel/src/syscall/fs/timerfd.rs",
+    "kernel/src/syscall/fs/mod.rs",
+    "kernel/src/syscall/mod.rs"
+  ],
   "source_context": {
     "primary_files": [
       "kernel/src/syscall/fs/io.rs:21-42",
       "kernel/src/syscall/mod.rs:617-628"
     ],
     "related_files": [],
-    "key_insight": "DummyFd::poll 返回 IoEvents::empty()"
+    "key_insight": "DummyFd::poll 返回 IoEvents::empty()；timerfd 路径须使用 TimerFd"
   },
   "test": {
     "source_file": "auto-evolve/tests/test_timerfd.c",
@@ -21,8 +34,11 @@
     "run_method": "QEMU 中运行 /bin/test_timerfd",
     "expected_output_contains": "SUMMARY",
     "pass_criteria": "timerfd_settime 后 poll 在超时内返回 POLLIN，read 得到到期次数",
-    "last_result": "待运行"
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu 通过；QEMU 实跑 test_timerfd 待 rootfs 验证"
   },
   "suggested_fix": "实现 TimerFd：到期时间、间隔、armed 状态；Pollable 到期返回 IN；read 返回 u64 计数。",
-  "references": ["man 2 timerfd_create", "Question1.md 改进3"]
+  "references": [
+    "man 2 timerfd_create",
+    "Question1.md 改进3"
+  ]
 }
