@@ -705,11 +705,18 @@ pub fn sys_renameat2(
     }
 
     let old_path = vm_load_string(old_path)?;
+    // Linux rejects empty pathname with EINVAL (issue-396; same theme as issue-391/393/394/395).
+    if old_path.is_empty() {
+        return Err(AxError::InvalidInput);
+    }
     if old_dirfd != AT_FDCWD && !old_path.starts_with('/') {
         let _ = Directory::from_fd(old_dirfd)?;
     }
 
     let new_path = vm_load_string(new_path)?;
+    if new_path.is_empty() {
+        return Err(AxError::InvalidInput);
+    }
     if new_dirfd != AT_FDCWD && !new_path.starts_with('/') {
         let _ = Directory::from_fd(new_dirfd)?;
     }
