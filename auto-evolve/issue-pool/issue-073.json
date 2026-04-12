@@ -1,0 +1,28 @@
+{
+  "id": "issue-073",
+  "title": "setsockopt 要求 optlen 严格等于选项类型大小，Linux 常接受 optlen 大于 sizeof(值)",
+  "status": "resolved",
+  "created_at": "2026-04-13T07:00:00Z",
+  "resolved_at": "2026-04-13T19:00:00Z",
+  "severity": "low",
+  "description": "**`sys_setsockopt`**（`kernel/src/syscall/net/opt.rs`）在内部 **`get`** 辅助函数中要求 **`optlen as usize == size_of::<T>()`** 才读取用户缓冲。Linux **`setsockopt(2)`** 对多数 **`SOL_SOCKET` 整型选项**（如 **`SO_REUSEADDR`**）在 **`optlen >= sizeof(int)`** 时即接受，并只使用**前** **`sizeof(值)`** 字节；宿主机实验：**`setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &v, sizeof(int)+4)`** 返回 **成功**。当前实现会在 **`optlen` 大于** 内核期望类型大小时返回 **`InvalidInput`**，与常见 **glibc**/应用（传入**对齐或填充后**的较大 **`socklen_t`**）行为不一致，可能导致**在 Linux 成功的程序在 Starry 上失败**。**`sys_getsockopt`** 侧使用 **`>= size_of`** 更宽松，与 **`setsockopt`** 不对称。",
+  "fix_summary": "**`sys_setsockopt`** 内层 **`get`**：**`optlen < size_of::<T>()`** 才 **`InvalidInput`**（与 **`sys_getsockopt`** 一致）；仍通过 **`get_as_ref`** 只读 **`sizeof(T)`** 字节。",
+  "files_changed": ["kernel/src/syscall/net/opt.rs"],
+  "category": "syscall-semantic",
+  "affected_syscalls": ["setsockopt"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/opt.rs:172-177"],
+    "related_files": [],
+    "key_insight": "`get` 用 `==` 而非 `>=`；与 Linux 容忍略大 optlen 不符"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "宿主机：`setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &v, (socklen_t)(sizeof v + 4))` 期望成功；Starry/QEMU 若失败则记录。",
+    "expected_output_contains": "",
+    "pass_criteria": "对 `optlen >= sizeof(T)` 接受并只读前 `sizeof(T)` 字节，或与 Linux 各 `optname` 规则对齐。",
+    "last_result": "2026-04-13：**`optlen >= sizeof(T)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** PASS"
+  },
+  "suggested_fix": "将 **`len as usize != size_of::<T>()`** 改为 **`len as usize < size_of::<T>()`** 返回错误，否则用 **`get_as_ref`** 读 **`size_of::<T>()`** 字节；对变长选项保持单独路径。",
+  "references": ["man 2 setsockopt", "man 7 socket"]
+}

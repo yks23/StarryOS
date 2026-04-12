@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-073 resolved（**`setsockopt`**：**`optlen >= sizeof(T)`** 即接受（与 **`getsockopt`** 一致），只读 **`sizeof(T)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-072 resolved（**`socket`/`socketpair`**：**`type`** 须为 **`SOCK_TYPE_MASK|O_CLOEXEC|O_NONBLOCK`** 子集，否则 **`InvalidInput`**；**`ty = raw_ty & 0xf`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-071 resolved（**`nanosleep`/`clock_nanosleep`**：**`sleep_impl`** 文档化 **`axtask::sleep`** 与单调时间线一致；**`CLOCK_REALTIME`** 非零睡眠 → **`Unsupported`**，**`dur==0`** → **`Ok(0)`**；**`CLOCK_MONOTONIC`** 不变；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-070 resolved（**`waitpid`/`wait4`**：**`WaitOptions::from_bits(options).ok_or(InvalidInput)`**，勿 **`from_bits_truncate`**；未知 **`options` 位 → EINVAL**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -53,6 +54,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-073 | setsockopt optlen >= sizeof(T) | resolved | 2026-04-13 |
 | issue-072 | socket type SOCK_TYPE_MASK + SOCK_* flags | resolved | 2026-04-13 |
 | issue-071 | nanosleep sleep_impl 单调；REALTIME → Unsupported | resolved | 2026-04-13 |
 | issue-070 | waitpid/wait4 WaitOptions from_bits EINVAL | resolved | 2026-04-13 |
@@ -170,6 +172,7 @@
 - **`execve` 多线程**：在替换映像前若 **`proc.threads().len() > 1`**，对其余 tid **`SIGKILL`** 并 **`yield_now`** 直至仅剩当前线程（对齐 Linux 先杀线程组再 exec）；长时间未收敛则 **`WouldBlock`**。非 vfork/线程本地存储析构等细语义仍弱于 Linux。
 - **`accept` / `accept4`**：向用户写入的 sockaddr 必须是 **`peer_addr()`**（远端），勿用 **`local_addr()`**（本端监听地址）；与 **`getpeername(accepted_fd)`** 一致。**`accept4`** 第四参 **`flags`** 须为 **`O_CLOEXEC | O_NONBLOCK`**（与 Linux **`SOCK_CLOEXEC`/`SOCK_NONBLOCK`** 同值），否则 **`EINVAL`**。
 - **`socket(2)`/`socketpair(2)`**：**`type`** 仅允许 **`SOCK_TYPE_MASK`（0xf）** 内 **`SOCK_*`** 与 **`O_CLOEXEC|O_NONBLOCK`**；其它位 **`InvalidInput`**（对齐 Linux **`EINVAL`**）。**`ty`** 取 **`raw_ty & SOCK_TYPE_MASK`**。
+- **`setsockopt(2)`**：**`optlen`** 须 **`>=`** 选项值 **`sizeof(T)`**（与 Linux / **`getsockopt`** 侧一致），只使用缓冲区前 **`sizeof(T)`** 字节；**`optlen < sizeof(T)`** → **`EINVAL`**。
 - **`sendmsg` / `recvmsg` 与 ancillary**：控制缓冲区须与 Linux 一致使用 **`CMSG_ALIGN(sizeof(cmsghdr)+payload)`** 作为**占用步长**；**`cmsg_len`** 仍为含头的逻辑长度。遍历下一条头用 **`ptr += CMSG_ALIGN(cmsg_len)`**；**`CMsgBuilder::push`** 在 **`msg_controllen`** 与下一 **`cmsghdr`** 指针上前移对齐后长度，**`cmsg_len` 至对齐边界**建议填 **0**。
 - **`sched_getaffinity` / `sched_setaffinity`**：`pid==0` 为当前任务；非零先 **`get_task(pid)`**，失败再 **`get_process_data(pid)`** 取 **`proc.threads()` 最小 tid** 定位线程组代表线程。set 时当前任务走 **`set_current_affinity`**（SMP 迁移），其它任务仅 **`set_cpumask`**。未完整建模 CAP、僵尸 **`ESRCH`** 等。
 - **`sched_getscheduler` / `sched_setscheduler` / `sched_getparam`**：每线程在 **`Thread`** 上存 **`sched_policy`**（默认0，即 `SCHED_NORMAL`/`SCHED_OTHER`）与 **`sched_priority`**（默认 0）。`setscheduler` 从用户读 **`sched_param`** 并校验策略与优先级范围后写入；`getscheduler`/`getparam` 返回已存值。策略未接入 axtask 真实 RT 调度，仅保证与用户态查询一致。**issue-018** 与 **issue-002** 描述同一修复；验收可用 **`test_sched_stubs.c`**（默认 **`sched_getscheduler(0)==SCHED_OTHER`**）或 **`test_sched_policy_stubs.c`**。

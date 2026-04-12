@@ -169,8 +169,9 @@ pub fn sys_setsockopt(
         optlen
     );
 
+    /// Linux accepts `optlen >= sizeof(value)` and uses only the first `sizeof(T)` bytes.
     fn get<'a, T: 'static>(val: UserConstPtr<u8>, len: socklen_t) -> AxResult<&'a T> {
-        if len as usize != size_of::<T>() {
+        if (len as usize) < size_of::<T>() {
             return Err(AxError::InvalidInput);
         }
         val.cast().get_as_ref()
