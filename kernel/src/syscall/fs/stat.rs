@@ -160,9 +160,14 @@ fn statfs(loc: &Location) -> AxResult<statfs> {
     result.f_bavail = stat.blocks_available as _;
     result.f_files = stat.file_count as _;
     result.f_ffree = stat.free_file_count as _;
-    // TODO: fsid
+    // `f_fsid` distinguishes filesystem / superblock instances. Encode mount `device` and
+    // `f_type` into both words so small `device` ids are not stored only in `val[1]` with
+    // `val[0] == 0` (unlike a naive `[0, dev as i32]` truncation).
+    let dev = loc.mountpoint().device();
+    let t = stat.fs_type as u64;
+    let packed = dev ^ (t << 32);
     result.f_fsid = __kernel_fsid_t {
-        val: [0, loc.mountpoint().device() as _],
+        val: [(packed >> 32) as i32, packed as i32],
     };
     result.f_namelen = stat.name_length as _;
     result.f_frsize = stat.fragment_size as _;

@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-062 resolved（**`statfs`**/**`fstatfs`**：**`f_fsid`** 由 **`device`/`f_type`** 双字编码；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-060 resolved（**`fanotify_init`**：**`VALID_FANOTIFY_INIT_FLAGS`** + **`event_f_flags`** 对齐 **`FANOTIFY_INIT_ALL_EVENT_F_BITS`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-069 resolved（**`clone`**/**`clone3`**：**`CLONE_NEW*`** → **`Unsupported`**，勿仅 **`warn`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-059 resolved（**`sync`**/**`syncfs`**：**`flush_mount_subtree`** + **`FilesystemOps::flush`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -43,6 +44,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-062 | statfs/fstatfs f_fsid 双字编码 | resolved | 2026-04-13 |
 | issue-060 | fanotify_init flags / event_f_flags 掩码 EINVAL | resolved | 2026-04-13 |
 | issue-069 | clone/clone3 拒绝 CLONE_NEW*（Unsupported） | resolved | 2026-04-13 |
 | issue-059 | sync/syncfs 调用 VFS flush 与嵌套挂载 | resolved | 2026-04-12 |
