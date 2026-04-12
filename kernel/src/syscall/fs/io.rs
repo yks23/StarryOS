@@ -153,10 +153,19 @@ pub fn sys_fallocate(
     if mode != 0 {
         return Err(AxError::InvalidInput);
     }
+    if offset < 0 || len < 0 {
+        return Err(AxError::InvalidInput);
+    }
+    let offset_u = offset as u64;
+    let len_u = len as u64;
+    let Some(end) = offset_u.checked_add(len_u) else {
+        return Err(AxError::InvalidInput);
+    };
+
     let f = File::from_fd(fd)?;
     let inner = f.inner();
     let file = inner.access(FileFlags::WRITE)?;
-    file.set_len(file.location().len()?.max(offset as u64 + len as u64))?;
+    file.set_len(file.location().len()?.max(end))?;
     Ok(0)
 }
 

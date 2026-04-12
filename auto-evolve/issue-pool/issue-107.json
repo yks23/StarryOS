@@ -1,0 +1,28 @@
+{
+  "id": "issue-107",
+  "title": "fallocate 未校验 offset/len 非负及 end计算溢出，负值 as u64 与 Linux EINVAL 不一致",
+  "status": "resolved",
+  "created_at": "2026-04-22T00:00:00Z",
+  "resolved_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`sys_fallocate`**：**`offset < 0` 或 `len < 0` → `InvalidInput`**；**`end`** 用 **`(offset as u64).checked_add(len as u64)`**，溢出 → **`InvalidInput`**，再与当前长度取 **`max`** 后 **`set_len`**。",
+  "files_changed": ["kernel/src/syscall/fs/io.rs"],
+  "description": "**`sys_fallocate`**（`kernel/src/syscall/fs/io.rs`）在 **`mode==0`** 分支中直接使用 **`offset as u64 + len as u64`** 与当前文件长度取 **`max`** 后 **`set_len`**。未要求 **`offset >= 0`**、**`len >= 0`**：负的 **`__kernel_off_t`** 转 **`u64`** 会变成极大值，与 **Linux `fallocate(2)`**/**`posix_fallocate`** 对非法区间 **`EINVAL`** 不一致（与同文件 **`sys_truncate`**、**issue-106** **`ftruncate`** 问题同类）。亦未使用 **`checked_add`**：**`offset`+`len`** 在无符号溢出时行为依赖 **`panic=unwind`** 配置或回绕，与内核 **`inode_newsize_ok`** 一类 **`EFBIG`/`EINVAL`** 语义易偏离。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["fallocate"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/io.rs:143-158"],
+    "related_files": [],
+    "key_insight": "`offset`/`len` 无符号化前缺非负校验；`+` 未 checked"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "**`fallocate(fd, 0, -1, 4096)`** 或 **`len < 0`**；Linux **`EINVAL`**；Starry 若 **`set_len`** 异常成功则记偏差。",
+    "expected_output_contains": "",
+    "pass_criteria": "**`offset < 0` 或 `len < 0`** → **`InvalidInput`**；**`end = offset.checked_add(len)?`** 溢出 → **`InvalidInput`**/**`FileTooLarge`** 等与 Linux 对齐。",
+    "last_result": "2026-04-12：**`sys_fallocate`** 非负校验 + **`checked_add`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** PASS；QEMU 未测"
+  },
+  "suggested_fix": "在 **`set_len`** 前校验 **`offset >= 0 && len >= 0`**，用 **`u64::try_from`**/**`checked_add`** 计算 **`end`**；必要时再对照 **`RLIMIT_FSIZE`**。",
+  "references": ["man 2 fallocate", "Linux vfs_fallocate"]
+}
