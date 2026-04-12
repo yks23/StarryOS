@@ -171,28 +171,29 @@ pub fn sys_faccessat2(dirfd: c_int, path: *const c_char, mode: u32, flags: u32) 
 
 fn statfs(loc: &Location) -> AxResult<statfs> {
     let stat = loc.filesystem().stat()?;
-    // FIXME: Zeroable
-    let mut result: statfs = unsafe { core::mem::zeroed() };
-    result.f_type = stat.fs_type as _;
-    result.f_bsize = stat.block_size as _;
-    result.f_blocks = stat.blocks as _;
-    result.f_bfree = stat.blocks_free as _;
-    result.f_bavail = stat.blocks_available as _;
-    result.f_files = stat.file_count as _;
-    result.f_ffree = stat.free_file_count as _;
     // `f_fsid` distinguishes filesystem / superblock instances. Encode mount `device` and
     // `f_type` into both words so small `device` ids are not stored only in `val[1]` with
     // `val[0] == 0` (unlike a naive `[0, dev as i32]` truncation).
     let dev = loc.mountpoint().device();
     let t = stat.fs_type as u64;
     let packed = dev ^ (t << 32);
-    result.f_fsid = __kernel_fsid_t {
-        val: [(packed >> 32) as i32, packed as i32],
-    };
-    result.f_namelen = stat.name_length as _;
-    result.f_frsize = stat.fragment_size as _;
-    result.f_flags = stat.mount_flags as _;
-    Ok(result)
+    Ok(statfs {
+        f_type: stat.fs_type as _,
+        f_bsize: stat.block_size as _,
+        f_blocks: stat.blocks as _,
+        f_bfree: stat.blocks_free as _,
+        f_bavail: stat.blocks_available as _,
+        f_files: stat.file_count as _,
+        f_ffree: stat.free_file_count as _,
+        f_fsid: __kernel_fsid_t {
+            val: [(packed >> 32) as i32, packed as i32],
+        },
+        f_namelen: stat.name_length as _,
+        f_frsize: stat.fragment_size as _,
+        f_flags: stat.mount_flags as _,
+        // Linux uapi reserved tail; must be zero for ABI stability (issue-175).
+        f_spare: [0; 4],
+    })
 }
 
 pub fn sys_statfs(path: *const c_char, buf: *mut statfs) -> AxResult<isize> {

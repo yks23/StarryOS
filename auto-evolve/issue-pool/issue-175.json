@@ -1,0 +1,27 @@
+{
+  "id": "issue-175",
+  "title": "statfs/fstatfs：`statfs` 内核结构用 `mem::zeroed` 初始化（FIXME），uapi 扩展与 Rust 安全边界脆弱",
+  "status": "resolved",
+  "created_at": "2026-04-12T14:00:00Z",
+  "severity": "low",
+  "fix_summary": "`statfs()`辅助函数改为 **`statfs { ... }` 全字段字面量**（含 **`f_spare: [0; 4]`**），删除 **`unsafe { mem::zeroed() }`** 与 FIXME；**`linux_raw_sys` 增字段时编译器会报错**，避免静默遗漏。",
+  "files_changed": ["kernel/src/syscall/fs/stat.rs"],
+  "description": "**`kernel/src/syscall/fs/stat.rs`** 中 **`fn statfs(loc: &Location) -> AxResult<statfs>`** 使用 **`// FIXME: Zeroable`** 与 **`let mut result: statfs = unsafe { core::mem::zeroed() }`**，再逐字段写入 **`f_type`/`f_bsize`/…**。**风险**：（1）若 **`linux_raw_sys::general::statfs`** 将来包含**非全零合法值**的类型（或布局与「全零初始化」假设不符），**`zeroed()`** 在 **Rust** 语义下可能构成 **UB**；（2）**uapi** 新增字段时易遗漏赋值，用户态看到与 **Linux** 不一致的 **0** 或保留位（虽多数字段当前为整数）；（3）与 **`resources.rs` `rusage` 同类 FIXME** 一样，属于「未显式构造完整 ABI视图」的技术债。**`sys_statfs`/`sys_fstatfs`** 行为依赖此辅助函数，影响 **`statfs(2)`/`fstatfs(2)`** 输出一致性。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["statfs", "fstatfs"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/stat.rs:172-195"],
+    "related_files": ["kernel/src/syscall/resources.rs:93-101"],
+    "key_insight": "`mem::zeroed()` + 部分字段赋值 + FIXME"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "在 **Starry** 与 **Linux** 上对同一挂载点调用 **`statfs`**，**`memcmp`** 全结构（或逐字段）对比；**MIRI**/静态审查 **`statfs` 类型是否全 **`Pod`****（若引入工具链）。",
+    "expected_output_contains": "",
+    "pass_criteria": "消除 **`zeroed()`** 依赖或证明类型 **`MaybeUninit`/`Pod`** 安全；**uapi** 字段与 **Linux** 对齐或有文档化差异。",
+    "last_result": "`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` 通过（未跑 memcmp 对照）。"
+  },
+  "suggested_fix": "用 **`MaybeUninit::<statfs>::uninit()`** 写回已定义字段后 **`assume_init`**（需覆盖全部 padding 策略），或引入 **`zerocopy::FromZeros`** 等安全构造；至少为 **`statfs` 每个 ABI 字段显式赋值** 并随 **`linux_raw_sys` 升级**同步。",
+  "references": ["man 2 statfs", "Rust MaybeUninit"]
+}

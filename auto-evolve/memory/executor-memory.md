@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-175 resolved（**`statfs`/`fstatfs`**：辅助函数 **`statfs { … }`** 显式初始化含 **`f_spare`**，去掉 **`mem::zeroed`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-181 resolved（**`fcntl`**：未实现 **`cmd`** 默认臂 **`InvalidInput`（`EINVAL`）** 替代 **`Ok(0)`**，避免假成功；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-179 resolved（**`getrandom`**：**`GRND_INSECURE`** → 强制 **`/dev/urandom`**；**`GRND_RANDOM`|`GRND_NONBLOCK`** 在 **`CRNG_INITIALIZED`** 前 **`EAGAIN`**，成功读后置位；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-178 resolved（**`close_range` `CLOSE_RANGE_UNSHARE`**：**`FD_TABLE.read().clone()`** 快照 + **`Arc::new(RwLock::new(..))`** 写回 **`scope`**，修复 **`mem::take`** 丢表；避免同 **`Arc` 上 `write`+`read` 死锁；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
