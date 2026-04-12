@@ -1,0 +1,27 @@
+{
+  "id": "issue-158",
+  "title": "symlinkat 在校验 new_dirfd 之前先 vm_load_string，坏 dirfd 时 EBADF 可能晚于路径读取",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`sys_symlinkat`**：当 **`new_dirfd != AT_FDCWD`** 时先 **`Directory::from_fd(new_dirfd)?`**，再 **`vm_load_string(target/linkpath)`**，使无效 **dirfd** 时 **`BadFileDescriptor`** 先于路径用户读，对齐 Linux **`do_symlinkat`** 顺序。",
+  "files_changed": ["kernel/src/syscall/fs/ctl.rs"],
+  "description": "**`sys_symlinkat`**（`kernel/src/syscall/fs/ctl.rs`）当前顺序为：**`vm_load_string(target)?`** → **`vm_load_string(linkpath)?`** → **`with_fs(new_dirfd, …)`**（内部 **`Directory::from_fd(new_dirfd)`** 等）。当 **`new_dirfd`** 为无效 **fd** 时，**Linux **`symlinkat(2)`**/**`do_symlinkat`** 通常先对 **`newdfd`** 做 **`fdget`/`user_path_at`**，**`EBADF`** 应先于对 **`oldname`/`newname`** 的 **`copy_from_user`**（与 **`openat`**、**`unlinkat`** 等「先 **fd** 再路径」的常见内核顺序一致）。**Starry** 会在判定 **`BadFileDescriptor`** 之前已读取用户 **`target`**/**`linkpath`**，若用户依赖「坏 **`dirfd`** 即返 **`EBADF`**、且不访问路径」的探测顺序，或与 **Linux** 在 **`EFAULT`**/**`EBADF`** 竞态下的优先顺序不完全一致。同类 **`*at`** 中 **`sys_linkat`**/**`sys_unlinkat`** 等也存在「先 **`vm_load_string`** 再 **`with_fs`/`resolve_at`**」模式，可一并对照内核。",
+  "category": "syscall-ordering",
+  "affected_syscalls": ["symlinkat"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/ctl.rs:302-315"],
+    "related_files": ["kernel/src/file/fs.rs:26-34"],
+    "key_insight": "`with_fs(dirfd)` 晚于 `vm_load_string`；无效 dirfd 时 EBADF 不应晚于 pathname 用户访问"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "构造 **`new_dirfd=-1`**（或已关闭 **fd**）且 **`target`/`linkpath` 指向无效用户地址**；在 **Linux** 与 **Starry** 上对比 **`errno`**（**`EBADF`** vs **`EFAULT`**）及是否发生 **`SIGSEGV`**（用户态）。",
+    "expected_output_contains": "",
+    "pass_criteria": "无效 **`new_dirfd`** 时 **`EBADF`/`BadFileDescriptor`** 先于 **`linkpath`/`target`** 的用户读（与 **Linux **`symlinkat`** 一致）；或文档化顺序差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0）"
+  },
+  "suggested_fix": "对 **`new_dirfd != AT_FDCWD`** 先 **`Directory::from_fd(new_dirfd)`**（或等价 **`fd` 校验**）再 **`vm_load_string`**；**`AT_FDCWD`** 分支可保持先读字符串或统一先锁 **`FS_CONTEXT`** 再读路径。",
+  "references": ["man 2 symlinkat", "Linux do_symlinkat"]
+}

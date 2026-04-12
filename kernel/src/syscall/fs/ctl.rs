@@ -304,6 +304,10 @@ pub fn sys_symlinkat(
     new_dirfd: i32,
     linkpath: *const c_char,
 ) -> AxResult<isize> {
+    // Linux do_symlinkat: resolve newdfd (fdget) before copy_from_user on pathnames → EBADF first.
+    if new_dirfd != AT_FDCWD {
+        let _ = Directory::from_fd(new_dirfd)?;
+    }
     let target = vm_load_string(target)?;
     let linkpath = vm_load_string(linkpath)?;
     debug!("sys_symlinkat <= target: {target:?}, new_dirfd: {new_dirfd}, linkpath: {linkpath:?}");

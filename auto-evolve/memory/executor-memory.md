@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-158 resolved（**`symlinkat`**：**`new_dirfd != AT_FDCWD`** 时先 **`Directory::from_fd`** 再 **`vm_load_string`**，**`EBADF`** 先于路径读；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-157 resolved（**`fstatfs`**：**`location_from_fd`** 支持 **`Directory`**/**`MemfdCreatedFile`**/**`File`** 取 **`Location`**再 **`statfs`**，对齐 Linux目录 **fd**；非 VFS **fd** → **`InvalidInput`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-156 resolved（**`listen`**：**`SocketOps::listen(backlog)`**；TCP **`LISTEN_TABLE`** 按 **`min(backlog, SOMAXCONN)`** 限制 **`syn_queue`**；**`backlog < 0`** → **`InvalidInput`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-155 resolved（**`statx`**：**`Kstat::into_statx_with_mask`**按 **`STATX_*`** 填 **`struct statx`** 与 **`stx_mask`**；**`sys_statx`** 使用用户 **`mask`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
