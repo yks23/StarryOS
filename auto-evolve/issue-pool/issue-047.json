@@ -1,0 +1,28 @@
+{
+  "id": "issue-047",
+  "title": "linkat 对非法 AT_* flags 仅 warn 仍成功，应对齐 Linux 返回 EINVAL",
+  "status": "resolved",
+  "created_at": "2026-04-15T22:00:00Z",
+  "resolved_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "description": "`sys_linkat` 在 **`flags != 0`** 时仅 **`warn!`**，仍继续执行硬链接。Linux **`linkat(2)`** 的 **`flags`** 只能是 **`AT_EMPTY_PATH`**、**`AT_SYMLINK_FOLLOW`** 等内核允许的子集（见 **`VALID_LINKAT_FLAGS`**）；含未知位须 **`EINVAL`**（本环境 **`linkat(..., 0x80000000)`** → **`errno=22`**）。当前 **`resolve_at`** 对路径分支只解释 **`AT_EMPTY_PATH`** 与 **`AT_SYMLINK_NOFOLLOW`**，其余位被静默忽略，导致非法 **`flags`** 仍可能 **`Ok(0)`**，与 Linux 不一致。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["linkat"],
+  "fix_summary": "**`sys_linkat`**：按 Linux **`AT_EMPTY_PATH | AT_SYMLINK_FOLLOW`** 校验，未知位 **`AxError::InvalidInput`**（**`EINVAL`**）；将 **`AT_SYMLINK_FOLLOW`** 映射为 **`resolve_at`** 所需的 **`AT_SYMLINK_NOFOLLOW`**（默认不 follow）。移除仅 **`warn!`** 的行为。",
+  "files_changed": ["kernel/src/syscall/fs/ctl.rs"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/ctl.rs:185-214", "kernel/src/file/fs.rs:51-76"],
+    "related_files": [],
+    "key_insight": "入口校验 `flags` ⊆ 内核允许的 AT_*；勿仅 warn"
+  },
+  "test": {
+    "source_file": "auto-evolve/tests/test_linkat_invalid_flags.c",
+    "build_command": "riscv64-linux-musl-gcc -static -Wall -o test_linkat_invalid_flags test_linkat_invalid_flags.c",
+    "run_method": "放入 rootfs /bin/ 后在 QEMU 运行",
+    "expected_output_contains": "SUMMARY",
+    "pass_criteria": "`linkat(..., flags=0x80000000)` 返回 -1 且 errno=EINVAL",
+    "last_result": "未在 QEMU 运行；`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` 通过"
+  },
+  "suggested_fix": "在 `sys_linkat` 开头校验 **`flags`** 仅为 **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW`**（与当前 `resolve_at` 语义一致），或与 Linux 对齐为 **`AT_EMPTY_PATH | AT_SYMLINK_FOLLOW`** 并相应调整 `resolve_at`；未知位 **`AxError::InvalidInput`**。",
+  "references": ["man 2 linkat", "Linux valid_linkat_flags"]
+}

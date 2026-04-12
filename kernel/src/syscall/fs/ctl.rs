@@ -194,11 +194,18 @@ pub fn sys_linkat(
          new_path: {new_path}, flags: {flags}"
     );
 
-    if flags != 0 {
-        warn!("Unsupported flags: {flags}");
+    // Linux VALID_LINKAT_FLAGS: AT_EMPTY_PATH | AT_SYMLINK_FOLLOW (see namei.c).
+    const VALID_LINKAT_FLAGS: u32 = AT_EMPTY_PATH | AT_SYMLINK_FOLLOW;
+    if flags & !VALID_LINKAT_FLAGS != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    // resolve_at uses AT_SYMLINK_NOFOLLOW; linkat(2) uses AT_SYMLINK_FOLLOW (inverse sense).
+    let mut resolve_flags = flags & AT_EMPTY_PATH;
+    if flags & AT_SYMLINK_FOLLOW == 0 {
+        resolve_flags |= AT_SYMLINK_NOFOLLOW;
     }
 
-    let old = resolve_at(old_dirfd, old_path.as_deref(), flags)?
+    let old = resolve_at(old_dirfd, old_path.as_deref(), resolve_flags)?
         .into_file()
         .ok_or(AxError::BadFileDescriptor)?;
     if old.is_dir() {
