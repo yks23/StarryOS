@@ -27,8 +27,9 @@ fn do_poll(
     let mut fds = Vec::with_capacity(poll_fds.len());
     let mut revents = Vec::with_capacity(poll_fds.len());
     for fd in poll_fds.iter_mut() {
-        if fd.fd == -1 {
-            // Skip -1
+        if fd.fd < 0 {
+            // Linux: entries with negative fd are ignored; revents must be cleared.
+            fd.revents = 0;
             continue;
         }
         match get_file_like(fd.fd) {
