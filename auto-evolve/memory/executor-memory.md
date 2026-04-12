@@ -1,12 +1,14 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-034 resolved（**`sendmsg`/`recvmsg`** **`CMSG_ALIGN`**；**`cmsg_align`** + **`CMsgBuilder`** 填充）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过
 - 日期：2026-04-13：issue-021 resolved（**`capget`/`capset`** → **`ProcessData`** 三域 **`AtomicU32`**，**`copy_credentials_from`** 继承）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过
 - 日期：2026-04-13：issue-020 resolved（**`mremap`** 保留 File/COW；**`msync`** → **`CachedFile::sync`**）
 
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-034 | sendmsg/recvmsg CMSG 对齐（多段 SCM_RIGHTS） | resolved | 2026-04-13 |
 | issue-021 | capget 全 CAP / capset 空操作 | resolved | 2026-04-13 |
 | issue-020 | mremap 丢失 MAP_SHARED 文件后端 | resolved | 2026-04-13 |
 | issue-019 | madvise/msync/mlock 桩 | resolved | 2026-04-13 |
@@ -16,7 +18,6 @@
 | issue-003 | getpriority 固定 nice / setpriority | resolved | 2026-04-13 |
 | issue-002 | sched_get/setscheduler/getparam 桩 | resolved | 2026-04-13 |
 | issue-001 | sched_get/setaffinity 仅当前任务 | resolved | 2026-04-13 |
-| issue-034 | accept4 写 local非 peer | resolved | 2026-04-12 |
 | issue-028 | 多线程 execve WouldBlock | resolved | 2026-04-12 |
 | issue-025 | 补充组 stub / seccomp 空成功 | resolved | 2026-04-12 |
 | issue-024 | membarrier compiler_fence / cmd 编码 | resolved | 2026-04-12 |
@@ -55,6 +56,7 @@
 - 补充组：**`supplementary_gids`**（`Mutex<Vec<u32>>`，上限 **`SUPP_GROUPS_MAX`**）；`getgroups` 仅列补充组不含主 `rgid`；`setgroups` 需 **`euid==0`**；`getgroups(0,…)` 返回个数。**`seccomp(2)`** 未实现时 **`Unsupported`（ENOSYS）**；`prctl(PR_SET_SECCOMP)` 仍为占位。
 - **`execve` 多线程**：在替换映像前若 **`proc.threads().len() > 1`**，对其余 tid **`SIGKILL`** 并 **`yield_now`** 直至仅剩当前线程（对齐 Linux 先杀线程组再 exec）；长时间未收敛则 **`WouldBlock`**。非 vfork/线程本地存储析构等细语义仍弱于 Linux。
 - **`accept` / `accept4`**：向用户写入的 sockaddr 必须是 **`peer_addr()`**（远端），勿用 **`local_addr()`**（本端监听地址）；与 **`getpeername(accepted_fd)`** 一致。
+- **`sendmsg` / `recvmsg` 与 ancillary**：控制缓冲区须与 Linux 一致使用 **`CMSG_ALIGN(sizeof(cmsghdr)+payload)`** 作为**占用步长**；**`cmsg_len`** 仍为含头的逻辑长度。遍历下一条头用 **`ptr += CMSG_ALIGN(cmsg_len)`**；**`CMsgBuilder::push`** 在 **`msg_controllen`** 与下一 **`cmsghdr`** 指针上前移对齐后长度，**`cmsg_len` 至对齐边界**建议填 **0**。
 - **`sched_getaffinity` / `sched_setaffinity`**：`pid==0` 为当前任务；非零先 **`get_task(pid)`**，失败再 **`get_process_data(pid)`** 取 **`proc.threads()` 最小 tid** 定位线程组代表线程。set 时当前任务走 **`set_current_affinity`**（SMP 迁移），其它任务仅 **`set_cpumask`**。未完整建模 CAP、僵尸 **`ESRCH`** 等。
 - **`sched_getscheduler` / `sched_setscheduler` / `sched_getparam`**：每线程在 **`Thread`** 上存 **`sched_policy`**（默认0，即 `SCHED_NORMAL`/`SCHED_OTHER`）与 **`sched_priority`**（默认 0）。`setscheduler` 从用户读 **`sched_param`** 并校验策略与优先级范围后写入；`getscheduler`/`getparam` 返回已存值。策略未接入 axtask 真实 RT 调度，仅保证与用户态查询一致。**issue-018** 与 **issue-002** 描述同一修复；验收可用 **`test_sched_stubs.c`**（默认 **`sched_getscheduler(0)==SCHED_OTHER`**）或 **`test_sched_policy_stubs.c`**。
 - **`getpriority` / `setpriority`**：每进程 **`ProcessData::nice`**（**-20..=19**，默认 **0**）；`fork` 经 **`copy_credentials_from`** 继承。**`setpriority`** 为新 syscall 分发。**`PRIO_PGRP`/`PRIO_USER`** 在 **`processes()`** 上取匹配进程的 **最小 nice**（最高调度优先级）。未建模 **`CAP_SYS_NICE`** 与特权 **`nice`** 下限等 **`EPERM`**。
@@ -74,7 +76,8 @@
 - issue-003：请在 rootfs 跑 `/bin/test_getpriority`（`setpriority`/`getpriority` 对 `PRIO_PROCESS`）。
 - issue-002：请在 rootfs 跑 `/bin/test_sched_policy_stubs`（`SCHED_OTHER` 往返与 `sched_getparam` 写缓冲区）。
 - issue-001：请在 rootfs 跑 `/bin/test_sched_affinity`（对存活子进程 `sched_getaffinity`）；多线程非 leader PID 行为弱于 Linux。
-- issue-034：请在 rootfs 跑 `/bin/test_accept_peer_addr`（IPv4 accept 与 getpeername 一致性）。
+- issue-034：请在 rootfs 跑 **`/bin/test_sendmsg_cmsg_align`**（多段 **`SCM_RIGHTS`**，依赖 **`CMSG_ALIGN`**）。
+- **`accept`/`accept4` peer**：请跑 **`/bin/test_accept_peer_addr`**（与上条 issue 编号无关）。
 - issue-028：rootfs 需 `/bin/true`，跑 `/bin/test_execve_multithread`；若 SIGKILL 路径未调度退出可再查 `check_signals`/pthread 阻塞点。
 - issue-025：请在 rootfs 跑 `/bin/test_identity_seccomp_stub`；真 seccomp-bpf 未实现；`PR_SET_SECCOMP` 与 `seccomp` syscall 行为不一致属已知简化。
 - issue-024：`/bin/test_membarrier_stub` 仅测 `QUERY`；RSEQ/`GET_REGISTRATIONS` 等返回 `EINVAL`；多核全局屏障需后续 IPI。

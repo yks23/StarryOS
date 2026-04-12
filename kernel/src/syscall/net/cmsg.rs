@@ -1,4 +1,5 @@
 use alloc::{sync::Arc, vec::Vec};
+use core::mem::size_of;
 
 use axerrno::{AxError, AxResult};
 use linux_raw_sys::net::{SCM_RIGHTS, SOL_SOCKET, cmsghdr};
@@ -7,6 +8,13 @@ use crate::{
     file::{FileLike, get_file_like},
     mm::{UserConstPtr, UserPtr},
 };
+
+/// Linux `CMSG_ALIGN(len)`: round up so the next `cmsghdr` is aligned to `sizeof(size_t)`.
+#[inline]
+pub fn cmsg_align(len: usize) -> usize {
+    let align = size_of::<usize>();
+    (len + align - 1) & !(align - 1)
+}
 
 pub enum CMsg {
     Rights { fds: Vec<Arc<dyn FileLike>> },
@@ -65,23 +73,34 @@ impl<'a> CMsgBuilder<'a> {
         ty: u32,
         body: impl FnOnce(&mut [u8]) -> AxResult<usize>,
     ) -> AxResult<bool> {
-        let Some(body_capacity) = (self.capacity - *self.len).checked_sub(size_of::<cmsghdr>())
-        else {
+        let remaining = self.capacity.saturating_sub(*self.len);
+        if remaining < size_of::<cmsghdr>() {
             return Ok(false);
-        };
+        }
+        let body_capacity = remaining - size_of::<cmsghdr>();
+        let cmsg_base = self.hdr.address().as_usize();
 
         let hdr = self.hdr.get_as_mut()?;
         hdr.cmsg_level = level as _;
         hdr.cmsg_type = ty as _;
 
-        let data = UserPtr::<u8>::from(self.hdr.address().as_usize() + size_of::<cmsghdr>())
+        let data = UserPtr::<u8>::from(cmsg_base + size_of::<cmsghdr>())
             .get_as_mut_slice(body_capacity)?;
         let body_len = body(data)?;
 
         let cmsg_len = size_of::<cmsghdr>() + body_len;
+        let padded = cmsg_align(cmsg_len);
+        if padded > remaining {
+            return Err(AxError::InvalidInput);
+        }
         hdr.cmsg_len = cmsg_len;
-        self.hdr = UserPtr::from(hdr as *const _ as usize + cmsg_len);
-        *self.len += cmsg_len;
+        if padded > cmsg_len {
+            UserPtr::<u8>::from(cmsg_base + cmsg_len)
+                .get_as_mut_slice(padded - cmsg_len)?
+                .fill(0);
+        }
+        self.hdr = UserPtr::from(cmsg_base + padded);
+        *self.len += padded;
         Ok(true)
     }
 }

@@ -1,4 +1,5 @@
 use alloc::{boxed::Box, vec::Vec};
+use core::mem::size_of;
 use core::net::Ipv4Addr;
 
 use axerrno::{AxError, AxResult};
@@ -12,7 +13,7 @@ use super::addr::SocketAddrExt;
 use crate::{
     file::{FileLike, Socket, add_file_like},
     mm::{IoVec, IoVectorBuf, UserConstPtr, UserPtr, VmBytes, VmBytesMut},
-    syscall::net::{CMsg, CMsgBuilder},
+    syscall::net::{CMsg, CMsgBuilder, cmsg_align},
 };
 
 fn send_impl(
@@ -63,11 +64,18 @@ pub fn sys_sendmsg(fd: i32, msg: UserConstPtr<msghdr>, flags: u32) -> AxResult<i
         let ptr_end = ptr + msg.msg_controllen;
         while ptr + size_of::<cmsghdr>() <= ptr_end {
             let hdr = UserConstPtr::<cmsghdr>::from(ptr).get_as_ref()?;
-            if ptr_end - ptr < hdr.cmsg_len {
+            if hdr.cmsg_len < size_of::<cmsghdr>() {
+                return Err(AxError::InvalidInput);
+            }
+            let step = cmsg_align(hdr.cmsg_len);
+            let Some(next) = ptr.checked_add(step) else {
+                return Err(AxError::InvalidInput);
+            };
+            if next > ptr_end {
                 return Err(AxError::InvalidInput);
             }
             cmsg.push(Box::new(CMsg::parse(hdr)?) as CMsgData);
-            ptr += hdr.cmsg_len;
+            ptr += step;
         }
     }
     send_impl(
