@@ -1,0 +1,28 @@
+{
+  "id": "issue-130",
+  "title": "fsync/fdatasync 用 File::from_fd，pipe/socket 等 fd 上错误码与 Linux EINVAL 不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "resolved_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_fsync`/`sys_fdatasync`：经 `get_file_like` + `downcast_ref` 仅对 `File` 与 `MemfdCreatedFile`（底层 `File`）调用 `sync`；其它 `FileLike`（pipe、socket、目录等）→ `InvalidInput`（EINVAL），不再经 `File::from_fd` 得到 `BrokenPipe`/`IsADirectory`。",
+  "files_changed": ["kernel/src/syscall/fs/io.rs"],
+  "description": "**`sys_fsync`** / **`sys_fdatasync`**（`kernel/src/syscall/fs/io.rs`）通过 **`File::from_fd(fd)?`** 取 **`axfs::File`**。**`File::from_fd`**（`kernel/src/file/fs.rs`）对无法下转为 **`File`** 的 **`FileLike`** 返回 **`IsADirectory`** 或 **`BrokenPipe`**。**Linux** 在 **pipe**、**socket**、**FIFO** 等不适配 **`fsync`** 的描述符上通常返回 **`EINVAL`**（或文档所述等价码），而非 **`EBADF`** 类以外的 **`EPIPE`** 语义名。**Starry** 对 **pipe** 等可能得到 **`BrokenPipe`**（命名误导）或 **`IsADirectory`**，与 **glibc**/测试期望的 **`errno`** 对比易失败。建议在 **`fsync`** 入口对 **`get_file_like`** 类型显式分支：**非**支持同步的 **`File`** → **`InvalidInput`**（**`EINVAL`**），或对齐 Linux **`vfs_fsync`** 错误路径。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["fsync", "fdatasync"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/io.rs:172-184"],
+    "related_files": ["kernel/src/file/fs.rs:206-217"],
+    "key_insight": "`File::from_fd` 失败映射为 `BrokenPipe`/`IsADirectory` 而非 `EINVAL`"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "**`fsync(pipe_fd)`** / **`fsync(socket_fd)`**；**Linux** **`EINVAL`**；对比 **Starry** **`AxError`** / **`errno`**。",
+    "expected_output_contains": "",
+    "pass_criteria": "不支持 **`fsync`** 的 **`fd`** 类型返回与 **Linux** 一致的 **`EINVAL`**（或文档化映射表）。",
+    "last_result": "2026-04-12：`fsync_fd` + downcast；`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` PASS；QEMU 未测"
+  },
+  "suggested_fix": "在 **`sys_fsync`/`sys_fdatasync`** 中 **`get_file_like(fd)?`** 后 **`downcast_ref::<File>()`**，若 **`None`** 且非 memfd/常规文件路径则 **`Err(InvalidInput)`**；或扩展 **`File::from_fd`** 对「非文件」统一 **`EINVAL`**。",
+  "references": ["man 2 fsync", "man 2 fdatasync", "Linux fs/sync.c vfs_fsync"]
+}

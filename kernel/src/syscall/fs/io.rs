@@ -53,7 +53,7 @@ fn lseek_data_hole_dense(f: &File, offset: __kernel_off_t, seek_data: bool) -> A
 use starry_vm::{VmMutPtr, VmPtr};
 
 use crate::{
-    file::{File, FileLike, Pipe, get_file_like},
+    file::{File, FileLike, MemfdCreatedFile, Pipe, get_file_like},
     mm::{IoVec, IoVectorBuf, UserConstPtr, VmBytes, VmBytesMut},
 };
 
@@ -169,18 +169,28 @@ pub fn sys_fallocate(
     Ok(0)
 }
 
+/// Linux `vfs_fsync`: only regular-file-like descriptors; pipe/socket/etc. → `EINVAL`.
+fn fsync_fd(fd: c_int, data_only: bool) -> AxResult<isize> {
+    let f = get_file_like(fd)?;
+    if let Some(file) = f.downcast_ref::<File>() {
+        file.inner().sync(data_only)?;
+        return Ok(0);
+    }
+    if let Some(m) = f.downcast_ref::<MemfdCreatedFile>() {
+        m.inner_file().inner().sync(data_only)?;
+        return Ok(0);
+    }
+    Err(AxError::InvalidInput)
+}
+
 pub fn sys_fsync(fd: c_int) -> AxResult<isize> {
     debug!("sys_fsync <= {fd}");
-    let f = File::from_fd(fd)?;
-    f.inner().sync(false)?;
-    Ok(0)
+    fsync_fd(fd, false)
 }
 
 pub fn sys_fdatasync(fd: c_int) -> AxResult<isize> {
     debug!("sys_fdatasync <= {fd}");
-    let f = File::from_fd(fd)?;
-    f.inner().sync(true)?;
-    Ok(0)
+    fsync_fd(fd, true)
 }
 
 pub fn sys_fadvise64(

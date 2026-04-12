@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-130 resolved（**`fsync`/`fdatasync`**：**`get_file_like`** 后仅 **`File`**/**`MemfdCreatedFile`** 调 **`sync`**，否则 **`InvalidInput`**（**EINVAL**），对齐 Linux **pipe/socket** 等；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-129 resolved（**`faccessat2`**：**`VALID_FACCESSAT_FLAGS`** 与 **`VALID_ACCESS_MODE`** 先于 **`vm_load_string(path)`**（issue-128 掩码语义不变）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-128 resolved（**`faccessat2`**：**`mode`** 须为 **`F_OK|R_OK|W_OK|X_OK`** 子集（**`VALID_ACCESS_MODE`**），先于 **`resolve_at`**，非法位 **`InvalidInput`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-127 resolved（**`statx`**：**`flags`** 掩码/互斥先于 **`vm_load_string(path)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -110,6 +111,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-130 | fsync/fdatasync 非文件 fd → EINVAL | resolved | 2026-04-12 |
 | issue-129 | faccessat2 flags/mode 先于读 path | resolved | 2026-04-12 |
 | issue-128 | faccessat2 mode 非法位 EINVAL | resolved | 2026-04-12 |
 | issue-127 | statx flags 校验先于读 path | resolved | 2026-04-12 |
@@ -260,6 +262,7 @@
 - **`ioctl(FIONBIO)`**：第三参为 **`int *`**（Linux）；用 **`(arg as *const c_int).vm_read()`** 读整型，**`set_nonblocking(value != 0)`**；勿只读单字节、勿将取值限制为 0/1（**`2`**、**`256`** 等小端首字节为 0 的非零值须启用 **`O_NONBLOCK`**）。
 - **`getrandom(2)`**：**`flags`** 须为 **`linux_raw_sys::general`** 中 **`GRND_NONBLOCK|GRND_RANDOM|GRND_INSECURE`** 的子集（与 **`uapi/linux/random.h`** 一致），否则 **`EINVAL`**；勿用 **`from_bits_retain`** 静默丢弃未知位。
 - **`fadvise64`**：管道等不可 seek 的 fd 上 Linux 为 **`ESPIPE`**（非法 seek），非 **`EPIPE`**（断管）。实现上 **`Pipe::from_fd`** 分支返回 **`LinuxError::ESPIPE.into()`**（**`axerrno::LinuxError`**），勿用 **`AxError::BrokenPipe`**。真 **`fadvise`** 语义仍为桩；**`advice≤5`** 且非 pipe 时 **`offset`/`len`** 须非负，且 cast 为 **`u64`** 后 **`checked_add`** 不溢出，否则 **`InvalidInput`**（**EINVAL**），与 **`sys_fallocate`** 一致。
+- **`fsync(2)`/`fdatasync(2)`**：须 **`get_file_like`** 后对 **`File`** 或 **`MemfdCreatedFile`**（包装 **`File`**）调用 **`axfs::File::sync`**；**pipe**、**socket**、**目录**、**epoll** 等其它 **`FileLike`** → **`InvalidInput`**（**EINVAL**），勿用 **`File::from_fd`**（会得到 **`BrokenPipe`**/**`IsADirectory`**，issue-130）。无效 **`fd`** 仍为 **`BadFileDescriptor`**（**EBADF**）。
 - **`renameat2(2)`**：**`flags`** 须为 **`linux_raw_sys::general`** 中 **`RENAME_NOREPLACE|RENAME_EXCHANGE|RENAME_WHITEOUT`** 的子集，否则 **`EINVAL`**；**`NOREPLACE`+`EXCHANGE`** 互斥亦 **`EINVAL`**；**`WHITEOUT`** 未建模 overlay → **`EINVAL`**。**`RENAME_NOREPLACE`** 且 **`new_dir.lookup_no_follow(new_name)`** 已存在 → **`EEXIST`**。**`RENAME_EXCHANGE`**：两端须存在（否则 **`ENOENT`**）；同目录同名 → **`EINVAL`**；交换以临时名三次 **`Location::rename`**（非崩溃原子）。**`new_path`** 用 **`resolve_parent`**。
 - **`setitimer`/`getitimer`**：**`ITIMER_REAL`** 独占 wall 时钟 **`alarm_task`**（**`ITimer::schedule_wall_alarm`**）；**`ITIMER_VIRTUAL`/`PROF`** 仅在 **`TimeManager::poll`** 中按 **`TimerState::User`/`Kernel`** 推进 **`remained_ns`**，**`set_itimer`** 与周期重载不再为二者注册 wall alarm。**`last_wall_ns`** 在 **`TimeManager::new`** 中初始化为 **`monotonic_time_nanos()`**，避免首次 **`delta`** 近似为开机时长。抢占与内核内 steal 时间仍弱于 Linux（TODO）。
 - **`ioctl`（`kernel/src/file/fs.rs` 的 `File`）**：与 **`Tty`** 驱动已实现的终端/PTY 命令（**`TCGETS`**/**`TCSETS`** 族、**`TIOCGWINSZ`**、**`TIOCGPGRP`**、**`TIOCSCTTY`** 等）在 **`NodeType != CharacterDevice`** 时于转发 **`location().ioctl`** 前返回 **`NotATty`（ENOTTY）**；字符设备仍走 **`Device`**/**`DeviceOps`**（TTY 与其它设备各自处理）。
@@ -311,6 +314,7 @@
 - issue-054：请跑 **`/bin/test_faccessat2_invalid_flags`**（非法 **`flags`** → **`EINVAL`**）。
 - issue-128：可跑 **`faccessat2(AT_FDCWD, \"/\", R_OK|0x100, 0)`**（非法 **`mode`** → **`EINVAL`**；Linux 对齐）。
 - issue-129：非法 **`flags`** 或 **`mode`** + 坏 **`path`** 指针，首错应 **`EINVAL`**（先于 **EFAULT** 类）。
+- issue-130：**`fsync`/`fdatasync`** 在 **pipe**/**socket** fd 上应 **`EINVAL`**，勿 **`BrokenPipe`**/**`IsADirectory`**。
 - issue-053：请跑 **`/bin/test_memfd_create_invalid_flags`**（**`memfd_create(..., 0x80000000)`** → **`EINVAL`**）。
 - issue-052：请跑 **`/bin/test_fchownat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`uid`/`gid`** 不变）。
 - issue-051：请跑 **`/bin/test_utimensat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`mtime`** 不变）。
