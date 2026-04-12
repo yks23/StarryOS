@@ -8,7 +8,17 @@ use axerrno::{AxError, AxResult};
 use axfs::{FS_CONTEXT, FileFlags, OpenOptions};
 use axio::{Seek, SeekFrom};
 use axpoll::{IoEvents, Pollable};
-use linux_raw_sys::general::__kernel_off_t;
+use linux_raw_sys::general::{
+    __kernel_off_t, SPLICE_F_GIFT, SPLICE_F_MORE, SPLICE_F_MOVE, SPLICE_F_NONBLOCK,
+};
+
+/// Linux `splice(2)` flags; unknown bits must be rejected with EINVAL.
+const SPLICE_F_MASK: u32 = SPLICE_F_MOVE | SPLICE_F_NONBLOCK | SPLICE_F_MORE | SPLICE_F_GIFT;
+
+/// Linux `copy_file_range(2)` flags (`uapi/linux/fs.h`); unknown bits → EINVAL.
+const COPY_FILE_RANGE_COMPRESS: u32 = 1 << 0;
+const COPY_FILE_RANGE_DEDUPE: u32 = 1 << 2;
+const COPY_FILE_RANGE_MASK: u32 = COPY_FILE_RANGE_COMPRESS | COPY_FILE_RANGE_DEDUPE;
 use starry_vm::{VmMutPtr, VmPtr};
 
 use crate::{
@@ -308,7 +318,7 @@ pub fn sys_copy_file_range(
     fd_out: c_int,
     off_out: *mut u64,
     len: usize,
-    _flags: u32,
+    flags: u32,
 ) -> AxResult<isize> {
     debug!(
         "sys_copy_file_range <= fd_in: {}, off_in: {}, fd_out: {}, off_out: {}, len: {}, flags: {}",
@@ -317,10 +327,13 @@ pub fn sys_copy_file_range(
         fd_out,
         !off_out.is_null(),
         len,
-        _flags
+        flags
     );
 
-    // TODO: check flags
+    if flags & !COPY_FILE_RANGE_MASK != 0 {
+        return Err(AxError::InvalidInput);
+    }
+
     // TODO: check both regular files
     // TODO: check same file and overlap
 
@@ -345,7 +358,7 @@ pub fn sys_splice(
     fd_out: c_int,
     off_out: *mut i64,
     len: usize,
-    _flags: u32,
+    flags: u32,
 ) -> AxResult<isize> {
     debug!(
         "sys_splice <= fd_in: {}, off_in: {}, fd_out: {}, off_out: {}, len: {}, flags: {}",
@@ -354,8 +367,12 @@ pub fn sys_splice(
         fd_out,
         !off_out.is_null(),
         len,
-        _flags
+        flags
     );
+
+    if flags & !SPLICE_F_MASK != 0 {
+        return Err(AxError::InvalidInput);
+    }
 
     let mut has_pipe = false;
 

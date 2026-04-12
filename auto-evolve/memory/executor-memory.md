@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-037 resolved（**`splice`/`copy_file_range`**：**`flags`** 掩码校验，非法位 **`EINVAL`**；**`SPLICE_F_*`** 来自 **`linux_raw_sys`**，**`COPY_FILE_RANGE_*`** 对齐 **`uapi/linux/fs.h`**）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过
 - 日期：2026-04-13：issue-035 resolved（**`clock_gettime`/`clock_getres`** 不支持 **`clock_id`** → **`EINVAL`**）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过
 - 日期：2026-04-13：issue-032 resolved（**`mount`** **`fstype`** 白名单 + **`umount2`** **`flags`** 掩码）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过
 - 日期：2026-04-13：issue-030 resolved（**`getpriority`** 返回 **`20-nice`**（Linux ABI）；**`setpriority`** 分发已存在）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过
@@ -14,6 +15,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-037 | splice/copy_file_range flags 掩码 EINVAL | resolved | 2026-04-12 |
 | issue-035 | clock_gettime 无效 clockid 回退墙钟 | resolved | 2026-04-13 |
 | issue-032 | mount fstype / umount2 flags 校验 | resolved | 2026-04-13 |
 | issue-030 | getpriority/setpriority nice ABI | resolved | 2026-04-13 |
@@ -80,8 +82,10 @@
 - **`mremap`**：**`AddrSpace::mremap`** 要求 **`addr` 为 VMA 起点且 `old_size` 等于该 VMA 长度**。**缩小**：`unmap` 尾部。**原地放大**：尾部虚拟区间无其它映射时 **`unmap` 全段 + `map` 新尺寸**，**`FileBackend::remap_at`** / **`CowBackend::with_virt_start`** 保持同一 **`CachedFile`/文件偏移或 COW 状态**。**`MREMAP_MAYMOVE`**：尾部冲突时 **`read`→`find_free_area`→搬迁 `map`→`write`**。**`Shared`** 变长（缺页框）与 **`Linear`**：**`OperationNotSupported`**。**`MREMAP_FIXED`/`DONTUNMAP`**：**`EINVAL`**。
 - **`capget` / `capset`**：**`ProcessData`** 存 **`cap_effective`/`cap_permitted`/`cap_inheritable`**（**`AtomicU32`**，v3 低 32 位；默认 **`u32::MAX`**）。**`sys_capget`**/**`sys_capset`** 仅允许操作**当前进程**（**`header.pid==0` 或正 pid 解析到同一 `ProcessData`**，否则 **`PermissionDenied`**）。**`capset`** 要求 **`effective`/`inheritable` ⊆ `permitted`**；仅 **`euid==0`** 或当前 **`effective`** 含 **`CAP_SETPCAP`（1<<8）** 可改，否则 **`EPERM`**。未实现 64 位第二组 **`__user_cap_data_struct`**。
 - **`sysinfo(2)`**：**`totalram`** ← **`axhal::mem::total_ram_size()`**；**`freeram`** ← **`min(available_pages * PAGE_SIZE_4K, totalram)`**（**`axalloc::global_allocator()`** 空闲页池，近似值）；**`uptime`** ← **`monotonic_time_nanos / NANOS_PER_SEC`**；**`loads`/swap/buffer/high** 仍为 **0**；**`mem_unit=1`**。与 Linux **MemAvailable** 级统计仍有差距。
+- **`splice(2)` / `copy_file_range(2)`**：**`flags`** 须在 Linux 已知掩码内（**`SPLICE_F_MOVE|NONBLOCK|MORE|GIFT`**；**`copy_file_range`** 为 **`COPY_FILE_RANGE_COMPRESS|DEDUPE`**），否则 **`EINVAL`**。**`SPLICE_F_*`** 语义（如非阻塞）若与底层 **`do_send`** 未完全对齐，属后续增强；非法位须先拒绝。
 
 ## 给 Debugger 的消息
+- issue-037：请跑 **`/bin/test_splice_flags_invalid`**（**`splice(..., flags=0xdeadbeef)`** → **`EINVAL`**）。
 - issue-035：请跑 **`/bin/test_clock_gettime_invalid`**（无效 **`clock_gettime`** **`clockid`** → **`EINVAL`**）。
 - issue-032：请跑 **`/bin/test_mount_partial`**（非法 **`fstype`** → **`EINVAL`/`ENODEV`/`ENOENT`** 或 **`EPERM`** 跳过）。
 - issue-030：请跑 **`/bin/test_nice_enosys`**（**`setpriority` 非 ENOSYS**）；可配合 **`/bin/test_getpriority`** 核对 **`getpriority`** 与 **`nice`**。
