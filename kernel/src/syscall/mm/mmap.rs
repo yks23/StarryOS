@@ -477,6 +477,14 @@ pub fn sys_msync(addr: usize, length: usize, flags: u32) -> AxResult<isize> {
     if length == 0 {
         return Err(AxError::InvalidInput);
     }
+    let start = VirtAddr::from(addr);
+    // Linux `do_msync`: page alignment (and length rounding) before `MS_*` flag checks (issue-349;
+    // same theme as `mremap` issue-344). POSIX: `addr` must be page-aligned (issue-267).
+    if !start.is_aligned_4k() {
+        return Err(AxError::InvalidInput);
+    }
+    let length = align_up_4k(length);
+
     let has_async = flags & MS_ASYNC != 0;
     let has_sync = flags & MS_SYNC != 0;
     if has_async == has_sync {
@@ -485,13 +493,6 @@ pub fn sys_msync(addr: usize, length: usize, flags: u32) -> AxResult<isize> {
     if flags & !(MS_ASYNC | MS_SYNC | MS_INVALIDATE) != 0 {
         return Err(AxError::InvalidInput);
     }
-
-    let start = VirtAddr::from(addr);
-    // Linux/POSIX: `addr` must be page-aligned (issue-267).
-    if !start.is_aligned_4k() {
-        return Err(AxError::InvalidInput);
-    }
-    let length = align_up_4k(length);
     let curr = current();
     let aspace = curr.as_thread().proc_data.aspace.read();
     if !aspace.contains_range(start, length)
