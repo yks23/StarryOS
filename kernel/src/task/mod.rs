@@ -34,6 +34,9 @@ use crate::mm::AddrSpace;
 /// Sentinel for `setresuid` / `setresgid` / `setreuid` unused slots: Linux `(uid_t)-1` / `(gid_t)-1`.
 pub const CRED_NO_CHANGE: u32 = u32::MAX;
 
+/// Upper bound for `setgroups` / supplementary GIDs (see `NGROUPS_MAX` on Linux).
+pub const SUPP_GROUPS_MAX: usize = 4096;
+
 /// Job-control state shared by all threads in a process (`SIGSTOP` / `SIGCONT`).
 #[derive(Default)]
 pub struct JobCtl {
@@ -249,6 +252,9 @@ pub struct ProcessData {
     rgid: AtomicU32,
     egid: AtomicU32,
     sgid: AtomicU32,
+
+    /// Supplementary group IDs (`getgroups` / `setgroups`); excludes primary `rgid`.
+    supplementary_gids: Mutex<Vec<u32>>,
 }
 
 impl ProcessData {
@@ -292,6 +298,8 @@ impl ProcessData {
             rgid: AtomicU32::new(0),
             egid: AtomicU32::new(0),
             sgid: AtomicU32::new(0),
+
+            supplementary_gids: Mutex::new(Vec::new()),
         })
     }
 
@@ -304,6 +312,11 @@ impl ProcessData {
         self.rgid.store(parent.rgid.load(o), o);
         self.egid.store(parent.egid.load(o), o);
         self.sgid.store(parent.sgid.load(o), o);
+
+        let pg = parent.supplementary_gids.lock();
+        let mut cg = self.supplementary_gids.lock();
+        cg.clear();
+        cg.extend_from_slice(&pg);
     }
 
     #[inline]
@@ -389,6 +402,25 @@ impl ProcessData {
         if req_s != CRED_NO_CHANGE {
             self.sgid.store(req_s, o);
         }
+        Ok(())
+    }
+
+    /// Supplementary groups only (not including primary real GID).
+    pub fn get_supplementary_groups(&self) -> Vec<u32> {
+        self.supplementary_gids.lock().clone()
+    }
+
+    /// Replace supplementary groups. Requires effective uid0 (CAP_SETGID not modeled).
+    pub fn set_supplementary_groups(&self, gids: &[u32]) -> AxResult<()> {
+        if self.geteuid() != 0 {
+            return Err(AxError::PermissionDenied);
+        }
+        if gids.len() > SUPP_GROUPS_MAX {
+            return Err(AxError::InvalidInput);
+        }
+        let mut g = self.supplementary_gids.lock();
+        g.clear();
+        g.extend_from_slice(gids);
         Ok(())
     }
 

@@ -5,13 +5,17 @@ use axconfig::ARCH;
 use axerrno::{AxError, AxResult};
 use axfs::FS_CONTEXT;
 use axtask::current;
+use bytemuck::cast_slice;
 use linux_raw_sys::{
     general::{GRND_INSECURE, GRND_NONBLOCK, GRND_RANDOM},
     system::{new_utsname, sysinfo},
 };
 use starry_vm::{VmMutPtr, vm_write_slice};
 
-use crate::task::{AsThread, processes};
+use crate::{
+    mm::UserConstPtr,
+    task::{AsThread, processes},
+};
 
 pub fn sys_getuid() -> AxResult<isize> {
     Ok(current().as_thread().proc_data.getuid() as isize)
@@ -41,16 +45,54 @@ pub fn sys_setgid(gid: u32) -> AxResult<isize> {
     Ok(0)
 }
 
-pub fn sys_getgroups(size: usize, list: *mut u32) -> AxResult<isize> {
+pub fn sys_getgroups(size: isize, list: *mut u32) -> AxResult<isize> {
     debug!("sys_getgroups <= size: {size}");
-    if size < 1 {
+    if size < 0 {
         return Err(AxError::InvalidInput);
     }
-    vm_write_slice(list, &[0])?;
-    Ok(1)
+    let groups = current().as_thread().proc_data.get_supplementary_groups();
+    let ngroups = groups.len();
+
+    let sz = size as usize;
+    if sz == 0 {
+        return Ok(ngroups as isize);
+    }
+    if sz < ngroups {
+        return Err(AxError::InvalidInput);
+    }
+    if list.is_null() {
+        return Err(AxError::BadAddress);
+    }
+    if ngroups > 0 {
+        vm_write_slice(list as *mut u8, cast_slice(groups.as_slice()))?;
+    }
+    Ok(ngroups as isize)
 }
 
-pub fn sys_setgroups(_size: usize, _list: *const u32) -> AxResult<isize> {
+pub fn sys_setgroups(size: isize, list: *const u32) -> AxResult<isize> {
+    debug!("sys_setgroups <= size: {size}");
+    if size < 0 {
+        return Err(AxError::InvalidInput);
+    }
+    let sz = size as usize;
+    if sz > crate::task::SUPP_GROUPS_MAX {
+        return Err(AxError::InvalidInput);
+    }
+    if sz == 0 {
+        current()
+            .as_thread()
+            .proc_data
+            .set_supplementary_groups(&[])?;
+        return Ok(0);
+    }
+    if list.is_null() {
+        return Err(AxError::BadAddress);
+    }
+    let slice = UserConstPtr::from(list).get_as_slice(sz)?;
+    current()
+        .as_thread()
+        .proc_data
+        .set_supplementary_groups(slice)?;
     Ok(0)
 }
 
@@ -124,8 +166,7 @@ pub fn sys_getrandom(buf: *mut u8, len: usize, flags: u32) -> AxResult<isize> {
 }
 
 pub fn sys_seccomp(_op: u32, _flags: u32, _args: *const ()) -> AxResult<isize> {
-    warn!("dummy sys_seccomp");
-    Ok(0)
+    Err(AxError::Unsupported)
 }
 
 #[cfg(target_arch = "riscv64")]
