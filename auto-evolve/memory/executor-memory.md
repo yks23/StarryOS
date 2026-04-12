@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-088 resolved（**`getppid`**：无 **`parent`** 时 **`0`**，与 **`TaskStat`/proc ppid** 一致；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-087 resolved（**`waitpid`/`wait4`**：**`__WALL`/`__WCLONE`**与 **`ProcessData::is_clone_child`** 过滤子集合；**`__WNOTHREAD`** 文档化未实现；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-086 resolved（**`gettimeofday`/`times`**：输出 **`NULL`** 时跳过 **`vm_write`**，对齐 Linux；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-085 resolved（**`lseek`**：**`SEEK_DATA`/`SEEK_HOLE`（3/4）** 稠密文件语义 + **`ENXIO`**；未跟踪真实稀疏 extent；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -68,6 +69,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-088 | getppid parent None → 0 not ESRCH | resolved | 2026-04-13 |
 | issue-087 | waitpid WALL/WCLONE clone-child filter | resolved | 2026-04-13 |
 | issue-086 | gettimeofday/times NULL out ptr skip write | resolved | 2026-04-13 |
 | issue-085 | lseek SEEK_DATA/HOLE dense-file semantics | resolved | 2026-04-13 |

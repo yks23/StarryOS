@@ -1,4 +1,6 @@
-use axerrno::{AxError, AxResult};
+use axerrno::AxResult;
+#[cfg(target_arch = "x86_64")]
+use axerrno::AxError;
 use axtask::current;
 
 use crate::task::AsThread;
@@ -8,13 +10,14 @@ pub fn sys_getpid() -> AxResult<isize> {
 }
 
 pub fn sys_getppid() -> AxResult<isize> {
-    current()
+    // Linux getppid(2) never fails; no parent (e.g. detached / init) → 0, same as
+    // `TaskStat::from_thread` / `/proc/pid/stat` ppid.
+    Ok(current()
         .as_thread()
         .proc_data
         .proc
         .parent()
-        .ok_or(AxError::NoSuchProcess)
-        .map(|p| p.pid() as _)
+        .map_or(0, |p| p.pid()) as _)
 }
 
 pub fn sys_gettid() -> AxResult<isize> {
@@ -84,6 +87,6 @@ pub fn sys_arch_prctl(
             Ok(0)
         }
         ArchPrctlCode::GetCpuid => Ok(0),
-        ArchPrctlCode::SetCpuid => Err(axerrno::AxError::NoSuchDevice),
+        ArchPrctlCode::SetCpuid => Err(AxError::NoSuchDevice),
     }
 }
