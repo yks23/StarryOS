@@ -4,14 +4,16 @@ use core::ffi::c_char;
 use axerrno::{AxError, AxResult};
 use axfs::FS_CONTEXT;
 use axhal::uspace::UserContext;
-use axtask::current;
+use axtask::{current, yield_now};
+use starry_process::Pid;
+use starry_signal::{SignalInfo, Signo};
 use starry_vm::vm_load_until_nul;
 
 use crate::{
     config::USER_HEAP_BASE,
     file::FD_TABLE,
     mm::{load_user_app, vm_load_string},
-    task::AsThread,
+    task::{AsThread, send_signal_to_thread},
 };
 
 pub fn sys_execve(
@@ -46,11 +48,31 @@ pub fn sys_execve(
 
     let curr = current();
     let proc_data = &curr.as_thread().proc_data;
+    let process = proc_data.proc.clone();
+    let my_tid = curr.id().as_u64() as Pid;
 
-    if proc_data.proc.threads().len() > 1 {
-        // TODO: handle multi-thread case
-        error!("sys_execve: multi-thread not supported");
-        return Err(AxError::WouldBlock);
+    // Linux: execve terminates all other threads in the process before replacing the image.
+    if process.threads().len() > 1 {
+        let sig_kill = SignalInfo::new_kernel(Signo::SIGKILL);
+        let mut spins = 0usize;
+        const MAX_SPINS: usize = 1_000_000;
+        loop {
+            let tids = process.threads();
+            if tids.len() <= 1 {
+                break;
+            }
+            for tid in tids {
+                if tid != my_tid {
+                    let _ = send_signal_to_thread(None, tid, Some(sig_kill.clone()));
+                }
+            }
+            spins += 1;
+            if spins > MAX_SPINS {
+                error!("sys_execve: timed out waiting for sibling threads to exit");
+                return Err(AxError::WouldBlock);
+            }
+            yield_now();
+        }
     }
 
     let mut aspace = proc_data.aspace.write();

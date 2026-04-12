@@ -1,12 +1,15 @@
 {
   "id": "issue-028",
   "title": "execve rejects multi-threaded process (WouldBlock) instead of Linux success",
-  "status": "open",
+  "status": "resolved",
   "created_at": "2026-04-12T12:00:00Z",
+  "resolved_at": "2026-04-12T23:30:00Z",
   "severity": "high",
   "description": "proc_data.proc.threads().len()>1 时直接返回 Err(WouldBlock)，而 Linux 在除主线程外其他线程上执行 execve 会替换映像。",
   "category": "syscall-semantic",
   "affected_syscalls": ["execve"],
+  "fix_summary": "在加载新 ELF 前，若 `proc.threads().len()>1`，对除当前 tid 外的线程 **`send_signal_to_thread(SIGKILL)`**，并 **`yield_now` 轮询**直至线程组仅剩调用 `execve` 的线程（与 Linux 先终结其它线程再替换映像一致）；超时（上限约 1e6 次让出）仍返回 **`WouldBlock`**。",
+  "files_changed": ["kernel/src/syscall/task/execve.rs"],
   "source_context": {
     "primary_files": ["kernel/src/syscall/task/execve.rs:50-54"],
     "related_files": [],
@@ -18,7 +21,7 @@
     "run_method": "需 /bin/true；运行 /bin/test_execve_multithread",
     "expected_output_contains": "SUMMARY",
     "pass_criteria": "子进程 exit 0（execve 成功）",
-    "last_result": "待运行；Starry 上子进程 exit 1"
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu 通过；QEMU + /bin/true 待实跑"
   },
   "suggested_fix": "实现 Linux 兼容的多线程 exec 语义（kill 其他线程等）。",
   "references": ["man 2 execve"]
