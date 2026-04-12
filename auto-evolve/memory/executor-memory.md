@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-031 resolved（**`ioctl`**：非字符设备上对 TTY 驱动 ioctl 提前 **`ENOTTY`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过）
 - 日期：2026-04-12：issue-023 resolved（**`get_mempolicy`**：写入 **`MPOL_DEFAULT`** + 可选 **`nodemask`** 清零）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过
 - 日期：2026-04-12：issue-041 resolved（**`Socket::stat`**：**`st_ino`** 自增、**`st_dev`** 伪 sockfs；**`path`** **`socket:[ino]`**）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过
 - 日期：2026-04-12：issue-039 resolved（**`times(2)`**：**`tms_utime`/`tms_stime`** 为线程组累计；**`tms_cutime`/`tms_cstime`** 为已 **`wait`** 子进程 CPU；僵尸 **`ProcessData`** 表 + **`waitpid`** 累加）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过
@@ -19,6 +20,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-031 | ioctl 非 TTY 终端命令 ENOTTY | resolved | 2026-04-13 |
 | issue-023 | get_mempolicy 写入 MPOL_DEFAULT | resolved | 2026-04-12 |
 | issue-041 | Socket fstat 唯一 st_ino | resolved | 2026-04-12 |
 | issue-039 | times tms_cutime 子进程累计 | resolved | 2026-04-12 |
@@ -66,6 +68,7 @@
 - 全核 membarrier（多 hart）在 Linux 上依赖 IPI；若未来启用 `axfeat/smp` + `axfeat/ipi`，可在各核 IPI handler 中执行与 `sys_membarrier` 相同的 fence，并用同步原语等待全部完成。
 - `rt_sigreturn` 通过 `block_next_signal` 标记「下一次回到用户循环时跳过一次 `check_signals`」；该标志必须是 **per-thread**（`Thread::skip_next_signal_check`），不可用进程级或全局 AtomicBool。
 - timerfd：`TimerFd` 实现 `FileLike` + `Pollable`；到期逻辑在 `process_expirations` 中根据时钟纳秒与 `next_deadline_nanos` 比较；通过 `axtask::register_timer_callback`（首次创建时注册）在每次内核 timer tick 中扫描弱引用列表并 `wake` `PollSet`；创建 fd 用 `add_file_like`（与 eventfd2 相同），勿对 `Arc<TimerFd>` 误用 `add_to_fd_table(self)`。
+- **`ioctl`（`kernel/src/file/fs.rs` 的 `File`）**：与 **`Tty`** 驱动已实现的终端/PTY 命令（**`TCGETS`**/**`TCSETS`** 族、**`TIOCGWINSZ`**、**`TIOCGPGRP`**、**`TIOCSCTTY`** 等）在 **`NodeType != CharacterDevice`** 时于转发 **`location().ioctl`** 前返回 **`NotATty`（ENOTTY）**；字符设备仍走 **`Device`**/**`DeviceOps`**（TTY 与其它设备各自处理）。
 - **`clock_gettime` / `clock_getres`**：未实现的 **`clockid_t`** 须 **`EINVAL`**，**勿**对未知 id 回退 **`wall_time()`**。**`clock_id_supported`** 与已实现时钟一致（**REALTIME/REALTIME_COARSE、MONOTONIC/RAW/COARSE、BOOTTIME、CPUTIME_ID** 等）；**`clock_getres`** 对不支持 id 同样 **`EINVAL`**（即使 **`res==NULL`**）。
 - `bpf` / `userfaultfd`：未实现时返回 **`AxError::Unsupported`（ENOSYS）**，勿再 `sys_dummy_fd`；`perf_event_open` 可返回 **`PermissionDenied`（EPERM）** 以匹配测试与常见无能力场景。`io_uring_setup` 若仅消除 dummy 路径：最小桩返回 `anon_inode:[io_uring]` 的 `IoUringFd`，写回 `sq_entries`/`cq_entries`；真 io_uring 需 ring mmap 与提交队列。
 - `fsopen`：无 fs-context 实现时返回 **`NoSuchDevice`（ENODEV）**（或 EINVAL），勿发 `anon_inode:[dummy]`；`fspick`/`open_tree` 可 **`Unsupported`**。`memfd_secret` 在用户态常以两参探测（与 `memfd_create` 同形）时，可 **`sys_memfd_create` 复用** 以获得真实 memfd 路径。已移除 **`sys_dummy_fd`** 分配假 fd 的路径。

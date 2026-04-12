@@ -8,11 +8,17 @@ use core::{
 
 use axerrno::{AxError, AxResult};
 use axfs::{FS_CONTEXT, FsContext};
-use axfs_ng_vfs::{Location, Metadata, NodeFlags};
+use axfs_ng_vfs::{Location, Metadata, NodeFlags, NodeType};
 use axpoll::{IoEvents, Pollable};
 use axsync::Mutex;
 use axtask::future::{block_on, poll_io};
-use linux_raw_sys::general::{AT_EMPTY_PATH, AT_FDCWD, AT_SYMLINK_NOFOLLOW};
+use linux_raw_sys::{
+    general::{AT_EMPTY_PATH, AT_FDCWD, AT_SYMLINK_NOFOLLOW},
+    ioctl::{
+        TCGETS, TCGETS2, TCSETS, TCSETS2, TCSETSF, TCSETSF2, TCSETSW, TCSETSW2, TIOCGPTN, TIOCGPGRP,
+        TIOCGWINSZ, TIOCNOTTY, TIOCSPGRP, TIOCSPTLCK, TIOCSWINSZ, TIOCSCTTY,
+    },
+};
 
 use super::{FileLike, Kstat, get_file_like};
 use crate::file::{IoDst, IoSrc};
@@ -124,6 +130,29 @@ fn path_for(loc: &Location) -> Cow<'static, str> {
         .map_or_else(|_| "<error>".into(), |f| Cow::Owned(f.to_string()))
 }
 
+/// Terminal/PTY ioctls handled by [`crate::pseudofs::dev::tty::Tty`]; only valid on character devices.
+fn is_tty_driver_ioctl(cmd: u32) -> bool {
+    matches!(
+        cmd,
+        TCGETS
+            | TCGETS2
+            | TCSETS
+            | TCSETSF
+            | TCSETSW
+            | TCSETS2
+            | TCSETSF2
+            | TCSETSW2
+            | TIOCGPGRP
+            | TIOCSPGRP
+            | TIOCGWINSZ
+            | TIOCSWINSZ
+            | TIOCSPTLCK
+            | TIOCGPTN
+            | TIOCSCTTY
+            | TIOCNOTTY
+    )
+}
+
 impl FileLike for File {
     fn read(&self, dst: &mut IoDst) -> AxResult<usize> {
         let inner = self.inner();
@@ -152,7 +181,11 @@ impl FileLike for File {
     }
 
     fn ioctl(&self, cmd: u32, arg: usize) -> AxResult<usize> {
-        self.inner().backend()?.location().ioctl(cmd, arg)
+        let loc = self.inner().backend()?.location();
+        if loc.node_type() != NodeType::CharacterDevice && is_tty_driver_ioctl(cmd) {
+            return Err(AxError::NotATty);
+        }
+        loc.ioctl(cmd, arg)
     }
 
     fn set_nonblocking(&self, flag: bool) -> AxResult {
