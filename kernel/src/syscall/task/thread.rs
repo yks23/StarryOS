@@ -71,6 +71,11 @@ pub fn sys_arch_prctl(
         // According to Linux implementation, SetFs & SetGs does not return
         // error at all
         ArchPrctlCode::GetFs => {
+            // NULL output pointer → **EFAULT** (`BadAddress`), same as `capget`/`clone3`
+            // (issue-304, issue-308). SetFs/SetGs use `addr` as segment base, not a user buffer.
+            if addr == 0 {
+                return Err(AxError::BadAddress);
+            }
             (addr as *mut usize).vm_write(uctx.tls())?;
             Ok(0)
         }
@@ -79,6 +84,10 @@ pub fn sys_arch_prctl(
             Ok(0)
         }
         ArchPrctlCode::GetGs => {
+            // ARCH_GET_GS: same NULL output rules as ARCH_GET_FS (issue-309).
+            if addr == 0 {
+                return Err(AxError::BadAddress);
+            }
             (addr as *mut usize).vm_write(uctx.gs_base as _)?;
             Ok(0)
         }

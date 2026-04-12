@@ -1,0 +1,27 @@
+{
+  "id": "issue-309",
+  "title": "`arch_prctl(2)`（x86）`ARCH_GET_FS`/`ARCH_GET_GS`：`sys_arch_prctl` 将 `addr` 转为指针后直接 `vm_write`，未在 `GetFs`/`GetGs` 分支对 `addr == 0`（用户 `NULL`）显式 `BadAddress`，与 `clone3`/issue-308、`capget`/issue-304 输出指针早退风格不一致",
+  "status": "resolved",
+  "created_at": "2026-04-18T12:05:00Z",
+  "severity": "low",
+  "fix_summary": "在 `sys_arch_prctl`（x86）`ArchPrctlCode::GetFs`/`GetGs` 分支于 `vm_write` 前增加 `addr == 0` → `AxError::BadAddress`；`GetFs` 注释说明与 capget/clone3（issue-304/308）一致，并区分 SetFs/SetGs 的 `addr` 语义。更新 `executor-memory` 最近更新、表格与新条；新增 `issue-309.json`。",
+  "files_changed": ["kernel/src/syscall/task/thread.rs", "auto-evolve/memory/executor-memory.md"],
+  "description": "**`kernel/src/syscall/task/thread.rs`** **`sys_arch_prctl`** **（** **`#[cfg(target_arch = \"x86_64\")]`** **，** **约** **70–84** **行** **）** **在** **`ArchPrctlCode::GetFs`** **/** **`GetGs`** **分支** **使用** **`(addr as *mut usize).vm_write(...)`** **，** **未** **在** **`vm_write`** **前** **对** **`addr == 0`** **显式** **返回** **`AxError::BadAddress`** **。** **Linux** **`arch_prctl(ARCH_GET_*)`** **要求** **用户** **指针** **可** **写** **；** **`NULL`** **→** **`EFAULT`** **。** **依赖** **`vm_write`** **间接** **失败** **时** **与** **仓库** **内** **同类** **syscall** **（** **issue-304** **、** **issue-306** **、** **issue-308** **）** **的** **可读性** **/** **防御** **风格** **不** **统一** **。** **`SetFs`/`SetGs`** **对** **`addr`** **语义** **不同** **（** **非** **输出** **缓冲** **）** **，** **可** **单独** **说明** **。**\n\n**建议** **：** **在** **`GetFs`/`GetGs`** **分支** **`vm_write`** **前** **增加** **`addr == 0`** **→** **`BadAddress`** **，** **或** **补充** **注释** **说明** **依赖** **`vm_write`** **的** **EFAULT** **路径** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["arch_prctl"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/thread.rs:59-92"],
+    "related_files": ["kernel/src/syscall/task/clone3.rs", "kernel/src/syscall/task/ctl.rs"],
+    "key_insight": "arch_prctl GET_FS/GET_GS 输出 addr 未显式 NULL 早退"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；需在 x86_64 目标或交叉审查：`ARCH_GET_FS` 且 `addr==0` 对照 Linux EFAULT。",
+    "expected_output_contains": "",
+    "pass_criteria": "`GetFs`/`GetGs` 对 `addr==0` 显式 `BadAddress` 或注释与 issue-308 风格一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `GetFs`/`GetGs` 分支于 `vm_write` 前加入 `if addr == 0 { return Err(AxError::BadAddress); }`。",
+  "references": ["man 2 arch_prctl", "kernel/src/syscall/task/thread.rs", "issue-302", "issue-308"]
+}

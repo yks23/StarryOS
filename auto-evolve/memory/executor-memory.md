@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-18：issue-309 resolved（**`arch_prctl`** **x86** **`ARCH_GET_FS`/`ARCH_GET_GS`**：**`addr==0`** → **`BadAddress`**，**`vm_write`** **前**；**`thread.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-17：issue-308 resolved（**`clone3`**：**`args == NULL`** → **`BadAddress`**，**`vm_read_slice`** **前**、**`size >= MIN_CLONE_ARGS_SIZE`** **后**；**`clone3.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-16：issue-307 resolved（**`shmat`**：**`get_inner_by_shmid`** **先于** **`shmflg`** **掩码**；**`shm.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-15：issue-306 resolved（**`sched_getaffinity`**：**`user_mask`** **== NULL** → **`BadAddress`**，**`vm_write_slice`** **前**；**`schedule.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -332,6 +333,7 @@
 | issue-271 | mlock/mlock2 addr 须页对齐 EINVAL | resolved | 2026-04-12 |
 | issue-272 | lseek SEEK_SET 负 offset EINVAL | resolved | 2026-04-12 |
 | issue-273 | prlimit64 跨 pid 权限 EPERM | resolved | 2026-04-12 |
+| issue-309 | arch_prctl ARCH_GET_FS/GS addr NULL → BadAddress | resolved | 2026-04-18 |
 | issue-308 | clone3 args NULL → BadAddress（vm_read 前） | resolved | 2026-04-17 |
 | issue-307 | shmat shmid 解析先于 shmflg 校验 | resolved | 2026-04-16 |
 | issue-306 | sched_getaffinity user_mask NULL → BadAddress | resolved | 2026-04-15 |
@@ -584,6 +586,7 @@
 - 作业控制：`ProcessData::jobctl` 记录 `stop_sig` / `stop_wait_pending` / `continued_wait_pending`；`SignalOSAction::Stop` 不再 `do_exit`，而是唤醒父 `child_exit_event` 并在内核循环中等待 `SIGCONT`（循环内调用 `check_signals` 以处理入队信号）；`Continue` 清除停止并在曾停止时置 `continued_wait_pending`；`waitpid` 对 `WUNTRACED` 或 **options==0** 写 `(sig<<8)|0x7f`，对 `WCONTINUED` 或 **options==0** 写 `0xffff`。
 - **`waitpid(2)`/`wait4(2)`**：**`options`** 须为 **`WaitOptions::from_bits`** 可解析的 **`WNOHANG|WUNTRACED|WEXITED|WCONTINUED|WNOWAIT|__WNOTHREAD|__WALL|__WCLONE`** 子集（与 **`linux_raw_sys::general`** 一致），否则 **`InvalidInput`（EINVAL）**；勿 **`from_bits_truncate`**。**`__WNOTHREAD`** 置位 → **`Unsupported`（ENOSYS）**，因未记录 fork/clone 父线程（issue-219）。**`WALL`/`WCLONE`** 与 **`ProcessData::is_clone_child`** 过滤（issue-087）。
 - **`clone3(2)`**：**`args_size`** 须 **≥ `sizeof(Clone3Args)`**（**`MIN_CLONE_ARGS_SIZE = mem::size_of::<Clone3Args>()`**，与 uapi **`struct clone_args`** 同步，issue-238）；**`size` 大于结构体**时仅读前 **`sizeof`** 字节（**issue-096**）。**`args == NULL`** 且 **`size` 合法** → **`BadAddress`（EFAULT）**，在 **`vm_read_slice`** **之前** **显式** **早退**（**issue-308**；与 **`capget`/`sched_getaffinity`** **issue-304**/**issue-306** **同类**；**过短** **`size`** **仍** **先** **`EINVAL`**）。**`fork(2)`**/**`arch_prctl(2)`**：**`mod.rs`** **`task management`** **`Sysno::fork`** 与 **`task ops`** **`Sysno::arch_prctl`** 均 **`#[cfg(target_arch = "x86_64")]`**；**riscv**/**aarch64** **无** **`Sysno::arch_prctl`**（**x86** **FS/GS**/**TLS** **专用**）；**`libc`** **`fork(2)`** **经** **`clone`/`clone3`** → **`sys_clone`/`sys_clone3`**；旁注 **issue-302**（与 **issue-301** **`fd ops`** **同类**）。
+- **`arch_prctl(2)`（x86）`ARCH_GET_FS`/`ARCH_GET_GS`**：**`addr==0`**（用户 **NULL**）→ **`BadAddress`（EFAULT）**，在 **`vm_write`** **之前**（**issue-309**；与 **`capget`/`clone3`** **issue-304**/**issue-308** **同类**）；**`ARCH_SET_FS`/`ARCH_SET_GS`** **的** **`addr`** **为** **段** **基址** **非** **输出** **缓冲**（**`thread.rs`** **`sys_arch_prctl`**）。
 - 地址空间并发：`ProcessData.aspace` 为 `Arc<RwLock<AddrSpace>>`；修改页表（缺页 populate、mmap 等）用 `write()`；纯查询（如 mincore、`mremap` 查 VMA、futex 地址解析、部分 `can_access_range`）用 `read()`。缺页仍会写锁直至支持按页或 per-VMA 锁。
 - 进程凭证：`ProcessData` 中 **`ruid/euid/suid`** 与 **`rgid/egid/sgid`**（`AtomicU32`）；`getuid`→`ruid`，`geteuid`→`euid`，gid 同理；**`get_resuid`/`get_resgid`** 供 **`getresuid(2)`/`getresgid(2)`** 一次读三组；`setuid`/`setgid` 为三 ID 同步设置；`setresuid`/`setresgid` 中 **`CRED_NO_CHANGE`=`u32::MAX`** 表示不改；**`euid==0`（或 `egid==0`）** 视为特权可任意改，否则新值须属于当前 `{r,e,s}` 之一否则 **`PermissionDenied`**。`clone` 新建进程在 `ProcessData::new` 后 **`copy_credentials_from`** 父 `ProcessData`。完整 Linux 能力集与 setfsuid 等仍未建模。
 - 补充组：**`supplementary_gids`**（`Mutex<Vec<u32>>`，上限 **`SUPP_GROUPS_MAX`**）；`getgroups` 仅列补充组不含主 `rgid`；`setgroups` 需 **`euid==0`**；`getgroups(0,…)` 返回个数。**`seccomp(2)`** 未实现时 **`Unsupported`（ENOSYS）**。**`prctl(PR_SET_SECCOMP)`**：**`arg2`>2**（非 **`SECCOMP_MODE_*`**）→ **`EINVAL`**；mode **0/1/2** 未实现 → **`Unsupported`**。**`prctl(PR_MCE_KILL)`**：**`arg2`** 须 **`CLEAR`/`SET`**；**`SET`** 时 **`arg3`**≤**`DEFAULT`**，否则 **`EINVAL`**；合法组合未实现 → **`Unsupported`**。
