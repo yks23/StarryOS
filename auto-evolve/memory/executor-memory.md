@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-184 resolved（**`getrusage`**：**`From<Rusage> for rusage`** 全字段字面量，去掉 **`mem::zeroed`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-187 resolved（**`mount`**：**`validate_mount_source`**约束 **`tmpfs`** 的 **`source`**；非法路径 **`EINVAL`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-186 resolved（**`sendmsg`**：**`msg_control` 区间** **`ptr_end`**与循环上界均 **`checked_add`**，防 **`usize` 溢出**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-180 resolved（**`clock_nanosleep`**：**`flags & !TIMER_ABSTIME`** → **`EINVAL`**，读 **`req`** 前校验；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
