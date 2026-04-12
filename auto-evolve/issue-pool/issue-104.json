@@ -1,0 +1,28 @@
+{
+  "id": "issue-104",
+  "title": "pwritev/pwritev2 实现调用 read_at，将写 syscall 当成读，语义与 Linux 相反",
+  "status": "resolved",
+  "created_at": "2026-04-19T00:00:00Z",
+  "resolved_at": "2026-04-12T00:00:00Z",
+  "severity": "high",
+  "fix_summary": "**`sys_pwritev2`**：改为 **`f.inner().write_at(IoVectorBuf::new(...)? .into_io(), offset)`**，与 **`pwrite64`** / **`writev`** 的 scatter-write 语义一致；**`offset < 0` → `InvalidInput`**。**`sys_preadv2`**：补 **`offset < 0`** 校验，与 **`pread64`** 对齐。",
+  "files_changed": ["kernel/src/syscall/fs/io.rs"],
+  "description": "**`sys_pwritev2`**（`kernel/src/syscall/fs/io.rs`）在取 **`File`** 后调用 **`f.inner().read_at(IoVectorBuf::new(iov, iovcnt)?.into_io(), offset as _)`**，与同文件 **`sys_preadv2`** 相同路径，属于从文件**读出**到 iovec，而非把用户缓冲**写入**文件偏移处。**`sys_pwritev`** 委托 **`sys_pwritev2`**，因此整条 **pwritev** 族均错误。Linux **`pwritev(2)`** 应对应 **`write_at`**（或等价 scatter-write），错误实现会导致数据损坏、与 **`pwrite64`** 行为不一致，并可能向用户内存写入文件内容。另：**`offset < 0`** 未像 **`preadv2`**/**`pread64`** 那样前置 **`InvalidInput`**，与 **`EINVAL`** 语义易不一致（次要）。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["pwritev", "pwritev2"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/io.rs:223-257"],
+    "related_files": ["kernel/src/syscall/fs/io.rs:191-212"],
+    "key_insight": "`sys_pwritev2` 使用 `read_at` 而非 `write_at`"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "打开可写常规文件，**`pwritev`** 写入已知模式；再 **`pread`** 同偏移，Linux 应读到写入内容；Starry 若读到旧数据或用户缓冲被覆盖则记偏差。",
+    "expected_output_contains": "",
+    "pass_criteria": "**`sys_pwritev2`** 调用 **`write_at`**（及正确的 **`IoVectorBuf`** 可写侧）；与 **`sys_preadv2`** 对称；**`offset < 0`** → **`InvalidInput`**。",
+    "last_result": "2026-04-12：**`sys_pwritev2` → `write_at`**，**`preadv2`/`pwritev2` `offset < 0`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** PASS；QEMU 未测"
+  },
+  "suggested_fix": "将 **`read_at`** 改为 **`write_at`**，并确认 **`IoVectorBuf`**/**`into_io()`** 对 scatter-write 的 trait 与 **`pwrite64`** 一致；为 **`offset`** 增加与 **`preadv2`** 相同的负值校验。",
+  "references": ["man 2 pwritev", "man 2 pwritev2"]
+}

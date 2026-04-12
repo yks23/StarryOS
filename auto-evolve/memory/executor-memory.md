@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-104 resolved（**`pwritev`/`pwritev2`**：**`write_at` + `IoVectorBuf::into_io()`**；**`preadv2`/`pwritev2`**：**`offset < 0` → `InvalidInput`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-102 resolved（**`sendto`/`sendmsg`**：**`SendFlags::from_bits_truncate`**；**vendor `axnet-ng`**：**`SendFlags`** 对齐 Linux **`MSG_*`**，**`send_poller`** 合并 **`MSG_DONTWAIT`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-16：issue-101 resolved（**`exit`/`exit_group`**：**`(exit_code & 0xff) << 8`** 再 **`do_exit`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-15：issue-100 resolved（**`capget`/`capset` V3**：**2×`__user_cap_data_struct`**，高位槽 0 / **`capset`** 校验；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）

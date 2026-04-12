@@ -238,6 +238,9 @@ pub fn sys_preadv2(
 ) -> AxResult<isize> {
     debug!("sys_preadv2 <= fd: {fd}, iovcnt: {iovcnt}, offset: {offset}, flags: {_flags}");
     let f = File::from_fd(fd)?;
+    if offset < 0 {
+        return Err(AxError::InvalidInput);
+    }
     f.inner()
         .read_at(IoVectorBuf::new(iov, iovcnt)?.into_io(), offset as _)
         .map(|n| n as _)
@@ -252,8 +255,11 @@ pub fn sys_pwritev2(
 ) -> AxResult<isize> {
     debug!("sys_pwritev2 <= fd: {fd}, iovcnt: {iovcnt}, offset: {offset}, flags: {_flags}");
     let f = File::from_fd(fd)?;
+    if offset < 0 {
+        return Err(AxError::InvalidInput);
+    }
     f.inner()
-        .read_at(IoVectorBuf::new(iov, iovcnt)?.into_io(), offset as _)
+        .write_at(IoVectorBuf::new(iov, iovcnt)?.into_io(), offset as _)
         .map(|n| n as _)
 }
 
