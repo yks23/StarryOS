@@ -375,12 +375,13 @@ pub fn sys_rt_sigtimedwait(
     timeout: *const timespec,
     sigsetsize: usize,
 ) -> AxResult<isize> {
-    check_sigset_size(sigsetsize)?;
-
+    // Linux `do_rt_sigtimedwait` / `copy_sigset_from_user`: NULL `set` → EFAULT before bad
+    // `sigsetsize` → EINVAL (issue-338; same theme as signalfd issue-321 / ppoll issue-334).
     if set.is_null() {
-        // Linux `rt_sigtimedwait(2)`: `set` must be readable; NULL → EFAULT.
         return Err(AxError::BadAddress);
     }
+
+    check_sigset_size(sigsetsize)?;
 
     let set = read_signal_set_user(set)?;
 

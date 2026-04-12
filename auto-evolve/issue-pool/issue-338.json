@@ -1,0 +1,32 @@
+{
+  "id": "issue-338",
+  "title": "`rt_sigtimedwait(2)`：`sys_rt_sigtimedwait` 先 `check_sigset_size(sigsetsize)` 再 `set.is_null()`/`read_signal_set_user(set)`；当 `sigsetsize` 非法（`EINVAL`）且 `set` 为 `NULL`（`EFAULT`）时，与 Linux `copy_sigset_from_user`/`rt_sigtimedwait` 路径上「坏用户指针」与「坏 `sigsetsize`」的 `EFAULT`/`EINVAL` 优先级可能不完全一致",
+  "status": "resolved",
+  "created_at": "2026-04-14T18:00:00Z",
+  "resolved_at": "2026-05-17T00:00:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/signal.rs`** **`sys_rt_sigtimedwait`** **（** **约** **371–391** **行** **）** **顺序** **：** **`check_sigset_size(sigsetsize)?`** **→** **`set.is_null()`** **→** **`read_signal_set_user(set)`** **→** **`read_timespec_user`** **等** **。** **与** **同** **文件** **`rt_sigprocmask`** **/** **`issue-334`** **`ppoll`** **等** **`sigsetsize`** **主题** **类似** **：** **错误** **`sigsetsize`** **时** **固定** **先** **`EINVAL`** **，** **而** **`set==NULL`** **时** **为** **`EFAULT`** **；** **若** **两者** **同时** **出现** **，** **与** **Linux** **在** **`compat`** **/** **`native`** **路径** **上** **先** **用户** **访问** **还是** **先** **校验** **`sigsetsize`** **可能** **不同** **。**\n\n**建议** **：** **对照** **Linux** **`kernel/signal.c`** **`do_rt_sigtimedwait`** **/** **`copy_sigset_from_user`** **，** **将** **`set`** **用户** **可读性** **（** **或** **`EFAULT`** **语义** **）** **提前** **到** **`check_sigset_size`** **之前** **，** **或** **注释** **说明** **与** **上游** **顺序** **差异** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["rt_sigtimedwait"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/signal.rs:371-391"],
+    "related_files": ["kernel/src/syscall/signal.rs:146-152"],
+    "key_insight": "rt_sigtimedwait check_sigset_size before set NULL/EFAULT order"
+  },
+  "fix_summary": "`sys_rt_sigtimedwait`：`set.is_null()` → `BadAddress`（EFAULT）先于 `check_sigset_size`（EINVAL），与 `do_rt_sigtimedwait`/`copy_sigset_from_user` 常见顺序及 signalfd issue-321 一致；注释 issue-338/issue-334。",
+  "files_changed": [
+    "kernel/src/syscall/signal.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-338.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：错误 `sigsetsize` + `set==NULL` 对照 Linux 返回顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游 `rt_sigtimedwait` 校验顺序一致，或注释说明差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `check_sigset_size` 之前处理 `set` 的 `NULL`/用户读失败路径，或明确文档化 `EINVAL`/`EFAULT` 优先级与 Linux 的差异。",
+  "references": ["man 2 rt_sigtimedwait", "kernel/src/syscall/signal.rs", "issue-334"]
+}
