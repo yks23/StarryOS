@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-090 resolved（**`fill_addr`**：**`*addrlen==0` → `InvalidInput`**；**`getsockname`/`getpeername`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-089 resolved（**`brk`**：无效 **`addr`** → **`InvalidInput`/`NoMemory`**；**`map`/`unmap`** 失败 **`?`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-088 resolved（**`getppid`**：无 **`parent`** 时 **`0`**，与 **`TaskStat`/proc ppid** 一致；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-087 resolved（**`waitpid`/`wait4`**：**`__WALL`/`__WCLONE`**与 **`ProcessData::is_clone_child`** 过滤子集合；**`__WNOTHREAD`** 文档化未实现；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -70,6 +71,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-090 | fill_addr addrlen 0 → EINVAL | resolved | 2026-04-13 |
 | issue-089 | brk invalid addr / map fail → Err not Ok old | resolved | 2026-04-13 |
 | issue-088 | getppid parent None → 0 not ESRCH | resolved | 2026-04-13 |
 | issue-087 | waitpid WALL/WCLONE clone-child filter | resolved | 2026-04-13 |
