@@ -75,6 +75,9 @@ pub struct Thread {
     /// Ready to exit
     pub exit: Arc<AtomicBool>,
 
+    /// Set by `rt_sigreturn` so the next return to the user loop skips one `check_signals` pass.
+    skip_next_signal_check: AtomicBool,
+
     /// Indicates whether the thread is currently accessing user memory.
     accessing_user_memory: AtomicBool,
 
@@ -92,6 +95,7 @@ impl Thread {
             robust_list_head: AtomicUsize::new(0),
             time: AssumeSync(RefCell::new(TimeManager::new())),
             exit: Arc::new(AtomicBool::new(false)),
+            skip_next_signal_check: AtomicBool::new(false),
             oom_score_adj: AtomicI32::new(200),
             accessing_user_memory: AtomicBool::new(false),
             exit_event: Arc::default(),
