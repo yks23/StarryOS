@@ -27,6 +27,22 @@ fn clock_id_supported(clock_id: u32) -> bool {
     )
 }
 
+/// Resolution reported by [`sys_clock_getres`], aligned with Linux conventions:
+/// `*_COARSE` clocks follow jiffies / HZ-scale granularity (here **1 ms**); others match
+/// typical high-resolution / hrtimer **`1 ns`** reports.
+fn clock_get_resolution(clock_id: u32) -> TimeValue {
+    match clock_id {
+        CLOCK_REALTIME_COARSE | CLOCK_MONOTONIC_COARSE => TimeValue::from_millis(1),
+        CLOCK_REALTIME
+        | CLOCK_MONOTONIC
+        | CLOCK_MONOTONIC_RAW
+        | CLOCK_BOOTTIME
+        | CLOCK_PROCESS_CPUTIME_ID
+        | CLOCK_THREAD_CPUTIME_ID => TimeValue::new(0, 1),
+        _ => TimeValue::from_micros(1),
+    }
+}
+
 pub fn sys_clock_gettime(clock_id: __kernel_clockid_t, ts: *mut timespec) -> AxResult<isize> {
     let cid = clock_id as u32;
     let now = match cid {
@@ -61,7 +77,7 @@ pub fn sys_clock_getres(clock_id: __kernel_clockid_t, res: *mut timespec) -> AxR
         return Err(AxError::InvalidInput);
     }
     if let Some(res) = res.nullable() {
-        res.vm_write(timespec::from_time_value(TimeValue::from_micros(1)))?;
+        res.vm_write(timespec::from_time_value(clock_get_resolution(cid)))?;
     }
     Ok(0)
 }

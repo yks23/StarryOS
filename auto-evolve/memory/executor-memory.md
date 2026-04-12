@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-172 resolved（**`clock_getres`**：**`*_COARSE` → `1 ms`**，其余已支持 clock → **`1 ns`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-171 resolved（**`readlinkat`**：**`dirfd_for_path_resolution`** +相对路径才 **`from_fd`**，与 **issue-169/**`mkdirat` 一致；实现见于 **`72a8e16`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-170 resolved（**`SO_ERROR`**：**`GeneralOptions` `AtomicI32` + **`swap` 读清**；**`TcpSocket`** 连接失败 **`record_so_error(ECONNREFUSED)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-169 resolved（**绝对路径忽略 `dirfd`**：**`dirfd_for_path_resolution`** + **`resolve_at`/`openat`**；**`*at`** 路径 syscall 相对路径才 **`Directory::from_fd`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
