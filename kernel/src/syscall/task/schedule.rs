@@ -184,7 +184,8 @@ pub fn sys_sched_getaffinity(pid: i32, cpusetsize: usize, user_mask: *mut u8) ->
 
     vm_write_slice(user_mask, mask_bytes)?;
 
-    Ok(mask_bytes.len() as _)
+    // Linux `sched_getaffinity(2)`: success returns 0; the mask is only in user memory.
+    Ok(0)
 }
 
 pub fn sys_sched_setaffinity(pid: i32, cpusetsize: usize, user_mask: *const u8) -> AxResult<isize> {

@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-242 resolved（**`sched_getaffinity`**：成功 **`Ok(0)`**，与 Linux/**`sched_setaffinity`** 一致；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-241 resolved（**`socket`/`socketpair`**：**`AF_UNIX` 且 `proto != 0` → `EPROTONOSUPPORT`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-240 resolved（**`epoll_ctl`**：**`fd == epfd` → `InvalidInput`（EINVAL）**，禁止 epoll 自监视；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-239 resolved（**`fadvise64`**：**`advice`** 合法至 **7**（**`POSIX_FADV_WIPEONFORK`**），**6/7** 不再误 **EINVAL**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -233,6 +234,7 @@
 | issue-239 | fadvise64 advice 0..=7（uapi） | resolved | 2026-04-12 |
 | issue-240 | epoll_ctl fd==epfd → EINVAL | resolved | 2026-04-12 |
 | issue-241 | AF_UNIX socket/socketpair proto!=0 → EPROTONOSUPPORT | resolved | 2026-04-12 |
+| issue-242 | sched_getaffinity 成功返回 0 | resolved | 2026-04-12 |
 | issue-219 | waitpid __WNOTHREAD → Unsupported | resolved | 2026-04-12 |
 | issue-225 | fallocate FALLOC_FL 掩码 + 非零 EOPNOTSUPP | resolved | 2026-04-12 |
 | issue-227 | shmat 无效 shmid 不 unwrap（EINVAL） | resolved | 2026-04-12 |
@@ -453,7 +455,7 @@
 - **`recvmsg(2)`**：**`validate_recvmsg_flags`**（**`RECVMSG_FLAGS_MASK`** + **`RECVMSG_FLAGS_UNSUPPORTED`**）→ **`Socket::from_fd`** → **`msghdr.get_as_mut`** / **`IoVectorBuf::new`** → **`recv_on_socket`**，与 **`__sys_recvmsg`** 及 issue-134 **`sendmsg`** 对称（issue-135）。**`recvfrom`** 仍走 **`recv_impl`**（相同校验 + **`recv_on_socket`**）。
 - **`bind`/`connect`/`sendto` 等 INET 地址**：**`SocketAddrV4`/`SocketAddrV6::read_from_user`** 要求 **`addrlen >= sizeof(sockaddr_in|sockaddr_in6)`**，只按固定布局读 **`sockaddr_in`/`sockaddr_in6`**；**`addrlen` 大于结构体**时与 Linux 一样忽略尾部字节。**vsock** **`sockaddr_vm`** 同理。
 - **`sendmsg` / `recvmsg` 与 ancillary**：控制缓冲区须与 Linux 一致使用 **`CMSG_ALIGN(sizeof(cmsghdr)+payload)`** 作为**占用步长**；**`cmsg_len`** 仍为含头的逻辑长度。遍历下一条头用 **`ptr += CMSG_ALIGN(cmsg_len)`**；**`CMsgBuilder::push`** 在 **`msg_controllen`** 与下一 **`cmsghdr`** 指针上前移对齐后长度，**`cmsg_len` 至对齐边界**建议填 **0**。**`CMsg::parse`（`sendmsg`）** 仅实现 **`(SOL_SOCKET, SCM_RIGHTS)`**；**`SCM_CREDENTIALS`/`SCM_TIMESTAMP`/`SCM_TIMESTAMPNS`/`SCM_TIMESTAMPING`/`SCM_SECURITY`** → **`Unsupported`**，勿与格式错误混用 **`EINVAL`**。
-- **`sched_getaffinity` / `sched_setaffinity`**：`pid==0` 为当前任务；非零先 **`get_task(pid)`**，失败再 **`get_process_data(pid)`** 取 **`proc.threads()` 最小 tid** 定位线程组代表线程。set 时当前任务走 **`set_current_affinity`**（SMP 迁移），其它任务仅 **`set_cpumask`**。**`sched_setaffinity`** 须先 **`sched_resolve_task`**（**`ESRCH`**）再 **`vm_load(user_mask)`**（**EFAULT** 类），与 Linux 一致（issue-142）。未完整建模 CAP、僵尸 **`ESRCH`** 等。
+- **`sched_getaffinity` / `sched_setaffinity`**：`pid==0` 为当前任务；非零先 **`get_task(pid)`**，失败再 **`get_process_data(pid)`** 取 **`proc.threads()` 最小 tid** 定位线程组代表线程。set 时当前任务走 **`set_current_affinity`**（SMP 迁移），其它任务仅 **`set_cpumask`**。**`sched_getaffinity`** 成功 **`Ok(0)`**，掩码仅经 **`vm_write_slice`**（issue-242）。**`sched_setaffinity`** 须先 **`sched_resolve_task`**（**`ESRCH`**）再 **`vm_load(user_mask)`**（**EFAULT** 类），与 Linux 一致（issue-142）。未完整建模 CAP、僵尸 **`ESRCH`** 等。
 - **`sched_setscheduler`**：**`param==NULL`** → **`EINVAL`**（仍可先于 **`pid`** 解析）；非空时先 **`sched_resolve_task`**/**`try_as_thread`**，再 **`vm_read_uninit(sched_param)`**（issue-142，**`ESRCH`** 先于 **EFAULT**）。
 - **`sched_getscheduler` / `sched_setscheduler` / `sched_getparam`**：每线程在 **`Thread`** 上存 **`sched_policy`**（默认0，即 `SCHED_NORMAL`/`SCHED_OTHER`）与 **`sched_priority`**（默认 0）。`setscheduler` 从用户读 **`sched_param`** 并校验策略与优先级范围后写入；`getscheduler`/`getparam` 返回已存值。策略未接入 axtask 真实 RT 调度，仅保证与用户态查询一致。**issue-018** 与 **issue-002** 描述同一修复；验收可用 **`test_sched_stubs.c`**（默认 **`sched_getscheduler(0)==SCHED_OTHER`**）或 **`test_sched_policy_stubs.c`**。
 - **`getpriority` / `setpriority`**：每进程 **`ProcessData::nice`**（**-20..=19**，默认 **0**）；`fork` 经 **`copy_credentials_from`** 继承。**`sys_getpriority`** 成功返回值须为 Linux **`20 - nice`**（**`nice_to_rlimit`**），**非**裸 **`nice`**（**`nice=0`** → **20**）。**`setpriority`** 已 syscall 分发。**`PRIO_PGRP`/`PRIO_USER`** 在 **`processes()`** 上取匹配进程的 **最小 nice**（最高调度优先级）。未建模 **`CAP_SYS_NICE`** 与特权 **`nice`** 下限等 **`EPERM`**。
