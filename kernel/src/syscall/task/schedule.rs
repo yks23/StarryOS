@@ -24,6 +24,15 @@ struct SchedParam {
     sched_priority: i32,
 }
 
+/// User `sched_param`: only `sched_priority` is ABI (issue-211); avoid bulk `assume_init` on the struct.
+fn read_sched_param_user(p: *const SchedParam) -> AxResult<SchedParam> {
+    unsafe {
+        Ok(SchedParam {
+            sched_priority: core::ptr::addr_of!((*p).sched_priority).vm_read()?,
+        })
+    }
+}
+
 fn validate_sched_user_param(policy: i32, priority: i32) -> AxResult<()> {
     match policy as u32 {
         SCHED_NORMAL | SCHED_BATCH | SCHED_IDLE => {
@@ -218,7 +227,7 @@ pub fn sys_sched_setscheduler(pid: i32, policy: i32, param: *const ()) -> AxResu
     // Linux: find task (ESRCH) before copy_from_user(sched_param) (EFAULT); NULL param → EINVAL above.
     let task = sched_resolve_task(pid)?;
     let thr = task.try_as_thread().ok_or(AxError::InvalidInput)?;
-    let user_param = unsafe { param_ptr.vm_read_uninit()?.assume_init() };
+    let user_param = read_sched_param_user(param_ptr)?;
     validate_sched_user_param(policy, user_param.sched_priority)?;
     thr.set_sched_policy_param(policy, user_param.sched_priority);
     Ok(0)

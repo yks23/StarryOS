@@ -1,0 +1,27 @@
+{
+  "id": "issue-211",
+  "title": "sched_setscheduler：用户 `sched_param` 整结构 `vm_read_uninit`+`assume_init`，与同文件 `read_timespec_user` 策略不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "在 **`schedule.rs`** 增加 **`read_sched_param_user`**：对 `*const SchedParam` 仅 **`addr_of!((*p).sched_priority).vm_read()`**，再 **`SchedParam { sched_priority }`** 构造。**`sys_sched_setscheduler`** 改为 **`read_sched_param_user(param_ptr)?`**，去掉 **`vm_read_uninit`/`assume_init`**，与同文件 **`read_timespec_user`** 策略一致。",
+  "files_changed": ["kernel/src/syscall/task/schedule.rs"],
+  "description": "**`kernel/src/syscall/task/schedule.rs`** **`sys_sched_setscheduler`** 在 **`sched_resolve_task` 之后对用户 **`param`** 使用 **`unsafe { param_ptr.vm_read_uninit()?.assume_init() }`** 读入 **`SchedParam`**（约 **231** 行），再 **`validate_sched_user_param`**。结构体当前为单字段 **`sched_priority: i32`**（**`Pod`/`Zeroable`**），与 **issue-202**/**issue-204** 同类：若 **Linux uapi `struct sched_param`** 将来扩展或 **`linux_raw_sys`** 绑定引入 **padding**，整结构 **`assume_init`** 仍有 **可审计性** 风险。同文件 **`read_timespec_user`**（**issue-205**）已采用 **`addr_of!` + 字段 `vm_read`**。**更稳妥**：**`sched_priority`** 单次 **`core::ptr::addr_of!((*param_ptr).sched_priority).vm_read()`**，再 **`SchedParam { sched_priority }`** 构造。与 **issue-018**（调度策略能力 stub）正交——本条仅 **用户缓冲读入路径**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["sched_setscheduler"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/schedule.rs:223-234"],
+    "related_files": [],
+    "key_insight": "`sched_getparam` 写回用字面量；`setscheduler` 读入用 `assume_init`"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；字段读替换后 **`cargo clippy`**。",
+    "expected_output_contains": "",
+    "pass_criteria": "消除 **`SchedParam`** 的 **`assume_init`** 或证明与 **uapi** 单 **`int`** 语义锁定。",
+    "last_result": "通过：`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`（exit 0，仅有既有 warning）。"
+  },
+  "suggested_fix": "**`read_sched_param_user`**：`sched_priority` 标量 **`vm_read`**。",
+  "references": ["man 2 sched_setscheduler", "issue-205", "issue-018"]
+}

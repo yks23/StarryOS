@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-211 resolved（**`sched_setscheduler`**：**`read_sched_param_user`**（**`sched_priority`** **`addr_of!` + `vm_read`**）；去掉 **`SchedParam` `assume_init`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-210 resolved（**`signalfd4`**：**`read_signal_set_user`** **`pub(crate)`**；**`mask`** 与 **`rt_sigprocmask`** 同字级读；去掉 **`assume_init`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-214 resolved（**`shmctl` `IPC_SET`**：仅合并用户 **`shm_perm.uid`/`gid`/`mode & 0o777`**，不再整颗 **`ShmidDs`** 覆盖内核；对齐 Linux **`shmctl(2)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-209 resolved（**`timerfd_settime`**：用户 **`itimerspec`** 由 **`read_timespec_user`** 读 **`it_interval`/`it_value`**（**`addr_of!`**）；去掉整结构 **`assume_init`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
