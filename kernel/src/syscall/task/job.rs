@@ -52,8 +52,16 @@ pub fn sys_setpgid(pid: Pid, pgid: Pid) -> AxResult<isize> {
 
     if pgid == 0 {
         target.create_group();
-    } else if !target.move_to_group(&get_process_group(pgid)?) {
-        return Err(AxError::OperationNotPermitted);
+    } else {
+        // Linux `setpgid`: no such process group → EINVAL; ESRCH is for invalid `pid` (issue-346).
+        let pg = match get_process_group(pgid) {
+            Ok(pg) => pg,
+            Err(AxError::NoSuchProcess) => return Err(AxError::InvalidInput),
+            Err(e) => return Err(e),
+        };
+        if !target.move_to_group(&pg) {
+            return Err(AxError::OperationNotPermitted);
+        }
     }
 
     Ok(0)
