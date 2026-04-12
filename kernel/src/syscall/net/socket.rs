@@ -23,9 +23,24 @@ use crate::{
     task::AsThread,
 };
 
+/// Linux `SOCK_TYPE_MASK` (`uapi/linux/net.h`): base `SOCK_*` kind in the low nibble.
+const SOCK_TYPE_MASK: u32 = 0xf;
+
+/// `socket(2)` / `socketpair(2)` `type` must not set bits outside the sock type mask and
+/// `SOCK_CLOEXEC`/`SOCK_NONBLOCK` (same values as `O_CLOEXEC`/`O_NONBLOCK`).
+#[inline]
+fn validate_socket_type(raw_ty: u32) -> AxResult<()> {
+    let allowed = SOCK_TYPE_MASK | O_CLOEXEC | O_NONBLOCK;
+    if raw_ty & !allowed != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    Ok(())
+}
+
 pub fn sys_socket(domain: u32, raw_ty: u32, proto: u32) -> AxResult<isize> {
     debug!("sys_socket <= domain: {domain}, ty: {raw_ty}, proto: {proto}");
-    let ty = raw_ty & 0xFF;
+    validate_socket_type(raw_ty)?;
+    let ty = raw_ty & SOCK_TYPE_MASK;
 
     let pid = current().as_thread().proc_data.proc.pid();
     let socket = match (domain, ty) {
@@ -162,7 +177,8 @@ pub fn sys_socketpair(
     fds: UserPtr<[i32; 2]>,
 ) -> AxResult<isize> {
     debug!("sys_socketpair <= domain: {domain}, ty: {raw_ty}, proto: {proto}");
-    let ty = raw_ty & 0xFF;
+    validate_socket_type(raw_ty)?;
+    let ty = raw_ty & SOCK_TYPE_MASK;
 
     if domain != AF_UNIX {
         return Err(AxError::from(LinuxError::EAFNOSUPPORT));
