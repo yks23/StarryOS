@@ -1,0 +1,28 @@
+{
+  "id": "issue-051",
+  "title": "utimensat 未校验 flags，非法 AT_* 位经 resolve_at 忽略，应对齐 Linux EINVAL",
+  "status": "resolved",
+  "created_at": "2026-04-16T18:00:00Z",
+  "resolved_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "description": "Linux **`utimensat(2)`** 的 **`flags`** 只能是 **`0`** 或 **`AT_SYMLINK_NOFOLLOW`**；其它位须 **`EINVAL`**（本环境 **`utimensat(..., UTIME_NOW, 0x80000000)`** → **`errno=22`**）。**`sys_utimensat`** 仅在 **`path == NULL`** 时或上 **`AT_EMPTY_PATH`**，随后将 **`flags`** 传入 **`update_times` → `resolve_at`**，未知位被静默忽略，可能仍成功修改时间，与 Linux 不符；与 issue-049 **`fchmodat`**、issue-047 **`linkat`** 同类。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["utimensat"],
+  "fix_summary": "**`sys_utimensat`**：在 **`path==NULL`** 时并入 **`AT_EMPTY_PATH`** 后，按 Linux **`VALID_UTIMENSAT_FLAGS`**（**`AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH`**）校验；未知位 **`AxError::InvalidInput`**（**`EINVAL`**），早于 **`update_times`** 与双 **`UTIME_OMIT`** 早退。",
+  "files_changed": ["kernel/src/syscall/fs/ctl.rs"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/ctl.rs:444-477", "kernel/src/syscall/fs/ctl.rs:383-399"],
+    "related_files": ["kernel/src/file/fs.rs:resolve_at"],
+    "key_insight": "在 `resolve_at` 之前校验 `flags` ⊆ `{0, AT_SYMLINK_NOFOLLOW}`（及 `path==NULL` 时的 `AT_EMPTY_PATH` 组合策略与 Linux 一致）"
+  },
+  "test": {
+    "source_file": "auto-evolve/tests/test_utimensat_invalid_flags.c",
+    "build_command": "riscv64-linux-musl-gcc -static -Wall -o test_utimensat_invalid_flags test_utimensat_invalid_flags.c",
+    "run_method": "放入 rootfs /bin/ 后在 QEMU 运行",
+    "expected_output_contains": "SUMMARY",
+    "pass_criteria": "非法 flags 时返回 -1、errno=EINVAL，且 mtime 不变",
+    "last_result": "未在 QEMU 运行；`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` 通过"
+  },
+  "suggested_fix": "在 **`sys_utimensat`**：`let eff = if path.is_null() { flags | AT_EMPTY_PATH } else { flags };` 然后校验 **`eff & !(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH) == 0`**（按 Linux 允许的 empty-path 语义细化）。",
+  "references": ["man 2 utimensat"]
+}

@@ -465,6 +465,11 @@ pub fn sys_utimensat(
     if path.is_null() {
         flags |= AT_EMPTY_PATH;
     }
+    // Linux VALID_UTIMENSAT_FLAGS (see utimes.c): AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH.
+    const VALID_UTIMENSAT_FLAGS: u32 = AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH;
+    if flags & !VALID_UTIMENSAT_FLAGS != 0 {
+        return Err(AxError::InvalidInput);
+    }
     fn utime_to_duration(time: &timespec) -> Option<AxResult<Duration>> {
         match time.tv_nsec {
             val if val == UTIME_OMIT as _ => None,
