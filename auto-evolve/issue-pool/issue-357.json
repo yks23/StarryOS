@@ -1,0 +1,32 @@
+{
+  "id": "issue-357",
+  "title": "`msgctl(2)`：`sys_msgctl` 开头通过 `sys_getuid()`/`sys_getgid()`（`crate::syscall`）取当前 uid/gid 并 `?`；与 Linux `ipc` 权限路径直接读 `current_cred()` 式实现不一致，且当前 `sys_getuid`/`sys_getgid` 恒 `Ok` 使 `?` 无实际失败语义",
+  "status": "resolved",
+  "created_at": "2026-04-13T22:15:00Z",
+  "resolved_at": "2026-04-14T00:00:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/ipc/msg.rs`** **`sys_msgctl`** **（** **约** **694–698** **行** **起** **）** **及** **同类** **路径** **：** **`let current_uid = sys_getuid()? as u32`** **等** **，** **依赖** **`crate::syscall::sys_getuid`/`sys_getgid`** **而非** **直接** **`current().as_thread().proc_data.getuid()`** **。** **Linux** **`msgctl`** **在** **内核** **中** **从** **`current_cred()`** **取** **凭证** **，** **不** **经过** **独立** **`getuid`** **逻辑** **。** **Starry** **当前** **`sys_getuid`** **/`sys_getgid`** **实现** **恒** **返回** **`Ok`** **，** **`?`** **从不** **触发** **失败** **分支** **，** **但** **模块** **间** **依赖** **与** **同** **文件** **`has_ipc_permission`** **/`AsThread`** **用法** **风格** **不** **统一** **，** **未来** **若** **`sys_getuid`** **引入** **失败** **路径** **可能** **误伤** **`msgctl`** **。**\n\n**建议** **：** **改为** **直接** **读** **`proc_data`** **凭证** **字段** **（** **与** **`has_ipc_permission`** **一致** **）** **，** **或** **内联** **小** **helper** **`current_ipc_uid_gid()`** **并** **注释** **为何** **不走** **`syscall`** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["msgctl"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/ipc/msg.rs:694-698"],
+    "related_files": ["kernel/src/syscall/sys.rs"],
+    "key_insight": "msgctl uses sys_getuid/sys_getgid syscall fns vs direct cred"
+  },
+  "fix_summary": "在 **`msg.rs`** 增加 **`current_ipc_uid_gid()`**：**`current()` + `proc_data.getuid`/`getgid`**（与 **`sys_getuid`/`sys_getgid`** 数值一致、不经 syscall 层）。**`sys_msgget`/`sys_msgsnd`/`sys_msgrcv`/`sys_msgctl`** 统一 **`let (current_uid, current_gid) = current_ipc_uid_gid()`**；删 **`sys_getuid`/`sys_getgid`** **导入**。**issue-357**。",
+  "files_changed": [
+    "kernel/src/syscall/ipc/msg.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-357.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查。",
+    "expected_output_contains": "",
+    "pass_criteria": "凭证来源与 Linux/msg 其余路径一致或可维护地文档化。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "用 `current().as_thread().proc_data.getuid()/getgid()` 替换 `sys_getuid`/`sys_getgid` 调用，或抽 `ipc_current_ids()` 与 `has_ipc_permission` 对齐。",
+  "references": ["man 2 msgctl", "kernel/ipc/msg.c", "kernel/src/syscall/ipc/msg.rs"]
+}

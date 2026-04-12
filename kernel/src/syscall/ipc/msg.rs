@@ -16,10 +16,17 @@ use super::{
     IPC_CREAT, IPC_EXCL, IPC_INFO, IPC_PRIVATE, IPC_RMID, IPC_SET, IPC_STAT, IpcPerm, MSG_INFO,
     MSG_STAT, has_ipc_permission, next_ipc_id,
 };
-use crate::{
-    syscall::{sys_getgid, sys_getuid},
-    task::AsThread,
-};
+use crate::task::AsThread;
+
+/// Real uid/gid for SysV IPC (`msgget`/`msgsnd`/`msgrcv`/`msgctl` permission checks).
+/// Reads `current().as_thread().proc_data` directly (Linux `current_cred()`-style), same numeric
+/// values as `sys_getuid`/`sys_getgid` but without routing through the syscall layer or a spurious
+/// `?` that never fails today (issue-357).
+fn current_ipc_uid_gid() -> (u32, u32) {
+    let curr = current();
+    let pd = &curr.as_thread().proc_data;
+    (pd.getuid(), pd.getgid())
+}
 
 /// Data structure describing a message queue.
 #[repr(C)]
@@ -396,8 +403,7 @@ pub fn sys_msgget(key: i32, msgflg: i32) -> AxResult<isize> {
     let current = current();
     let thread = current.as_thread();
     let proc_data = &thread.proc_data;
-    let current_uid = sys_getuid()? as u32;
-    let current_gid = sys_getgid()? as u32;
+    let (current_uid, current_gid) = current_ipc_uid_gid();
     let current_pid = proc_data.proc.pid();
 
     let mut msg_manager = MSG_MANAGER.lock();
@@ -490,8 +496,7 @@ pub fn sys_msgsnd(
     let current = current();
     let thread = current.as_thread();
     let proc_data = &thread.proc_data;
-    let current_uid = sys_getuid()? as u32;
-    let current_gid = sys_getgid()? as u32;
+    let (current_uid, current_gid) = current_ipc_uid_gid();
     let current_pid = proc_data.proc.pid();
     let flags = MsgSndFlags::from_bits_truncate(msgflg);
 
@@ -572,8 +577,7 @@ pub fn sys_msgrcv(
     let current = current();
     let thread = current.as_thread();
     let proc_data = &thread.proc_data;
-    let current_uid = sys_getuid()? as u32;
-    let current_gid = sys_getgid()? as u32;
+    let (current_uid, current_gid) = current_ipc_uid_gid();
     let current_pid = proc_data.proc.pid();
 
     // Check validity of flag combinations
@@ -692,9 +696,7 @@ pub fn sys_msgrcv(
 }
 
 pub fn sys_msgctl(msqid: i32, cmd: i32, buf: usize) -> AxResult<isize> {
-    //  Get current process information
-    let current_uid = sys_getuid()? as u32;
-    let current_gid = sys_getgid()? as u32;
+    let (current_uid, current_gid) = current_ipc_uid_gid();
     let is_privileged = current_uid == 0; // root user check
 
     // Validate command code
