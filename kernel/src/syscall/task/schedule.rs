@@ -6,8 +6,9 @@ use axtask::{
 };
 use bytemuck::{Pod, Zeroable};
 use linux_raw_sys::general::{
-    __kernel_clockid_t, CLOCK_MONOTONIC, CLOCK_REALTIME, PRIO_PGRP, PRIO_PROCESS, PRIO_USER,
-    SCHED_BATCH, SCHED_FIFO, SCHED_IDLE, SCHED_NORMAL, SCHED_RR, TIMER_ABSTIME, timespec,
+    __kernel_clockid_t, CLOCK_BOOTTIME, CLOCK_MONOTONIC, CLOCK_MONOTONIC_COARSE,
+    CLOCK_MONOTONIC_RAW, CLOCK_REALTIME, PRIO_PGRP, PRIO_PROCESS, PRIO_USER, SCHED_BATCH,
+    SCHED_FIFO, SCHED_IDLE, SCHED_NORMAL, SCHED_RR, TIMER_ABSTIME, timespec,
 };
 use starry_process::Pid;
 use starry_vm::{VmMutPtr, VmPtr, vm_load, vm_write_slice};
@@ -136,9 +137,14 @@ pub fn sys_clock_nanosleep(
     debug!("sys_clock_nanosleep <= clock_id: {clock_id}, flags: {flags}, req: {req:?}");
 
     let id = clock_id as u32;
+    // Align with `sys_clock_gettime` (issue-250, issue-263): HAL has one monotonic counter, so
+    // BOOTTIME / MONOTONIC_* / RAW / COARSE share `monotonic_time` for sleep timelines.
     let clock = match id {
         CLOCK_REALTIME => axhal::time::wall_time,
-        CLOCK_MONOTONIC => axhal::time::monotonic_time,
+        CLOCK_MONOTONIC
+        | CLOCK_MONOTONIC_RAW
+        | CLOCK_MONOTONIC_COARSE
+        | CLOCK_BOOTTIME => axhal::time::monotonic_time,
         _ => {
             warn!("Unsupported clock_id: {clock_id}");
             return Err(AxError::InvalidInput);
