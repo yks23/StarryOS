@@ -238,14 +238,15 @@ pub fn sys_link(old_path: *const c_char, new_path: *const c_char) -> AxResult<is
 /// flags: can be 0 or AT_REMOVEDIR
 /// return 0 when success, else return -1
 pub fn sys_unlinkat(dirfd: i32, path: *const c_char, flags: usize) -> AxResult<isize> {
-    let path = vm_load_string(path)?;
-
-    debug!("sys_unlinkat <= dirfd: {dirfd}, path: {path:?}, flags: {flags}");
-
-    // Linux unlinkat(2): flags must be 0 or AT_REMOVEDIR only.
+    // Linux unlinkat(2): reject invalid flags before copy_from_user(pathname) (EINVAL before EFAULT).
+    // flags must be 0 or AT_REMOVEDIR only.
     if flags != 0 && flags != AT_REMOVEDIR as usize {
         return Err(AxError::InvalidInput);
     }
+
+    let path = vm_load_string(path)?;
+
+    debug!("sys_unlinkat <= dirfd: {dirfd}, path: {path:?}, flags: {flags}");
 
     with_fs(dirfd, |fs| {
         if flags == AT_REMOVEDIR as _ {
@@ -538,13 +539,7 @@ pub fn sys_renameat2(
     new_path: *const c_char,
     flags: u32,
 ) -> AxResult<isize> {
-    let old_path = vm_load_string(old_path)?;
-    let new_path = vm_load_string(new_path)?;
-    debug!(
-        "sys_renameat2 <= old_dirfd: {old_dirfd}, old_path: {old_path:?}, new_dirfd: {new_dirfd}, \
-         new_path: {new_path}, flags: {flags}"
-    );
-
+    // Linux renameat2: validate flags before copy_from_user paths (EINVAL before EFAULT).
     const RENAME_FLAGS_MASK: u32 = RENAME_NOREPLACE | RENAME_EXCHANGE | RENAME_WHITEOUT;
     if flags & !RENAME_FLAGS_MASK != 0 {
         return Err(AxError::InvalidInput);
@@ -556,6 +551,13 @@ pub fn sys_renameat2(
         // Overlay whiteout; not modeled in this VFS.
         return Err(AxError::InvalidInput);
     }
+
+    let old_path = vm_load_string(old_path)?;
+    let new_path = vm_load_string(new_path)?;
+    debug!(
+        "sys_renameat2 <= old_dirfd: {old_dirfd}, old_path: {old_path:?}, new_dirfd: {new_dirfd}, \
+         new_path: {new_path}, flags: {flags}"
+    );
 
     let (old_dir, old_name) = with_fs(old_dirfd, |fs| fs.resolve_parent(Path::new(&old_path)))?;
     let (new_dir, new_name) = with_fs(new_dirfd, |fs| fs.resolve_parent(Path::new(&new_path)))?;
