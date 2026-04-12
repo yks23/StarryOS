@@ -298,6 +298,11 @@ pub struct ProcessData {
     /// Cumulative user/system CPU of children reaped via `wait` (nanoseconds).
     child_utime_ns: AtomicUsize,
     child_stime_ns: AtomicUsize,
+
+    /// `membarrier(2)` REGISTER_* bits: Linux **expedited** commands require matching registration.
+    pub(crate) membarrier_reg_global_expedited: AtomicBool,
+    pub(crate) membarrier_reg_private_expedited: AtomicBool,
+    pub(crate) membarrier_reg_private_expedited_sync_core: AtomicBool,
 }
 
 impl ProcessData {
@@ -355,6 +360,10 @@ impl ProcessData {
             exited_threads_stime_ns: AtomicUsize::new(0),
             child_utime_ns: AtomicUsize::new(0),
             child_stime_ns: AtomicUsize::new(0),
+
+            membarrier_reg_global_expedited: AtomicBool::new(false),
+            membarrier_reg_private_expedited: AtomicBool::new(false),
+            membarrier_reg_private_expedited_sync_core: AtomicBool::new(false),
         })
     }
 

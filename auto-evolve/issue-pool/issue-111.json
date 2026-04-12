@@ -1,0 +1,31 @@
+{
+  "id": "issue-111",
+  "title": "membarrier REGISTER_* 无进程状态仍返回成功，与 Linux 注册语义及 expedited 前置条件不一致",
+  "status": "resolved",
+  "created_at": "2026-04-26T00:00:00Z",
+  "resolved_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`ProcessData`**增加三个 **`AtomicBool`**：**`membarrier_reg_{global_expedited,private_expedited,private_expedited_sync_core}`**（新进程默认 **`false`**）。**`REGISTER_*`** 置位；**`GLOBAL_EXPEDITED`/`PRIVATE_EXPEDITED`/`PRIVATE_EXPEDITED_SYNC_CORE`** 未注册则 **`InvalidInput`**；**`GLOBAL`** 仍仅需本地 **`fence`**。模块注释说明注册语义。",
+  "files_changed": [
+    "kernel/src/task/mod.rs",
+    "kernel/src/syscall/sync/membarrier.rs"
+  ],
+  "description": "**`sys_membarrier`**（`kernel/src/syscall/sync/membarrier.rs`）对 **`MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED`**、**`MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED`**、**`MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE`** 直接 **`Ok(0)`**，**不**记录当前进程是否已注册。Linux 上 **private / expedited** 类命令通常要求目标进程（或自身）已执行对应 **REGISTER**，否则 **`EINVAL`**（或按命令不同返回码）。Starry 对 **`PRIVATE_EXPEDITED`** 等仍始终执行**本地** **`fence`** 并成功，与文件头「无跨 CPU **IPI**」说明一致，但 **REGISTER** 成功会给人「已具备 Linux 注册语义」的错觉，且无法检测「未注册却调用 expedited」一类用户态错误。若意图为桩实现，宜 **`Unsupported`**/**文档化**；若对齐 Linux，需 **`ProcessData`** 级注册位并在非注册路径 **`InvalidInput`**。",
+  "category": "syscall-stub",
+  "affected_syscalls": ["membarrier"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/sync/membarrier.rs:62-93"],
+    "related_files": [],
+    "key_insight": "`REGISTER_*` 分支空操作 `Ok(0)`，无状态"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "在未 **`REGISTER`** 时调用 **`MEMBARRIER_CMD_PRIVATE_EXPEDITED`**；Linux 多 **`EINVAL`**；Starry 若 **成功** 则与注册语义偏离（与当前「仅本地 fence」设计一致时可文档化）。",
+    "expected_output_contains": "",
+    "pass_criteria": "实现 **`ProcessData`** 注册标志并在 expedited 路径校验；或 **`REGISTER`**/**expedited** 统一 **`Unsupported`** 并写明与 Linux 差异。",
+    "last_result": "2026-04-12：**`ProcessData` membarrier注册位** + **expedited 校验**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** PASS；QEMU 未测"
+  },
+  "suggested_fix": "最小： **`REGISTER_*` → `Unsupported`**直至有状态机；或增加 **`AtomicBool`** 注册位并在 **`PRIVATE_EXPEDITED`** 检查。",
+  "references": ["man 2 membarrier", "Linux kernel membarrier.c"]
+}

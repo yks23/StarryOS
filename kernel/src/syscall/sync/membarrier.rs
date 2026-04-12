@@ -6,10 +6,16 @@
 //! **SMP:** A full `MEMBARRIER_CMD_GLOBAL` on Linux runs barriers on **all** CPUs via IPI; this
 //! kernel does not implement cross-CPU synchronization yet. The local fence is the best
 //! available approximation until an IPI-based global barrier exists.
+//!
+//! **Registration:** `*_EXPEDITED` / `*_SYNC_CORE` execution commands require a prior matching
+//! `REGISTER_*` on the calling process (**`EINVAL`** otherwise), matching Linux `membarrier.c`.
 
 use core::sync::atomic::{self, Ordering};
 
 use axerrno::{AxError, AxResult};
+use axtask::current;
+
+use crate::task::AsThread;
 
 /// `MEMBARRIER_CMD_QUERY`
 const MEMBARRIER_CMD_QUERY: i32 = 0;
@@ -72,19 +78,60 @@ pub fn sys_membarrier(cmd: i32, flags: u32, _cpu_id: i32) -> AxResult<isize> {
         return Err(AxError::InvalidInput);
     }
 
-    match cmd {
-        MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED
-        | MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED
-        | MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE => Ok(0),
+    let task = current();
+    let pd = &*task.as_thread().proc_data;
 
-        MEMBARRIER_CMD_GLOBAL
-        | MEMBARRIER_CMD_GLOBAL_EXPEDITED
-        | MEMBARRIER_CMD_PRIVATE_EXPEDITED => {
+    match cmd {
+        MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED => {
+            pd.membarrier_reg_global_expedited
+                .store(true, Ordering::Relaxed);
+            Ok(0)
+        }
+        MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED => {
+            pd.membarrier_reg_private_expedited
+                .store(true, Ordering::Relaxed);
+            Ok(0)
+        }
+        MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE => {
+            pd.membarrier_reg_private_expedited_sync_core
+                .store(true, Ordering::Relaxed);
+            Ok(0)
+        }
+
+        MEMBARRIER_CMD_GLOBAL => {
+            membarrier_cpu_local_fence();
+            Ok(0)
+        }
+
+        MEMBARRIER_CMD_GLOBAL_EXPEDITED => {
+            if !pd
+                .membarrier_reg_global_expedited
+                .load(Ordering::Relaxed)
+            {
+                return Err(AxError::InvalidInput);
+            }
+            membarrier_cpu_local_fence();
+            Ok(0)
+        }
+
+        MEMBARRIER_CMD_PRIVATE_EXPEDITED => {
+            if !pd
+                .membarrier_reg_private_expedited
+                .load(Ordering::Relaxed)
+            {
+                return Err(AxError::InvalidInput);
+            }
             membarrier_cpu_local_fence();
             Ok(0)
         }
 
         MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE => {
+            if !pd
+                .membarrier_reg_private_expedited_sync_core
+                .load(Ordering::Relaxed)
+            {
+                return Err(AxError::InvalidInput);
+            }
             membarrier_sync_core();
             Ok(0)
         }
