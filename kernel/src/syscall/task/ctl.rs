@@ -3,6 +3,8 @@ use alloc::sync::Arc;
 use axerrno::{AxError, AxResult};
 use axtask::current;
 use linux_raw_sys::general::{__user_cap_data_struct, __user_cap_header_struct};
+use linux_raw_sys::mempolicy::{MPOL_F_ADDR, MPOL_F_MEMS_ALLOWED, MPOL_F_NODE};
+use memory_addr::VirtAddr;
 use starry_vm::{VmMutPtr, VmPtr, vm_write_slice};
 
 use crate::{
@@ -127,6 +129,48 @@ pub fn sys_get_mempolicy(
     debug!(
         "sys_get_mempolicy <= policy {policy:p}, nodemask {nodemask:p}, maxnode {maxnode}, addr {addr:#x}, flags {flags:#x}"
     );
+
+    // Align with Linux `get_mempolicy(2)` / `do_get_mempolicy`: reject unknown flag bits and
+    // illegal combinations (issue-200). NUMA policy itself remains a stub (`MPOL_DEFAULT`).
+    const MPOL_F_ALLOWED: usize =
+        (MPOL_F_NODE | MPOL_F_ADDR | MPOL_F_MEMS_ALLOWED) as usize;
+    if flags & !MPOL_F_ALLOWED != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    let f_node = flags & MPOL_F_NODE as usize != 0;
+    let f_addr = flags & MPOL_F_ADDR as usize != 0;
+    let f_mems = flags & MPOL_F_MEMS_ALLOWED as usize != 0;
+    // MPOL_F_MEMS_ALLOWED must not be combined with MPOL_F_ADDR or MPOL_F_NODE.
+    if f_mems && (f_addr || f_node) {
+        return Err(AxError::InvalidInput);
+    }
+    // flags==0 requires addr==NULL; MPOL_F_ADDR requires non-NULL addr; otherwise addr must be NULL.
+    if flags == 0 && addr != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    if f_addr && addr == 0 {
+        return Err(AxError::InvalidInput);
+    }
+    if !f_addr && addr != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    // MPOL_F_NODE without MPOL_F_ADDR is only valid when the thread policy is interleave;
+    // this kernel reports default policy only → EINVAL (matches Linux for non-interleave).
+    if f_node && !f_addr {
+        return Err(AxError::InvalidInput);
+    }
+    if f_addr {
+        let vaddr = VirtAddr::from(addr);
+        let task = current();
+        let thr = task.as_thread();
+        let aspace = thr.proc_data.aspace.read();
+        if !aspace.contains_range(vaddr, 1) {
+            return Err(AxError::BadAddress);
+        }
+        if aspace.find_area(vaddr).is_none() {
+            return Err(AxError::BadAddress);
+        }
+    }
 
     // Linux EINVAL: non-NULL nodemask requires a positive maxnode (valid bit length).
     if !nodemask.is_null() && maxnode == 0 {

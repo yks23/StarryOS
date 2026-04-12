@@ -74,6 +74,7 @@ linkme = "0.3"
 linux-raw-sys = { version = "0.12", default-features = false, features = [
     "no_std",
     "general",
+    "mempolicy",
     "net",
     "prctl",
     "system",
