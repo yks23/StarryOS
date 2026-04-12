@@ -1,0 +1,27 @@
+{
+  "id": "issue-410",
+  "title": "`fcntl(2)` `F_DUPFD`/`F_DUPFD_CLOEXEC`：`dup_fd` 将 `min_fd` 经 `c_int` 截断再传入 `add_file_like_at_least`，超大 `arg` 可错误落成小 `startfd`",
+  "status": "resolved",
+  "created_at": "2026-04-12T16:00:00Z",
+  "severity": "low",
+  "description": "`kernel/src/syscall/fs/fd_ops.rs` **`dup_fd`**（约 **277–284** **行**）：在 **`get_file_like(old_fd)?`** **（** **`EBADF`** **分层** **）** **之后** **执行** **`let min_i = min_fd as c_int`** **，** **再以** **`min_i as usize`** **调用** **`add_file_like_at_least`** **，** **而** **未** **直接** **使用** **原始的** **`min_fd: usize`** **。**\n\n在 **64** **位** **（** **`usize`>** **`i32::MAX`** **）** **上** **，** **`as c_int`** **按** **C** **风格** **截断** **低** **32** **位** **：** **例如** **`min_fd == 0x1_0000_0000`** **时** **`min_i == 0`** **，** **随后** **`min_i as usize`****==** **0** **，** **等价于** **请求** **从** **fd** **0** **起** **分配** **，** **绕过** **`add_file_like_at_least`** **对** **`min_fd >= AX_FILE_LIMIT`** **（** **当前** **1024** **）** **的** **拒绝** **路径** **。** **Linux** **`dup_fd`** **`/`** **`__get_unused_fd_flags`** **对** **起始** **fd** **有** **上界** **与** **有效性** **检查** **，** **过大** **`arg`** **应** **`EINVAL`** **（** **且** **分层** **上** **仍在** **`fget`** **之后** **）** **。**\n\n**`min_i < 0`** **分支** **仅能** **捕获** **截断** **为** **负** **`i32`** **的** **部分** **输入** **，** **无法** **覆盖** **「** **截断** **为** **小** **非** **负** **数** **」** **类** **回绕** **。**\n\n建议：**`dup_fd`** **直接** **`add_file_like_at_least(f, cloexec, min_fd)`** **，** **或** **在** **转换** **前** **显式** **校验** **`min_fd <= i32::MAX as usize`** **且** **`min_fd < AX_FILE_LIMIT`** **（** **及** **与** **`RLIMIT_NOFILE`** **一致** **的** **上界** **）** **，** **对齐** **Linux** **范围** **语义** **；** **注释** **引用** **issue-410** **及** **`file/mod.rs`** **`add_file_like_at_least`** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["fcntl"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/fd_ops.rs:277-284"],
+    "related_files": ["kernel/src/file/mod.rs:274-295", "kernel/src/task/resources.rs"],
+    "key_insight": "移除 `usize`→`c_int`→`usize`；`min_fd > c_int::MAX` → `InvalidInput`；`add_file_like_at_least` 仍处理 `AX_FILE_LIMIT`/`RLIMIT_NOFILE`；`get_file_like` 仍先于非法 `min_fd`"
+  },
+  "fix_summary": "`dup_fd`：去掉 `min_fd as c_int` 中间层，直接以 `usize` 调用 `add_file_like_at_least`；在 `min_fd > c_int::MAX as usize` 时返回 `InvalidInput`，避免 64 位截断回绕。",
+  "files_changed": ["kernel/src/syscall/fs/fd_ops.rs"],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：`fcntl(fd, F_DUPFD, 0x100000000)` 对照 Linux `errno`/`dup` 行为。",
+    "expected_output_contains": "",
+    "pass_criteria": "非法/过大 `startfd` 返回 EINVAL（`InvalidInput`）；合法路径与 `EBADF` 分层不变。",
+    "last_result": "通过：`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`（exit 0）"
+  },
+  "suggested_fix": "删除 `dup_fd` 中经 `c_int` 的中间转换：使用 `min_fd` 原值调用 `add_file_like_at_least`，并补充与 `RLIMIT_NOFILE`/`AX_FILE_LIMIT` 对齐的显式上界校验（若 `add_file_like_at_least` 不覆盖全部 Linux 情况）。",
+  "references": ["man 2 fcntl", "kernel/src/syscall/fs/fd_ops.rs", "kernel/src/file/mod.rs", "issue-252", "issue-341"]
+}

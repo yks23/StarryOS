@@ -276,11 +276,13 @@ pub fn sys_close_range(first: i32, last: i32, flags: u32) -> AxResult<isize> {
 
 fn dup_fd(old_fd: c_int, cloexec: bool, min_fd: usize) -> AxResult<isize> {
     let f = get_file_like(old_fd)?;
-    let min_i = min_fd as c_int;
-    if min_i < 0 {
+    // Linux fd numbers are `int`; do not truncate `usize`→`c_int`→`usize` (e.g. `0x1_0000_0000` → 0,
+    // bypassing `add_file_like_at_least` bounds). `add_file_like_at_least` enforces `AX_FILE_LIMIT`
+    // (issue-410; `file/mod.rs`).
+    if min_fd > c_int::MAX as usize {
         return Err(AxError::InvalidInput);
     }
-    let new_fd = add_file_like_at_least(f, cloexec, min_i as usize)?;
+    let new_fd = add_file_like_at_least(f, cloexec, min_fd)?;
     Ok(new_fd as _)
 }
 
