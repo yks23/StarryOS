@@ -233,6 +233,11 @@ pub fn sys_unlinkat(dirfd: i32, path: *const c_char, flags: usize) -> AxResult<i
 
     debug!("sys_unlinkat <= dirfd: {dirfd}, path: {path:?}, flags: {flags}");
 
+    // Linux unlinkat(2): flags must be 0 or AT_REMOVEDIR only.
+    if flags != 0 && flags != AT_REMOVEDIR as usize {
+        return Err(AxError::InvalidInput);
+    }
+
     with_fs(dirfd, |fs| {
         if flags == AT_REMOVEDIR as _ {
             fs.remove_dir(path)?;
