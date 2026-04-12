@@ -90,6 +90,11 @@ pub fn sys_chroot(path: *const c_char) -> AxResult<isize> {
     let path = vm_load_string(path)?;
     debug!("sys_chroot <= path: {path}");
 
+    // Linux rejects empty pathname with EINVAL before path resolution (issue-391).
+    if path.is_empty() {
+        return Err(AxError::InvalidInput);
+    }
+
     let mut fs = FS_CONTEXT.lock();
     let loc = fs.resolve(path)?;
     if loc.node_type() != NodeType::Directory {

@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-17：issue-391 resolved（**`chroot`**：**`path.is_empty()`** **`resolve`** **前** **→** **`InvalidInput`**；**`ctl.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-16：issue-390 resolved（**`nanosleep`/`clock_nanosleep`**：**`checked_sub`** **`Some(0)`** **→** **`Ok(0)`**；**仅** **非零** **`rem`** **→** **`EINTR`**；**`schedule.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-15：issue-389 resolved（**`SocketAddrExt::family`(`SocketAddrEx`)** **委托** **`Ip`/`Unix`/`Vsock`** **`family()`**；**`addr.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-14：issue-388 resolved（**`fspick`**：**`from_fd`** **后** **`get_as_str`** **前** **`flags & !FSPICK_KNOWN`** **→** **`InvalidInput`**；**`AT_SYMLINK_NOFOLLOW`/`AT_NO_AUTOMOUNT`/`AT_EMPTY_PATH`**；**`mount.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
