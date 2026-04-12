@@ -1,0 +1,27 @@
+{
+  "id": "issue-236",
+  "title": "splice：`fd_in` 与 `fd_out` 相同未拒绝，Linux 返回 EINVAL",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`sys_splice`**：在 **`flags` 合法之后 **`fd_in == fd_out` → `AxError::InvalidInput`**（**EINVAL**），与 Linux **`splice(2)`**/**`do_splice`** 及 **issue-235** **`sendfile`** 对称。",
+  "files_changed": ["kernel/src/syscall/fs/io.rs"],
+  "description": "**`kernel/src/syscall/fs/io.rs`** **`sys_splice`**（约 **484–561** 行）在校验 **`flags`**、**`DummyFd`**、构造 **`src`/`dst`** 前**未** 拒绝 **`fd_in == fd_out`**。\n\n**Linux `splice(2)`** / **内核 `do_splice`**：输入与输出**不得为同一文件描述符**（**`in_fd == out_fd` → EINVAL**），避免对同一 pipe 做无意义或自引用 splice。同文件 **`sys_sendfile`**（**issue-235 verified**）已在入口 **`in_fd == out_fd` → `InvalidInput`**；**`sys_copy_file_range`** 对同 inode 有重叠区间检查；**`splice`** 缺少对称防护。\n\n**建议**：在 **`sys_splice` 开头**（**`flags` 校验之后**）**`if fd_in == fd_out { return Err(AxError::InvalidInput); }`**（**EINVAL**）。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["splice"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/io.rs:484-561"],
+    "related_files": ["kernel/src/syscall/fs/io.rs:389-416"],
+    "key_insight": "sendfile 已拒同 fd；splice 未拒"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；`splice(fd, NULL, fd, NULL, n, 0)`。",
+    "expected_output_contains": "",
+    "pass_criteria": "`fd_in == fd_out` → EINVAL/InvalidInput。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos：通过（exit 0）"
+  },
+  "suggested_fix": "`if fd_in == fd_out { return Err(AxError::InvalidInput); }` 于 `sys_splice` 开头（`flags` 合法之后）。",
+  "references": ["man 2 splice", "issue-235"]
+}

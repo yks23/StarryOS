@@ -503,6 +503,11 @@ pub fn sys_splice(
         return Err(AxError::InvalidInput);
     }
 
+    // Linux `splice(2)` / `do_splice`: input and output must not be the same file descriptor → EINVAL.
+    if fd_in == fd_out {
+        return Err(AxError::InvalidInput);
+    }
+
     let mut has_pipe = false;
 
     if DummyFd::from_fd(fd_in).is_ok() || DummyFd::from_fd(fd_out).is_ok() {
