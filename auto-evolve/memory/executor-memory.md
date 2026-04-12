@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-23：issue-397 resolved（**`symlinkat`/`symlink`**：**`linkpath.is_empty()`** **`symlink`** **前** **→** **`InvalidInput`**；**`target`** **可** **空**；**`ctl.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-22：issue-396 resolved（**`renameat2`/`renameat`/`rename`**：**`old_path`/`new_path`** **`is_empty()`** **`resolve_parent`** **前** **→** **`InvalidInput`**；**`ctl.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-21：issue-395 resolved（**`readlinkat`/`readlink`**：**`path.is_empty()`** **`resolve_no_follow`** **前** **→** **`InvalidInput`**；**`ctl.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-20：issue-394 resolved（**`unlinkat`/`unlink`/`rmdir`**：**`path.is_empty()`** **`from_fd`** **前** **→** **`InvalidInput`**；**`ctl.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）

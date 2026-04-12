@@ -395,6 +395,11 @@ pub fn sys_symlinkat(
 ) -> AxResult<isize> {
     let target = vm_load_string(target)?;
     let linkpath = vm_load_string(linkpath)?;
+    // Linux rejects empty `linkpath` with EINVAL; `target` may be "" (issue-397; issue-393/396 theme).
+    if linkpath.is_empty() {
+        return Err(AxError::InvalidInput);
+    }
+
     debug!("sys_symlinkat <= target: {target:?}, new_dirfd: {new_dirfd}, linkpath: {linkpath:?}");
 
     if new_dirfd != AT_FDCWD && !linkpath.starts_with('/') {
