@@ -1,0 +1,28 @@
+{
+  "id": "issue-080",
+  "title": "poll/ppoll 在存在 POLLNVAL 时提前返回，合法 fd 未参与 poll 与 Linux 不符",
+  "status": "resolved",
+  "created_at": "2026-04-13T17:00:00Z",
+  "resolved_at": "2026-04-12T22:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`do_poll`**：去掉 **`POLLNVAL` 后 `res>0` 早退**；无合法 fd 时仅返回 **`nval_ready`**；否则照常 **`poll_io`**，成功返回值 **`nval_ready + 合法 fd 就绪数`**。合法条目用 **`fd_indices`** 写 **`revents`**（避免 `&mut revents` 借用阻塞超时路径统计）。**`future::timeout` 失败**时按 **`revents != 0`** 扫描整表计数（含 **`POLLNVAL`**），替代原 **`Ok(0)`**。",
+  "files_changed": ["kernel/src/syscall/io_mpx/poll.rs"],
+  "description": "**`do_poll`**（`kernel/src/syscall/io_mpx/poll.rs`）遍历 **`pollfd`** 时，对 **`get_file_like` 失败** 的条目设置 **`POLLNVAL`** 并 **`res += 1`**；若 **`res > 0`** 则**立即** **`return Ok(res)`**（约 50–51 行），**不**进入 **`poll_io`** 等待路径。Linux **`poll(2)`** 对**同一** **`pollfd`** **数组**中**合法与非法 fd** 会**同时** 更新各 **`revents`**（**`POLLNVAL`** 与 **`POLLIN`** 等可并存），返回值为一组 fd 上**就绪事件数**（宿主机实验：无效 fd + 可读管道 **`poll` 返回 2** 且两 **`revents`** 均非 0）。当前实现会在**仅因部分 fd 非法**累加 **`res`** 时**跳过**后续 **`poll_io`**，导致**合法 fd** 的 **`revents`** **仍为用户旧值**、**未**反映本次 **`poll`** 的就绪位，与 Linux 可观察行为不一致。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["poll", "ppoll"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/io_mpx/poll.rs:26-52"],
+    "related_files": [],
+    "key_insight": "`res > 0` 早退跳过 `poll_io`；与 Linux 混合 NVAL+就绪不符"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "宿主机：pollfd[0] 为非法 fd、pollfd[1] 为已写入数据的管道读端，poll(..., 0) 期望返回 2 且 revents[1] 含 POLLIN；Starry QEMU 若合法 fd 未置位则 FAIL。",
+    "expected_output_contains": "",
+    "pass_criteria": "在设置 **POLLNVAL** 后仍对合法 fd 执行 **`poll`**，或与 Linux 一致的合并语义。",
+    "last_result": "2026-04-12：早退移除 + **`fd_indices`** + 超时重算计数；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** PASS"
+  },
+  "suggested_fix": "移除 **`if res > 0 { return Ok(res); }`** 早退，改为在 **`poll_io`** 之后统一统计返回值；或对 **POLLNVAL** 与 **就绪** **分阶段** 合并 **`revents`**。",
+  "references": ["man 2 poll", "man 2 ppoll"]
+}

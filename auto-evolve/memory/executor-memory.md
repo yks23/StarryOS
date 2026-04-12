@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-080 resolved（**`poll`/`ppoll`** **`do_poll`**：不再因 **`POLLNVAL` 早退**；**`nval_ready` + `poll_io`**；**`fd_indices`** 写 **`revents`**；超时按全表 **`revents`** 计数；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-079 resolved（**`getcwd`**：**`buf==NULL`** 时 **`size>0` → `BadAddress`**、**`size==0` → `OutOfRange`**；成功返回**写入长度（含 NUL）**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-078 resolved（**`epoll_ctl`** **`parse_event`**：**`KNOWN_EPOLL_EVENTS_MASK`**（**`IoEvents` ∪ `EpollFlags` ∪ `EPOLLEXCLUSIVE`/`EPOLLWAKEUP`**）未知位 **`InvalidInput`**；**`EPOLLEXCLUSIVE`/`EPOLLWAKEUP`** 剥离后 **`from_bits`** 拆分；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-077 resolved（**`memfd_create`/`memfd_secret`**：**`MemfdCreatedFile`**，**`path`** → **`/memfd:{name}`**；仍用 **`/tmp/memfd-*`** 作实际文件；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -60,6 +61,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-080 | poll POLLNVAL no early return + timeout count | resolved | 2026-04-12 |
 | issue-079 | getcwd NULL buf EFAULT/ERANGE + return length | resolved | 2026-04-12 |
 | issue-078 | epoll_ctl events KNOWN_MASK + from_bits EINVAL | resolved | 2026-04-12 |
 | issue-077 | memfd name → MemfdCreatedFile path /memfd: | resolved | 2026-04-13 |

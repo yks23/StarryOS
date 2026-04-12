@@ -23,42 +23,43 @@ fn do_poll(
 ) -> AxResult<isize> {
     debug!("do_poll fds={poll_fds:?} timeout={timeout:?}");
 
-    let mut res = 0isize;
+    let mut nval_ready = 0isize;
     let mut fds = Vec::with_capacity(poll_fds.len());
-    let mut revents = Vec::with_capacity(poll_fds.len());
-    for fd in poll_fds.iter_mut() {
-        if fd.fd < 0 {
+    let mut fd_indices = Vec::with_capacity(poll_fds.len());
+    for (idx, pfd) in poll_fds.iter_mut().enumerate() {
+        if pfd.fd < 0 {
             // Linux: entries with negative fd are ignored; revents must be cleared.
-            fd.revents = 0;
+            pfd.revents = 0;
             continue;
         }
-        match get_file_like(fd.fd) {
+        match get_file_like(pfd.fd) {
             Ok(f) => {
                 fds.push((
                     f,
-                    IoEvents::from_bits(fd.events as _).ok_or(AxError::InvalidInput)?
+                    IoEvents::from_bits(pfd.events as _).ok_or(AxError::InvalidInput)?
                         | IoEvents::ALWAYS_POLL,
                 ));
-                revents.push(&mut fd.revents);
+                fd_indices.push(idx);
             }
             Err(_) => {
                 // If the fd is invalid, set revents to POLLNVAL
-                fd.revents = POLLNVAL as _;
-                res += 1;
+                pfd.revents = POLLNVAL as _;
+                nval_ready += 1;
             }
         }
     }
-    if res > 0 {
-        return Ok(res);
-    }
     let fds = FdPollSet(fds);
+
+    if fds.0.is_empty() {
+        return Ok(nval_ready);
+    }
 
     with_blocked_signals(sigmask, || {
         match block_on(future::timeout(
             timeout,
             poll_io(&fds, IoEvents::empty(), false, || {
                 let mut res = 0usize;
-                for ((fd, events), revents) in fds.0.iter().zip(revents.iter_mut()) {
+                for ((fd, events), &idx) in fds.0.iter().zip(fd_indices.iter()) {
                     let mut result = fd.poll();
                     if result.contains(IoEvents::IN) {
                         result |= IoEvents::RDNORM;
@@ -68,20 +69,29 @@ fn do_poll(
                     }
                     result &= *events;
 
-                    **revents = result.bits() as _;
-                    if **revents != 0 {
+                    poll_fds[idx].revents = result.bits() as _;
+                    if poll_fds[idx].revents != 0 {
                         res += 1;
                     }
                 }
                 if res > 0 {
-                    Ok(res as _)
+                    Ok(res as isize)
                 } else {
                     Err(AxError::WouldBlock)
                 }
             }),
         )) {
-            Ok(r) => r,
-            Err(_) => Ok(0),
+            Ok(r) => r.map(|c: isize| c + nval_ready),
+            Err(_) => {
+                // Timeout: Linux counts every pollfd with non-zero revents (includes POLLNVAL).
+                let mut total = 0isize;
+                for fd in poll_fds.iter() {
+                    if fd.revents != 0 {
+                        total += 1;
+                    }
+                }
+                Ok(total)
+            }
         }
     })
 }
