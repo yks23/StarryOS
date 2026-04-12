@@ -76,7 +76,8 @@ impl SocketAddrExt for SocketAddr {
 
 impl SocketAddrExt for SocketAddrV4 {
     fn read_from_user(addr: UserConstPtr<sockaddr>, addrlen: socklen_t) -> AxResult<Self> {
-        if addrlen != size_of::<sockaddr_in>() as socklen_t {
+        // Linux accepts `addrlen >= sizeof(sockaddr_in)` and uses the leading struct bytes only.
+        if (addrlen as usize) < size_of::<sockaddr_in>() {
             return Err(AxError::InvalidInput);
         }
         let addr_in = addr.cast::<sockaddr_in>().get_as_ref()?;
@@ -109,7 +110,7 @@ impl SocketAddrExt for SocketAddrV4 {
 
 impl SocketAddrExt for SocketAddrV6 {
     fn read_from_user(addr: UserConstPtr<sockaddr>, addrlen: socklen_t) -> AxResult<Self> {
-        if addrlen != size_of::<sockaddr_in6>() as socklen_t {
+        if (addrlen as usize) < size_of::<sockaddr_in6>() {
             return Err(AxError::InvalidInput);
         }
         let addr_in6 = addr.cast::<sockaddr_in6>().get_as_ref()?;
@@ -212,7 +213,7 @@ pub struct sockaddr_vm {
 #[cfg(feature = "vsock")]
 impl SocketAddrExt for VsockAddr {
     fn read_from_user(addr: UserConstPtr<sockaddr>, addrlen: socklen_t) -> AxResult<Self> {
-        if addrlen != size_of::<sockaddr_vm>() as socklen_t {
+        if (addrlen as usize) < size_of::<sockaddr_vm>() {
             return Err(AxError::InvalidInput);
         }
 
