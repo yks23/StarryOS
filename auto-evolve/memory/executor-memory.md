@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-162 resolved（**`readlinkat`**：**`size==0`** **`EINVAL`** 后、**`vm_load_string`** 前 **`dirfd != AT_FDCWD`** → **`Directory::from_fd`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-161 resolved（**`unlinkat`**：**`flags`** 校验后、**`vm_load_string`** 前 **`dirfd != AT_FDCWD`** → **`Directory::from_fd`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-160 resolved（**`mkdirat`**：**`dirfd != AT_FDCWD`** 时先 **`Directory::from_fd`** 再 **`vm_load_string(path)`**，**`EBADF`** 先于路径读；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-159 resolved（**`syncfs`**：复用 **`location_from_fd`**，**`MemfdCreatedFile`**/**memfd** **fd** 可 **`filesystem().flush()`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）

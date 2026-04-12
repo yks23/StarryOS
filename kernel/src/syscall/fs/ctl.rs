@@ -343,6 +343,11 @@ pub fn sys_readlinkat(
         return Err(AxError::InvalidInput);
     }
 
+    // Linux do_readlinkat: fdget(dfd) before copy_from_user(pathname) → EBADF first (issue-162).
+    if dirfd != AT_FDCWD {
+        let _ = Directory::from_fd(dirfd)?;
+    }
+
     let path = vm_load_string(path)?;
 
     debug!("sys_readlinkat <= dirfd: {dirfd}, path: {path:?}");
