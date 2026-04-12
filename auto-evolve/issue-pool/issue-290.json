@@ -1,0 +1,27 @@
+{
+  "id": "issue-290",
+  "title": "fadvise64：仅对 pipe 特判 `ESPIPE`，socket/timerfd 等非常规文件仍走桩 `Ok(0)`，与 Linux 拒绝对不支持 fd 类型的行为可能不一致",
+  "status": "resolved",
+  "created_at": "2026-04-13T05:00:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_fadvise64` 先 `get_file_like(fd)?`（非法 fd → EBADF）。`Pipe` → `ESPIPE`；仅 `File` 与 `MemfdCreatedFile` 在校验 `advice`/`offset`/`len` 后桩 `Ok(0)`；其余 `FileLike`（socket、timerfd、epoll、eventfd、directory 等）→ `InvalidInput`（EINVAL），与 Linux `vfs_fadvise` 仅面向常规文件 inode 的行为对齐。",
+  "files_changed": ["kernel/src/syscall/fs/io.rs"],
+  "description": "**`kernel/src/syscall/fs/io.rs`** **`sys_fadvise64`** **（** **约** **228–251** **行** **）** **在** **`Pipe::from_fd(fd).is_ok()`** **时** **返回** **`ESPIPE`** **（** **注释** **对齐** **Linux** **对** **非** **可** **定位** **fd** **的** **行为** **）** **；** **否则** **在校验** **`advice`** **与** **`offset`/`len`** **区间** **后** **直接** **`Ok(0)`** **桩** **。**\n\n**Linux** **`vfs_fadvise`** **/****`generic_file_fadvise`** **路径** **通常** **仅** **对** **常规** **文件** **或** **带** **`->fadvise`** **的** **inode** **生效** **；** **对** **socket** **、** **eventfd** **、** **timerfd** **、** **epoll** **等** **无** **fadvise** **实现** **的** **fd** **多** **返回** **`EINVAL`** **（** **或** **与** **pipe** **类似的** **错误** **，** **视** **子系统** **而定** **）** **，** **而** **非** **静默** **成功** **。** **当前** **除** **pipe** **外** **一律** **成功** **桩** **，** **与** **在** **这些** **fd** **上** **调用** **`posix_fadvise`** **的** **Linux** **返回值** **可能** **分叉** **。**\n\n**建议**：按 **`FileLike`** **/****`File`** **类型** **分支** **：** **常规** **文件** **保持** **桩** **`Ok(0)`** **；** **pipe** **→** **`ESPIPE`** **；** **socket** **/****其它** **不支持** **项** **→** **`EINVAL`** **或与** **目标** **Linux** **版本** **逐条** **对齐** **；** **或** **在** **文档** **中** **明确** **「** **除** **pipe** **外** **fadvise** **均** **视为** **成功** **no-op** **」** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["fadvise64"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/io.rs:228-251"],
+    "related_files": [],
+    "key_insight": "仅 pipe→ESPIPE；其它非普通文件仍 Ok(0)，Linux 常 EINVAL"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；在 socket/timerfd 等 fd 上对照 Linux `posix_fadvise` 返回值。",
+    "expected_output_contains": "",
+    "pass_criteria": "各 fd 类型上 errno 与目标 Linux 一致，或显式文档化桩语义。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "扩展类型分支：对无 fadvise 支持的 fd 返回 EINVAL（或与 Linux 一致），保留 pipe→ESPIPE。",
+  "references": ["man 2 posix_fadvise", "kernel/src/syscall/fs/io.rs", "issue-239"]
+}

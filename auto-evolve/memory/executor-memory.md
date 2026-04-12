@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-290 resolved（**`fadvise64`**：**`get_file_like`** 后 **`Pipe`→ESPIPE**；仅 **`File`/`MemfdCreatedFile`** 桩 **`Ok(0)`**；socket/timerfd/epoll 等 → **`EINVAL`**；**`fs/io.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-289 resolved（**`pipe2`**：**`UserPtr::from(fds).get_as_mut()`** 先于 **`Pipe::new`**/**`add_to_fd_table`**（与 **issue-286** **`socketpair`** 同类）；**`fs/pipe.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-288 resolved（**`gettimeofday(2)`** **`struct timezone *tz`**：**`tz != NULL`** 时 **`vm_write`** 全零 **`timezone`**；**`mod.rs`** 转发 **`uctx.arg1()`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-287 resolved（**`times(2)` `struct Tms`**：四字段为 **`linux_raw_sys::general::__kernel_clock_t`**（uapi **`clock_t`**），**`cpu_nanos_to_clock_t`** 饱和到有符号范围；**`time.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -313,6 +314,7 @@
 | issue-271 | mlock/mlock2 addr 须页对齐 EINVAL | resolved | 2026-04-12 |
 | issue-272 | lseek SEEK_SET 负 offset EINVAL | resolved | 2026-04-12 |
 | issue-273 | prlimit64 跨 pid 权限 EPERM | resolved | 2026-04-12 |
+| issue-290 | fadvise64 非 File/Memfd 非 pipe → EINVAL | resolved | 2026-04-13 |
 | issue-289 | pipe2 fds get_as_mut 先于 Pipe::new | resolved | 2026-04-13 |
 | issue-288 | gettimeofday tz 非 NULL 写全零 timezone | resolved | 2026-04-13 |
 | issue-287 | times Tms 字段 __kernel_clock_t | resolved | 2026-04-13 |
@@ -523,7 +525,7 @@
 - **`prlimit64`**：对齐 Linux **`do_prlimit`**（issue-141）：**`old_limit` 非空**时先在进程内保存变更前的 **`rlimit64`**；**`new_limit` 非空**时先 **`vm_read`** 并校验（**`rlim_cur`≤`rlim_max`**、非法抬高硬上限 **`EPERM`**，同 issue-044），成功后再更新内核 **`rlimit`**；最后再 **`vm_write(old_limit)`** 写出快照。**`new_limit`** 读/校验失败时不应已写出 **`old`**。可降低硬上限或保持不变并更新 **`rlim_cur`**（在 **`rlim_cur <= rlim_max`** 前提下）。跨 **`pid`**（非同一 **`ProcessData`**）须 **`euid==0`**、有效 **`CAP_SYS_RESOURCE`**（位 **24**），或与目标 **`ruid` 相同**，否则 **`EPERM`**（issue-273；无 user namespace）。
 - **`ioctl(FIONBIO)`**：第三参为 **`int *`**（Linux）；用 **`(arg as *const c_int).vm_read()`** 读整型，**`set_nonblocking(value != 0)`**；勿只读单字节、勿将取值限制为 0/1（**`2`**、**`256`** 等小端首字节为 0 的非零值须启用 **`O_NONBLOCK`**）。
 - **`getrandom(2)`**：**`flags`** 须为 **`linux_raw_sys::general`** 中 **`GRND_NONBLOCK|GRND_RANDOM|GRND_INSECURE`** 的子集（与 **`uapi/linux/random.h`** 一致），否则 **`EINVAL`**；掩码校验须先于 **`len==0`** 的 **`Ok(0)`** 早退（issue-151，与 issue-042 互补）。勿用 **`from_bits_retain`** 静默丢弃未知位。**`len > 0`** 时 **`buf == NULL`** → **`BadAddress`（EFAULT）**，先于 **`resolve`/`read_at`**（issue-285）。
-- **`fadvise64`**：管道等不可 seek 的 fd 上 Linux 为 **`ESPIPE`**（非法 seek），非 **`EPIPE`**（断管）。实现上 **`Pipe::from_fd`** 分支返回 **`LinuxError::ESPIPE.into()`**（**`axerrno::LinuxError`**），勿用 **`AxError::BrokenPipe`**。真 **`fadvise`** 语义仍为桩；**`advice`** 须 **≤ `POSIX_FADV_WIPEONFORK`（7）**（**`uapi/linux/fadvise.h`**，含 **COLD/WIPEONFORK**，issue-239），否则 **`EINVAL`**；非 pipe 时 **`offset`/`len`** 须非负，且 cast 为 **`u64`** 后 **`checked_add`** 不溢出，否则 **`InvalidInput`**（**EINVAL**），与 **`sys_fallocate`** 一致。
+- **`fadvise64`**：先 **`get_file_like(fd)?`**（非法 fd → **EBADF**）。**`Pipe`** → **`ESPIPE`**（不可定位，非 **`EPIPE`**；issue-040）；仅 **`File`**/**`MemfdCreatedFile`** 在 **`advice`/`offset`/`len`** 校验通过后桩 **`Ok(0)`**；socket/timerfd/epoll/eventfd/directory 等其它 **`FileLike`** → **`InvalidInput`（EINVAL）**（issue-290，对齐 Linux **`vfs_fadvise`** 仅常规文件）。真 **`fadvise`** 语义仍为桩；**`advice`** 须 **≤ `POSIX_FADV_WIPEONFORK`（7）**（issue-239）；**`offset`/`len`** 非负且 **`u64` `checked_add`** 不溢出（issue-114），与 **`sys_fallocate`** 区间校验一致。
 - **`fsync(2)`/`fdatasync(2)`**：须 **`get_file_like`** 后对 **`File`** 或 **`MemfdCreatedFile`**（包装 **`File`**）调用 **`axfs::File::sync`**；**pipe**、**socket**、**目录**、**epoll** 等其它 **`FileLike`** → **`InvalidInput`**（**EINVAL**），勿用 **`File::from_fd`**（会得到 **`BrokenPipe`**/**`IsADirectory`**，issue-130）。无效 **`fd`** 仍为 **`BadFileDescriptor`**（**EBADF**）。
 - **`read(2)`/`write(2)`**（经 **`readv`/`writev`**）：**`Directory`** **`FileLike::read`/`write`** 须 **`IsADirectory`**（**EISDIR**），勿 **`BadFileDescriptor`**（**EBADF**），与 Linux 及 **`pread`/`pwrite`** 经 **`File::from_fd`** 行为一致（issue-143）。
 - **`lseek(2)`**：**`whence==SEEK_SET`** 且 **`offset<0`** → **`InvalidInput`**（**EINVAL**），勿将 **`offset as u64`** 送入 **`SeekFrom::Start`**（issue-272）；**`SEEK_DATA`/`SEEK_HOLE`** 稠密文件语义见 issue-085。

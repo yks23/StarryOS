@@ -232,9 +232,14 @@ pub fn sys_fadvise64(
     advice: u32,
 ) -> AxResult<isize> {
     debug!("sys_fadvise64 <= fd: {fd}, offset: {offset}, len: {len}, advice: {advice}");
-    if Pipe::from_fd(fd).is_ok() {
+    let f = get_file_like(fd)?;
+    if f.downcast_ref::<Pipe>().is_some() {
         // Linux: fadvise on non-seekable fd (pipe, etc.) → ESPIPE, not EPIPE (broken pipe).
         return Err(LinuxError::ESPIPE.into());
+    }
+    if f.downcast_ref::<File>().is_none() && f.downcast_ref::<MemfdCreatedFile>().is_none() {
+        // Linux `vfs_fadvise`: regular-file-like only; socket/timerfd/epoll/… → EINVAL (issue-290).
+        return Err(AxError::InvalidInput);
     }
     if advice > POSIX_FADV_MAX {
         return Err(AxError::InvalidInput);
