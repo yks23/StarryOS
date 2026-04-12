@@ -55,16 +55,20 @@ pub fn sys_signalfd4(
         return Err(AxError::BadAddress);
     }
 
-    // issue-210: same word-wise path as `rt_sigprocmask` / `read_signal_set_user`.
-    let mask = read_signal_set_user(mask)?;
-
-    // If fd is not -1, we should modify the existing signalfd
+    // If fd is not -1, resolve `fd` before `read_signal_set_user` so **EBADF** precedes **EFAULT** on
+    // bad `fd` + unreadable `mask` (Linux `__do_signalfd4` / `fget` order; issue-319). New fd uses
+    // mask read first (issue-210 path unchanged for `fd == -1`).
     if fd != -1 {
         let signalfd = Signalfd::from_fd(fd)?;
+        // issue-210: same word-wise path as `rt_sigprocmask` / `read_signal_set_user`.
+        let mask = read_signal_set_user(mask)?;
         signalfd.update_mask(mask);
         signalfd.set_nonblocking(flags.contains(SignalfdFlags::NONBLOCK))?;
         return Ok(fd as _);
     }
+
+    // issue-210: same word-wise path as `rt_sigprocmask` / `read_signal_set_user`.
+    let mask = read_signal_set_user(mask)?;
 
     // Create a new Signalfd
     let signalfd = Signalfd::new(mask);

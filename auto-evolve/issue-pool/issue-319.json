@@ -1,0 +1,27 @@
+{
+  "id": "issue-319",
+  "title": "`signalfd4(2)`：`sys_signalfd4` 在 `fd != -1` 修改已有 signalfd 路径上先 `read_signal_set_user(mask)` 再 `Signalfd::from_fd(fd)`，与 Linux 先 `fget`/校验 `fd`（`EBADF`）再 `copy_from_user(mask)`（`EFAULT`）时，「无效 fd」与「不可读 mask」组合的 `EBADF`/`EFAULT` 优先级可能不完全一致",
+  "status": "resolved",
+  "created_at": "2026-04-23T14:00:00Z",
+  "severity": "low",
+  "fix_summary": "在 `sys_signalfd4` 中，当 `fd != -1` 时先 `Signalfd::from_fd(fd)?` 再 `read_signal_set_user(mask)?`；`fd == -1` 新建路径仍先 `mask.is_null()` 再 `read_signal_set_user` 后 `Signalfd::new`。注释 issue-319/issue-210。更新 `executor-memory` signalfd4 条、表格与最近更新；新增 `issue-319.json`。",
+  "files_changed": ["kernel/src/syscall/fs/signalfd.rs", "auto-evolve/memory/executor-memory.md"],
+  "description": "**`kernel/src/syscall/fs/signalfd.rs`** **`sys_signalfd4`** **（** **约** **45–66** **行** **）** **在** **`mask.is_null()`** **之后** **立即** **`read_signal_set_user(mask)?`** **，** **然后** **才** **`if fd != -1 { Signalfd::from_fd(fd)? }`** **。** **Linux** **`__do_signalfd4`** **对** **已有** **`fd`** **分支** **通常** **先** **解析** **文件** **描述** **符** **/** **`fget`** **，** **再** **拷贝** **`sigset`** **；** **当** **`fd`** **无效** **且** **`mask`** **指向** **不可** **访问** **用户** **页** **时** **，** **上游** **多** **先** **`EBADF`** **，** **本** **实现** **可能** **先** **在** **`read_signal_set_user`** **失败** **为** **`BadAddress`** **（** **EFAULT** **类** **）** **。** **与** **issue-210** **字** **级** **读** **`mask`** **的** **实现** **选择** **相关** **，** **亦** **与** **issue-303**/**issue-316** **类** **「** **句柄** **/** **用户** **拷贝** **顺序** **」** **同类** **。**\n\n**建议** **：** **对** **`fd != -1`** **分支** **先** **`Signalfd::from_fd(fd)?`** **再** **`read_signal_set_user`** **，** **或** **对照** **Linux** **`signalfd.c`** **入口** **顺序** **并** **注释** **说明** **差异** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["signalfd4"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/signalfd.rs:39-66"],
+    "related_files": ["kernel/src/syscall/signal.rs"],
+    "key_insight": "signalfd4 fd vs mask read order"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：坏 fd + 不可读 mask 对照 Linux 返回顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游 `signalfd4` 修改路径错误优先级一致，或注释说明差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `fd != -1` 时先 `from_fd`/`get_file_like`，再 `read_signal_set_user`；新建 `fd == -1` 分支可保持先读 mask。",
+  "references": ["man 2 signalfd", "kernel/src/syscall/fs/signalfd.rs", "issue-210", "issue-303"]
+}
