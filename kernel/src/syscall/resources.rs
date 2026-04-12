@@ -99,6 +99,15 @@ pub fn sys_getrusage(who: i32, usage: *mut rusage) -> AxResult<isize> {
     const RUSAGE_CHILDREN: i32 = linux_raw_sys::general::RUSAGE_CHILDREN;
     const RUSAGE_THREAD: i32 = linux_raw_sys::general::RUSAGE_THREAD as i32;
 
+    match who {
+        RUSAGE_SELF | RUSAGE_CHILDREN | RUSAGE_THREAD => {}
+        _ => return Err(AxError::InvalidInput),
+    }
+    if usage.is_null() {
+        // Linux `getrusage(2)`: `usage` must be writable; NULL → EFAULT (after `who` is valid).
+        return Err(AxError::BadAddress);
+    }
+
     let curr = current();
     let thr = curr.as_thread();
 

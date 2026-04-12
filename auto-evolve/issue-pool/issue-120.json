@@ -1,0 +1,28 @@
+{
+  "id": "issue-120",
+  "title": "getrusage 未拒绝 usage==NULL，Rusage 聚合后直接 vm_write，与 Linux EFAULT 及同仓库指针对齐风格不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "resolved_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`sys_getrusage`**：先校验 **`who`**（**`EINVAL`**），再 **`usage.is_null()` → `BadAddress`**，最后聚合 **`Rusage`** 并 **`vm_write`**；与 Linux **`EINVAL` 先于 `EFAULT`**及 **`issue-113`/`115`** 输出指针风格一致。",
+  "files_changed": ["kernel/src/syscall/resources.rs"],
+  "description": "**`sys_getrusage`**（`kernel/src/syscall/resources.rs`）在 **`who`** 分支上聚合 **`Rusage`** 后，直接 **`usage.vm_write(result.into())?`**，**未**对 **`usage.is_null()`** 做前置校验。**Linux `getrusage(2)`** 中 **`usage`** 须指向可写 **`struct rusage`**，**`NULL`** → **`EFAULT`**。同仓库 **`sys_rt_sigpending`**（**issue-115 verified**）、**`timerfd_gettime`**（**issue-113 verified**）等对输出缓冲使用 **`BadAddress`**；**`sys_times`/`gettimeofday`** 等历史 issue 亦用 **`nullable()`** 跳过 **`NULL`**。当前实现先完成 **`RUSAGE_*`** 下可能较重的线程折叠再因 **`vm_write(0)`** 失败，**错误顺序/errno映射**与显式 **`EFAULT`** 略有差别。建议在 **`vm_write`** 前 **`if usage.is_null() { return Err(AxError::BadAddress); }`**（或在聚合前短路）。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["getrusage"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/resources.rs:97-142"],
+    "related_files": [],
+    "key_insight": "`Rusage` 聚合后无 `usage` NULL 检查即 `vm_write`"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "**`getrusage(RUSAGE_SELF, NULL)`**；Linux **`EFAULT`**；对比 Starry 返回码及是否在聚合之后才失败。",
+    "expected_output_contains": "",
+    "pass_criteria": "**`usage.is_null()`** → **`BadAddress`**（**`EFAULT`** 映射）；再 **`vm_write`**；或文档化 Starry 允许 **`NULL`** 为无操作（与 Linux 偏离则需写明）。",
+    "last_result": "2026-04-12：已 **`who`** 校验后 **`usage==NULL` → `BadAddress`**，再聚合；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** PASS；QEMU 未测"
+  },
+  "suggested_fix": "在 **`vm_write`** 前 **`if usage.is_null() { return Err(AxError::BadAddress); }`**。",
+  "references": ["man 2 getrusage", "Linux kernel sys.c getrusage"]
+}
