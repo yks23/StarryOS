@@ -1,0 +1,27 @@
+{
+  "id": "issue-179",
+  "title": "getrandom：校验 GRND_NONBLOCK/GRND_INSECURE 但在读随机数时未实现对应语义",
+  "status": "resolved",
+  "created_at": "2026-04-12T22:00:00Z",
+  "severity": "medium",
+  "fix_summary": "`sys_getrandom`：`GRND_INSECURE` 时强制走 `/dev/urandom`（覆盖 `GRND_RANDOM`）；`GRND_RANDOM|GRND_NONBLOCK` 在全局 `CRNG_INITIALIZED` 为假时返回 `WouldBlock`（`EAGAIN`），任意一次成功 `getrandom` 后置位；设备层 `read_at` 仍不阻塞，`CRNG_INITIALIZED` 为与 Linux 非阻塞/就绪分界相近的近似。",
+  "files_changed": ["kernel/src/syscall/sys.rs"],
+  "description": "`sys_getrandom`（`kernel/src/syscall/sys.rs`）在入口校验 `flags & ~GRND_FLAGS_MASK` 后构造 `GetRandomFlags`，但仅用于选择 `/dev/random` 与 `/dev/urandom`（`GRND_RANDOM`）及 `debug!`。`GRND_NONBLOCK`：Linux 在随机数池未就绪或暂时无法满足请求长度时可返回 `EAGAIN`；Starry 对设备节点走普通 `read_at(..., 0)`，未将非阻塞意图传入 VFS，也未在 `getrandom` 层于可能阻塞的场景提前返回 `EAGAIN`。`GRND_INSECURE`（Linux 5.6+）：允许更宽松回退策略；此前实现等同忽略。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["getrandom"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/sys.rs:215-252"],
+    "related_files": [],
+    "key_insight": "`GetRandomFlags` 除 `RANDOM` 外未影响 `read_at` 或错误码"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "在 Linux 与 Starry 上对 `getrandom(buf, n, GRND_NONBLOCK)`（必要时配合 `GRND_RANDOM`）比较是否 `EAGAIN`；对 `GRND_INSECURE` 与 `0` 对照行为。",
+    "expected_output_contains": "",
+    "pass_criteria": "与 Linux 一致的 `EAGAIN`/阻塞分界，或明确 `EOPNOTSUPP` 并文档化；禁止接受标志位却完全按阻塞读处理。",
+    "last_result": "`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` 通过（未跑对照测试）。"
+  },
+  "suggested_fix": "在 `sys_getrandom` 中解释 `GRND_NONBLOCK`（`WouldBlock` 映射为 `EAGAIN`）；`GRND_INSECURE` 映射到 `/dev/urandom`；若暂无法建模就绪状态，至少在 `GRND_RANDOM`+`NONBLOCK` 路径返回 `EAGAIN`。",
+  "references": ["man 2 getrandom", "man 4 random"]
+}

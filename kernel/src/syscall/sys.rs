@@ -1,5 +1,8 @@
 use alloc::vec;
-use core::ffi::c_char;
+use core::{
+    ffi::c_char,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use axalloc::global_allocator;
 use axconfig::ARCH;
@@ -224,6 +227,10 @@ bitflags::bitflags! {
 /// Linux `getrandom(2)` only allows `GRND_*` bits defined in `uapi/linux/random.h`.
 const GRND_FLAGS_MASK: u32 = GRND_NONBLOCK | GRND_RANDOM | GRND_INSECURE;
 
+/// Linux-style CRNG readiness for **`GRND_RANDOM` | `GRND_NONBLOCK`**: return **`EAGAIN`** until at
+/// least one prior **`getrandom`** completed successfully (Starry has no true blocking entropy pool).
+static CRNG_INITIALIZED: AtomicBool = AtomicBool::new(false);
+
 pub fn sys_getrandom(buf: *mut u8, len: usize, flags: u32) -> AxResult<isize> {
     // Linux getrandom: validate GRND_* before count==0 short-circuit (issue-151).
     if flags & !GRND_FLAGS_MASK != 0 {
@@ -236,10 +243,23 @@ pub fn sys_getrandom(buf: *mut u8, len: usize, flags: u32) -> AxResult<isize> {
 
     debug!("sys_getrandom <= buf: {buf:p}, len: {len}, flags: {flags:?}");
 
-    let path = if flags.contains(GetRandomFlags::RANDOM) {
-        "/dev/random"
-    } else {
+    // `GRND_INSECURE`: allow reads before CRNG init with weaker semantics → match **`/dev/urandom`**
+    // (man 2 getrandom / issue-179).
+    let use_urandom =
+        !flags.contains(GetRandomFlags::RANDOM) || flags.contains(GetRandomFlags::INSECURE);
+
+    // `GRND_RANDOM` + `GRND_NONBLOCK`: Linux returns **`EAGAIN`** while the blocking pool would wait.
+    if !use_urandom
+        && flags.contains(GetRandomFlags::NONBLOCK)
+        && !CRNG_INITIALIZED.load(Ordering::Relaxed)
+    {
+        return Err(AxError::WouldBlock);
+    }
+
+    let path = if use_urandom {
         "/dev/urandom"
+    } else {
+        "/dev/random"
     };
 
     let f = FS_CONTEXT.lock().resolve(path)?;
@@ -247,6 +267,8 @@ pub fn sys_getrandom(buf: *mut u8, len: usize, flags: u32) -> AxResult<isize> {
     let len = f.entry().as_file()?.read_at(&mut kbuf, 0)?;
 
     vm_write_slice(buf, &kbuf)?;
+
+    CRNG_INITIALIZED.store(true, Ordering::Relaxed);
 
     Ok(len as _)
 }
