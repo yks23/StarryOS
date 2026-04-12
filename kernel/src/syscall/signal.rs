@@ -96,6 +96,10 @@ pub fn sys_rt_sigaction(
 
 pub fn sys_rt_sigpending(set: *mut SignalSet, sigsetsize: usize) -> AxResult<isize> {
     check_sigset_size(sigsetsize)?;
+    if set.is_null() {
+        // Linux `rt_sigpending(2)`：`set` must be a writable user buffer; NULL → EFAULT.
+        return Err(AxError::BadAddress);
+    }
     set.vm_write(current().as_thread().signal.pending())?;
     Ok(0)
 }
