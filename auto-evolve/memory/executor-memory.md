@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-136 resolved（**`fcntl`** 记录锁 **`F_SETLK`/`F_GETLK`** 与 **`F_OFD_*`**：**`get_file_like(fd)`** 先于用户 **`flock64`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-135 resolved（**`recvmsg`**：**`validate_recvmsg_flags`** + **`Socket::from_fd`** 先于 **`msghdr`** 与 **`IoVectorBuf`**；**`recv_on_socket`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-134 resolved（**`sendmsg`**：**`Socket::from_fd`** 与 **`SENDMSG_FLAGS_MASK`** 先于 **`msghdr`**/cmsg/iovec；**`send_on_socket`** 复用；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-133 resolved（**`sendto`/`sendmsg`**：**`send_impl`** 内 **`Socket::from_fd`** 先于 **`SocketAddrEx::read_from_user`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -116,6 +117,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-136 | fcntl 记录锁 get_file_like 先于 flock 用户访问 | resolved | 2026-04-12 |
 | issue-135 | recvmsg flags/from_fd 先于 msghdr/iov | resolved | 2026-04-12 |
 | issue-134 | sendmsg from_fd 先于 copy msghdr/iov | resolved | 2026-04-12 |
 | issue-133 | sendto/sendmsg send_impl from_fd 先于读 addr | resolved | 2026-04-12 |
@@ -285,7 +287,7 @@
 - `/proc/self/fd/N` 的 readlink 内容来自 `FileLike::path()`；`inotify_init1`/`fanotify_init` 须使用独立 `InotifyFd`/`FanotifyFd`（`anon_inode:[inotify]` / `anon_inode:[fanotify]`），不能再用 `anon_inode:[dummy]`，否则用户态假阳性。
 - POSIX `timer_create` / `timer_settime` / `timer_gettime` / `timer_delete`：未实现时须返回 **`AxError::Unsupported`（ENOSYS）**，禁止 `Ok(0)` 导致用户态 `timer_t` 未写入却被当作成功；若将来实现，需向 `timer_create` 第四参写入非空 id 并接 `sigevent`/线程定时逻辑。
 - `flock(2)`：按 inode（`File`/`Directory` 的 `metadata` dev/ino）维护 BSD 风格互斥/共享锁；同一 fd 升级/幂等、关闭 fd 须从全局表移除；`LOCK_NB` 冲突映射 `AxError::WouldBlock`（EAGAIN）；阻塞模式在 `WouldBlock` 上 `yield_now` 轮询。
-- `fcntl` 记录锁（`F_SETLK`/`F_SETLKW`/`F_GETLK` 及 `F_OFD_*` 同路径）：仅对普通 `File` fd；`flock64` 区间经 SEEK_SET/CUR/END 解析；写锁与读/写冲突、读锁仅与写冲突；同进程占位前先对重叠区间解锁再插入；`F_SETLK` 冲突返回 `WouldBlock`；`close_file_like` 调用 `record_lock::release_fd` 清除该 fd 登记锁。
+- `fcntl` 记录锁（`F_SETLK`/`F_SETLKW`/`F_GETLK` 及 `F_OFD_*` 同路径）：**`sys_fcntl`** 须先 **`get_file_like(fd)`** 再读/写用户 **`flock64`**（**`EBADF`** 先于 **EFAULT**，issue-136）；**`record_lock`** 内仍会 **`inode_key`/`get_file_like`**。仅对普通 **`File`** fd；**`flock64`** 区间经 SEEK_SET/CUR/END 解析；写锁与读/写冲突、读锁仅与写冲突；同进程占位前先对重叠区间解锁再插入；**`F_SETLK`** 冲突返回 **`WouldBlock`**；**`close_file_like`** 调用 **`record_lock::release_fd`** 清除该 fd 登记锁。
 - 作业控制：`ProcessData::jobctl` 记录 `stop_sig` / `stop_wait_pending` / `continued_wait_pending`；`SignalOSAction::Stop` 不再 `do_exit`，而是唤醒父 `child_exit_event` 并在内核循环中等待 `SIGCONT`（循环内调用 `check_signals` 以处理入队信号）；`Continue` 清除停止并在曾停止时置 `continued_wait_pending`；`waitpid` 对 `WUNTRACED` 或 **options==0** 写 `(sig<<8)|0x7f`，对 `WCONTINUED` 或 **options==0** 写 `0xffff`。
 - **`waitpid(2)`/`wait4(2)`**：**`options`** 须为 **`WaitOptions::from_bits`** 可解析的 **`WNOHANG|WUNTRACED|WEXITED|WCONTINUED|WNOWAIT|__WNOTHREAD|__WALL|__WCLONE`** 子集（与 **`linux_raw_sys::general`** 一致），否则 **`InvalidInput`（EINVAL）**；勿 **`from_bits_truncate`**。**`WALL`/`WCLONE`** 过滤仍有 **FIXME**。
 - 地址空间并发：`ProcessData.aspace` 为 `Arc<RwLock<AddrSpace>>`；修改页表（缺页 populate、mmap 等）用 `write()`；纯查询（如 mincore、`mremap` 查 VMA、futex 地址解析、部分 `can_access_range`）用 `read()`。缺页仍会写锁直至支持按页或 per-VMA 锁。
@@ -335,6 +337,7 @@
 - issue-133：**`sendto`** 或 **`sendmsg`** 仅坏 **`msg_name`**（**`msghdr`** 本身合法）：无效 **`fd`** 时首错 **`EBADF`**。
 - issue-134：**`sendmsg`** 无效 **`fd`** + 坏 **`msghdr`/`iov`**：首错应 **`EBADF`**（先于 **EFAULT**）。
 - issue-135：**`recvmsg`** 非法 **`flags`** 先于 **`msghdr`**；无效 **`fd`** + 坏 **`msghdr`/`iov`**：首错 **`EBADF`** 或 **`EINVAL`**（**flags**）先于 **EFAULT**。
+- issue-136：**`fcntl`** **`F_SETLK`/`F_GETLK`**（含 **`F_OFD_*`**）：无效 **`fd`** + 坏 **`flock64 *`**，首错 **`EBADF`**。
 - issue-053：请跑 **`/bin/test_memfd_create_invalid_flags`**（**`memfd_create(..., 0x80000000)`** → **`EINVAL`**）。
 - issue-052：请跑 **`/bin/test_fchownat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`uid`/`gid`** 不变）。
 - issue-051：请跑 **`/bin/test_utimensat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`mtime`** 不变）。

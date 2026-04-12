@@ -243,14 +243,18 @@ pub fn sys_fcntl(fd: c_int, cmd: c_int, arg: usize) -> AxResult<isize> {
         F_DUPFD => dup_fd(fd, false),
         F_DUPFD_CLOEXEC => dup_fd(fd, true),
         F_SETLK | F_OFD_SETLK => {
+            // Linux do_fcntl: fget(fd) before copy_from_user(flock) (EBADF before EFAULT).
+            get_file_like(fd)?;
             let fl = *UserConstPtr::<flock64>::from(arg).get_as_ref()?;
             crate::file::record_lock::sys_fcntl_setlk(fd, false, &fl)
         }
         F_SETLKW | F_OFD_SETLKW => {
+            get_file_like(fd)?;
             let fl = *UserConstPtr::<flock64>::from(arg).get_as_ref()?;
             crate::file::record_lock::sys_fcntl_setlk(fd, true, &fl)
         }
         F_GETLK | F_OFD_GETLK => {
+            get_file_like(fd)?;
             let ptr = UserPtr::<flock64>::from(arg);
             let fl = ptr.get_as_mut()?;
             crate::file::record_lock::sys_fcntl_getlk(fd, fl)
