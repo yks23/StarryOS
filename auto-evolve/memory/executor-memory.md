@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-096 resolved（**`clone3`**：**`size`** 上限 **`min(buffer.len())`**，避免 **`buffer[..size]`** panic；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-095 resolved（**`execve`**：多线程等兄弟退出 — **`thread_group_exit_event` + `block_on(interruptible)`**；去 **`WouldBlock`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-094 resolved（**`clone`/`clone3`**：**`CLONE_PARENT_SETTID`** **`parent_tid` `vm_write` `?`**，与 **`PIDFD`** 一致；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-093 resolved（**`setpgid`**：仅调用者或子进程、子须同 session；**`zombie` → `NoSuchProcess`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -76,6 +77,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-096 | clone3 clamp vm_read to sizeof(Clone3Args) | resolved | 2026-04-13 |
 | issue-095 | execve wait siblings: PollSet not WouldBlock spin cap | resolved | 2026-04-13 |
 | issue-094 | clone PARENT_SETTID ptid vm_write propagate Err | resolved | 2026-04-13 |
 | issue-093 | setpgid caller/child same session; zombie ESRCH | resolved | 2026-04-13 |
