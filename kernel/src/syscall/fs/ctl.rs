@@ -1,4 +1,9 @@
-use alloc::{ffi::CString, format, vec, vec::Vec};
+use alloc::{
+    collections::VecDeque,
+    ffi::CString,
+    format, string::String, sync::Arc,
+    vec, vec::Vec,
+};
 use core::{
     ffi::{c_char, c_int},
     mem::offset_of,
@@ -7,7 +12,10 @@ use core::{
 
 use axerrno::{AxError, AxResult};
 use axfs::{FS_CONTEXT, FsContext};
-use axfs_ng_vfs::{Location, MetadataUpdate, NodePermission, NodeType, path::Path};
+use axfs_ng_vfs::{
+    Location, MetadataUpdate, NodePermission, NodeType,
+    path::{Path, DOT, DOTDOT},
+};
 use axhal::time::{monotonic_time_nanos, wall_time};
 use axtask::current;
 use linux_raw_sys::{
@@ -17,7 +25,7 @@ use linux_raw_sys::{
 use starry_vm::{VmPtr, vm_write_slice};
 
 use crate::{
-    file::{Directory, FileLike, get_file_like, resolve_at, with_fs},
+    file::{Directory, File, FileLike, get_file_like, resolve_at, with_fs},
     mm::vm_load_string,
     task::AsThread,
     time::TimeValueLike,
@@ -600,12 +608,65 @@ fn renameat2_exchange(
     Ok(())
 }
 
+/// Matches [`FsContext::ReadDir::BUF_SIZE`] in axfs-ng: one `read_dir` batch at most this many names.
+const SYNC_READ_DIR_BUF: usize = 128;
+
+/// Flushes nested mounts depth-first (same order as `unmount_all`), then this mount's
+/// [`FilesystemOps::flush`].
+fn flush_mount_subtree(root: &Location) -> AxResult<()> {
+    if !root.is_root_of_mount() {
+        return Err(AxError::InvalidInput);
+    }
+
+    let mut pos = 0u64;
+    loop {
+        let mut batch = VecDeque::new();
+        let mut next_pos = pos;
+        root.read_dir(pos, &mut |name: &str, _ino: u64, node_type: NodeType, off: u64| {
+            batch.push_back((String::from(name), node_type));
+            next_pos = off;
+            batch.len() < SYNC_READ_DIR_BUF
+        })?;
+
+        if batch.is_empty() {
+            break;
+        }
+        pos = next_pos;
+
+        for (name, node_type) in batch {
+            if name == DOT || name == DOTDOT {
+                continue;
+            }
+            if node_type != NodeType::Directory {
+                continue;
+            }
+            let child = root.lookup_no_follow(&name)?;
+            if !Arc::ptr_eq(child.mountpoint(), root.mountpoint()) {
+                flush_mount_subtree(&child)?;
+            }
+        }
+    }
+
+    root.filesystem().flush()
+}
+
 pub fn sys_sync() -> AxResult<isize> {
-    warn!("dummy sys_sync");
+    debug!("sys_sync");
+    let fs = FS_CONTEXT.lock();
+    flush_mount_subtree(fs.root_dir())?;
     Ok(0)
 }
 
-pub fn sys_syncfs(_fd: i32) -> AxResult<isize> {
-    warn!("dummy sys_syncfs");
+pub fn sys_syncfs(fd: i32) -> AxResult<isize> {
+    debug!("sys_syncfs <= fd: {fd}");
+    let f = get_file_like(fd)?;
+    let loc = if let Some(file) = f.downcast_ref::<File>() {
+        file.inner().backend()?.location().clone()
+    } else if let Some(dir) = f.downcast_ref::<Directory>() {
+        dir.inner().clone()
+    } else {
+        return Err(AxError::InvalidInput);
+    };
+    loc.filesystem().flush()?;
     Ok(0)
 }
