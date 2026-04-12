@@ -173,6 +173,10 @@ pub(crate) fn make_queue_signal_info(
     }
 
     let signo = parse_signo(signo)?;
+    if sig.is_null() {
+        // Linux queue-siginfo paths: non-zero signal requires readable `siginfo_t`; NULL → EFAULT.
+        return Err(AxError::BadAddress);
+    }
     let mut sig = unsafe { sig.vm_read_uninit()?.assume_init() };
     sig.set_signo(signo);
     if current().as_thread().proc_data.proc.pid() != tgid
