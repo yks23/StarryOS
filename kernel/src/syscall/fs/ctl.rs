@@ -430,6 +430,11 @@ pub fn sys_readlinkat(
 
     let path = vm_load_string(path)?;
 
+    // Linux rejects empty pathname with EINVAL (issue-395; same theme as issue-391/393/394).
+    if path.is_empty() {
+        return Err(AxError::InvalidInput);
+    }
+
     debug!("sys_readlinkat <= dirfd: {dirfd}, path: {path:?}");
 
     if dirfd != AT_FDCWD && !path.starts_with('/') {
