@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-212 resolved（**`rt_sigqueueinfo`/`rt_tgsigqueueinfo`**：**`read_signal_info_user`** — **`si_signo`/`si_errno`/`si_code`** 字段读 + **`vm_read_slice`** 填 **`_sifields`**；去掉整 **`SignalInfo` `assume_init`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-211 resolved（**`sched_setscheduler`**：**`read_sched_param_user`**（**`sched_priority`** **`addr_of!` + `vm_read`**）；去掉 **`SchedParam` `assume_init`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-210 resolved（**`signalfd4`**：**`read_signal_set_user`** **`pub(crate)`**；**`mask`** 与 **`rt_sigprocmask`** 同字级读；去掉 **`assume_init`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-214 resolved（**`shmctl` `IPC_SET`**：仅合并用户 **`shm_perm.uid`/`gid`/`mode & 0o777`**，不再整颗 **`ShmidDs`** 覆盖内核；对齐 Linux **`shmctl(2)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）

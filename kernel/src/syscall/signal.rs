@@ -1,4 +1,4 @@
-use core::{future::poll_fn, task::Poll};
+use core::{future::poll_fn, mem::MaybeUninit, slice, task::Poll};
 
 use axerrno::{AxError, AxResult, LinuxError};
 use axhal::uspace::UserContext;
@@ -8,7 +8,8 @@ use axtask::{
 };
 use linux_raw_sys::general::{
     MINSIGSTKSZ, SI_TKILL, SI_USER, SIG_BLOCK, SIG_SETMASK, SIG_UNBLOCK, __kernel_sighandler_t,
-    kernel_sigaction, kernel_sigset_t, siginfo, timespec,
+    __sifields, kernel_sigaction, kernel_sigset_t, siginfo, siginfo__bindgen_ty_1,
+    siginfo__bindgen_ty_1__bindgen_ty_1, timespec,
 };
 #[cfg(any(
     target_arch = "x86_64",
@@ -22,7 +23,7 @@ use linux_raw_sys::general::{
 use linux_raw_sys::general::__sigrestore_t;
 use starry_process::Pid;
 use starry_signal::{SignalInfo, SignalSet, SignalStack, Signo};
-use starry_vm::{VmMutPtr, VmPtr};
+use starry_vm::{VmMutPtr, VmPtr, vm_read_slice};
 
 use crate::{
     task::{
@@ -103,6 +104,33 @@ pub(crate) fn read_signal_set_user(p: *const SignalSet) -> AxResult<SignalSet> {
     let p = p.cast::<kernel_sigset_t>();
     let word = unsafe { core::ptr::addr_of!((*p).sig[0]).vm_read()? };
     Ok(kernel_sigset_t { sig: [word] }.into())
+}
+
+/// User `siginfo_t` for queue paths (issue-212): `si_*` scalars + `_sifields` blob — no bulk
+/// `assume_init` over the full `SignalInfo`.
+fn read_signal_info_user(p: *const SignalInfo) -> AxResult<SignalInfo> {
+    let p = p.cast::<siginfo>();
+    let si_signo = unsafe { core::ptr::addr_of!((*p).__bindgen_anon_1.__bindgen_anon_1.si_signo).vm_read()? };
+    let si_errno = unsafe { core::ptr::addr_of!((*p).__bindgen_anon_1.__bindgen_anon_1.si_errno).vm_read()? };
+    let si_code = unsafe { core::ptr::addr_of!((*p).__bindgen_anon_1.__bindgen_anon_1.si_code).vm_read()? };
+    let mut sifields = MaybeUninit::<__sifields>::uninit();
+    unsafe {
+        vm_read_slice(
+            core::ptr::addr_of!((*p).__bindgen_anon_1.__bindgen_anon_1._sifields),
+            slice::from_mut(&mut sifields),
+        )?;
+    }
+    let inner = siginfo__bindgen_ty_1__bindgen_ty_1 {
+        si_signo,
+        si_errno,
+        si_code,
+        _sifields: unsafe { sifields.assume_init() },
+    };
+    Ok(SignalInfo(siginfo {
+        __bindgen_anon_1: siginfo__bindgen_ty_1 {
+            __bindgen_anon_1: inner,
+        },
+    }))
 }
 
 fn read_signal_stack_user(p: *const SignalStack) -> AxResult<SignalStack> {
@@ -292,7 +320,7 @@ pub(crate) fn make_queue_signal_info(
         // Linux queue-siginfo paths: non-zero signal requires readable `siginfo_t`; NULL → EFAULT.
         return Err(AxError::BadAddress);
     }
-    let mut sig = unsafe { sig.vm_read_uninit()?.assume_init() };
+    let mut sig = read_signal_info_user(sig)?;
     sig.set_signo(signo);
     if current().as_thread().proc_data.proc.pid() != tgid
         && (sig.code() >= 0 || sig.code() == SI_TKILL)
