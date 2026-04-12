@@ -563,7 +563,11 @@ pub fn sys_shmctl(shmid: i32, cmd: u32, buf: UserPtr<ShmidDs>) -> AxResult<isize
         return Err(AxError::InvalidInput);
     }
 
-    shm_inner.shmid_ds.shm_ctime = monotonic_time_nanos() as __kernel_time_t;
+    // Linux `shmctl`: `shm_ctime` is the time of last change by `IPC_SET`/`IPC_RMID`, not bumped by
+    // read-only `IPC_STAT` (issue-363).
+    if cmd == IPC_SET || cmd == IPC_RMID {
+        shm_inner.shmid_ds.shm_ctime = monotonic_time_nanos() as __kernel_time_t;
+    }
     Ok(0)
 }
 
