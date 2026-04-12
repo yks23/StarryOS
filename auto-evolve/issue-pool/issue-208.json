@@ -1,0 +1,27 @@
+{
+  "id": "issue-208",
+  "title": "io_uring_setup：用户 `IoUringParams` 整结构 `vm_read_uninit`+`assume_init`，嵌套 `sq_off`/`cq_off` 与 issue-201 同类",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_io_uring_setup` 不再整颗 `vm_read_uninit`+`assume_init` 读入 `IoUringParams`。本 stub 仅从用户侧校验 `flags`（`addr_of!((*params).flags).vm_read()`）；队列深度沿用系统调用参数 `entries`。成功写回前在内核栈用字面量构造完整 `IoUringParams`（与原先覆写结果一致），避免对 `sq_off`/`cq_off` 及 padding 的 Pod 假设。",
+  "files_changed": ["kernel/src/syscall/fs/io_uring.rs"],
+  "description": "**`kernel/src/syscall/fs/io_uring.rs`** **`sys_io_uring_setup`** 在 **`params` 非空且 `entries` 合法后，使用 **`unsafe { params.vm_read_uninit()?.assume_init() }`** 读入整颗 **`IoUringParams`**（约 **64** 行），再校验 **`p.flags`** 等。成功路径会覆写 **`sq_entries`/`cq_entries`/`features`** 及 **`sq_off`/`cq_off`/`resv`** 等，但 **读入阶段**仍把用户提供的 **全部字节**（含 **`IoSqringOffsets`/`IoCqringOffsets` 嵌套体与 padding**）经 **`assume_init`** 物化为 Rust 值；若结构体演进、**`repr(C)`** 布局与 **用户态头文件** 假设偏离，或与未来 **Linux `io_uring_params`** 对齐时需要额外字段，存在与 **issue-201**/**issue-202** 同类的 **可审计性/UB** 风险。**更稳妥**：仅 **`vm_read`** 需要判定的字段（如 **`flags`**、初始 **`sq_entries`/`cq_entries` 请求**），或按 **`addr_of!`** 对 **`io_uring_params` 镜像** 分字段读取。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["io_uring_setup"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/io_uring.rs:57-85"],
+    "related_files": [],
+    "key_insight": "stub 仍整读 `IoUringParams`；成功时多数字段被内核覆写"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查 +结构体字段增删试编译；对照 **issue-145** 注释中的 **`vm_write` 顺序**。",
+    "expected_output_contains": "",
+    "pass_criteria": "消除对未使用用户子结构的 **`assume_init`**，或证明 **`IoUringParams`** 与 **单一 uapi 布局**逐字节一致且绑定测试覆盖。",
+    "last_result": "通过：`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`（exit 0，仅有既有 warning）。"
+  },
+  "suggested_fix": "最小读：**`flags`** +用户请求的 **`entries`** 语义所需字段；输出 **`vm_write`** 前在内核栈构造 **`IoUringParams`**，避免整颗 **`assume_init`**。",
+  "references": ["man 2 io_uring_setup", "issue-145", "issue-201", "issue-202"]
+}

@@ -61,20 +61,25 @@ pub fn sys_io_uring_setup(entries: u32, params: *mut IoUringParams) -> AxResult<
     if entries == 0 || entries > 4096 {
         return Err(AxError::InvalidInput);
     }
-    let mut p = unsafe { params.vm_read_uninit()?.assume_init() };
-    if p.flags != 0 {
+    // Input: only `flags` is consulted (see issue-208); queue depth comes from `entries`.
+    // Avoid `vm_read_uninit` + `assume_init` over nested `sq_off`/`cq_off` and padding.
+    let flags = unsafe { core::ptr::addr_of!((*params).flags).vm_read()? };
+    if flags != 0 {
         return Err(AxError::InvalidInput);
     }
     let sqe = entries.next_power_of_two();
-    p.sq_entries = sqe;
-    p.cq_entries = sqe.saturating_mul(2);
-    p.features = 0;
-    p.wq_fd = 0;
-    p.sq_thread_cpu = 0;
-    p.sq_thread_idle = 0;
-    p.resv = [0; 3];
-    p.sq_off = IoSqringOffsets::default();
-    p.cq_off = IoCqringOffsets::default();
+    let p = IoUringParams {
+        sq_entries: sqe,
+        cq_entries: sqe.saturating_mul(2),
+        flags: 0,
+        sq_thread_cpu: 0,
+        sq_thread_idle: 0,
+        features: 0,
+        wq_fd: 0,
+        resv: [0; 3],
+        sq_off: IoSqringOffsets::default(),
+        cq_off: IoCqringOffsets::default(),
+    };
 
     let fd = add_file_like(Arc::new(IoUringFd), false)?;
     if let Err(e) = params.vm_write(p) {
