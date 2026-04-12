@@ -137,6 +137,10 @@ pub fn sys_accept4(
 ) -> AxResult<isize> {
     debug!("sys_accept <= fd: {fd}, flags: {flags}");
 
+    // Linux __sys_accept4: sockfd_lookup before validating accept4-only flags (EBADF before EINVAL
+    // when both bad fd and unknown flag bits; issue-322; same class as splice/pidfd_getfd issue-317/315/320).
+    let socket = Socket::from_fd(fd)?;
+
     // Linux accept4(2): only SOCK_CLOEXEC/SOCK_NONBLOCK (same values as O_CLOEXEC/O_NONBLOCK).
     const VALID_ACCEPT4_FLAGS: u32 = O_CLOEXEC | O_NONBLOCK;
     if flags & !VALID_ACCEPT4_FLAGS != 0 {
@@ -144,8 +148,6 @@ pub fn sys_accept4(
     }
 
     let cloexec = flags & O_CLOEXEC != 0;
-
-    let socket = Socket::from_fd(fd)?;
     let socket = Socket::new(socket.accept()?);
     if flags & O_NONBLOCK != 0 {
         socket.set_nonblocking(true)?;

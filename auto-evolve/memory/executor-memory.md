@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-05-01：issue-322 resolved（**`accept4`**：**`Socket::from_fd(fd)`** **先于** **`flags`** **掩码**，**`EBADF`** **先于** **`EINVAL`**；**`net/socket.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-30：issue-321 resolved（**`signalfd4`**：**`mask.is_null()`** **先于** **`check_sigset_size`/`flags`**，**EFAULT** **先于** **`EINVAL`**；**`signalfd.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-29：issue-320 resolved（**`pidfd_getfd`/`pidfd_send_signal`**：**`PidFd::from_fd`** **先于** **`flags != 0`**，**`EBADF`** **先于** **`EINVAL`**；**`pidfd.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-28：issue-319 resolved（**`signalfd4`**：**`fd != -1`** **时** **`Signalfd::from_fd`** **先于** **`read_signal_set_user`**，**`EBADF`** **先于** **`EFAULT`**；**`signalfd.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -345,6 +346,7 @@
 | issue-271 | mlock/mlock2 addr 须页对齐 EINVAL | resolved | 2026-04-12 |
 | issue-272 | lseek SEEK_SET 负 offset EINVAL | resolved | 2026-04-12 |
 | issue-273 | prlimit64 跨 pid 权限 EPERM | resolved | 2026-04-12 |
+| issue-322 | accept4 from_fd 先于 flags 掩码 | resolved | 2026-05-01 |
 | issue-321 | signalfd4 NULL mask 先于 sigsetsize/flags | resolved | 2026-04-30 |
 | issue-320 | pidfd_getfd/send_signal from_fd 先于 flags | resolved | 2026-04-29 |
 | issue-319 | signalfd4 修改 fd 时 from_fd 先于读 mask | resolved | 2026-04-28 |
@@ -617,7 +619,7 @@
 - 补充组：**`supplementary_gids`**（`Mutex<Vec<u32>>`，上限 **`SUPP_GROUPS_MAX`**）；`getgroups` 仅列补充组不含主 `rgid`；`setgroups` 需 **`euid==0`**；`getgroups(0,…)` 返回个数。**`seccomp(2)`** 未实现时 **`Unsupported`（ENOSYS）**。**`prctl(PR_SET_SECCOMP)`**：**`arg2`>2**（非 **`SECCOMP_MODE_*`**）→ **`EINVAL`**；mode **0/1/2** 未实现 → **`Unsupported`**。**`prctl(PR_MCE_KILL)`**：**`arg2`** 须 **`CLEAR`/`SET`**；**`SET`** 时 **`arg3`**≤**`DEFAULT`**，否则 **`EINVAL`**；合法组合未实现 → **`Unsupported`**。
 - **`execve` 多线程**：在替换映像前若 **`proc.threads().len() > 1`**，对其余 tid **`SIGKILL`** 并 **`yield_now`** 直至仅剩当前线程（对齐 Linux 先杀线程组再 exec）；长时间未收敛则 **`WouldBlock`**。非 vfork/线程本地存储析构等细语义仍弱于 Linux。
 - **`execve(2)`**：**`argv==NULL` → `BadAddress`**；**`envp==NULL`** 继承 **`ProcessData::environment`**（**`fork`** 子进程复制父 **`environment`**；**`init`**/**成功 exec** 后更新 **`cmdline`** 与 **`environment`**，issue-243）。
-- **`accept` / `accept4`**：向用户写入的 sockaddr 必须是 **`peer_addr()`**（远端），勿用 **`local_addr()`**（本端监听地址）；与 **`getpeername(accepted_fd)`** 一致。**`accept4`** 第四参 **`flags`** 须为 **`O_CLOEXEC | O_NONBLOCK`**（与 Linux **`SOCK_CLOEXEC`/`SOCK_NONBLOCK`** 同值），否则 **`EINVAL`**。**`addr` 非空**时须先 **`write_to_user`**/**`addrlen`**（**`get_as_mut`**）再 **`add_to_fd_table`**，避免 **`copy_to_user`** 失败时已装新 **fd** 却未返回 **fd** 号（issue-149，与 issue-148 **`pipe2`** 同类）。**`addr==NULL`** 无地址写回，仍直接装表。
+- **`accept` / `accept4`**：向用户写入的 sockaddr 必须是 **`peer_addr()`**（远端），勿用 **`local_addr()`**（本端监听地址）；与 **`getpeername(accepted_fd)`** 一致。**`accept4`**：**`Socket::from_fd(fd)`** **先于** **`flags`** **掩码** **校验**（**仅** **`O_CLOEXEC | O_NONBLOCK`**，未知位 **`EINVAL`**），**`EBADF`** **先于** **`EINVAL`**（**issue-322**；与 **issue-317**/**issue-315**/**issue-320** **同类**）。**`addr` 非空**时须先 **`write_to_user`**/**`addrlen`**（**`get_as_mut`**）再 **`add_to_fd_table`**，避免 **`copy_to_user`** 失败时已装新 **fd** 却未返回 **fd** 号（issue-149，与 issue-148 **`pipe2`** 同类）。**`addr==NULL`** 无地址写回，仍直接装表。
 - **`getsockname`/`getpeername`**（**`net/name.rs`**）：**`addr==NULL`** 时仅 **`local_addr()`/`peer_addr()`** 校验套接字状态后 **`Ok(0)`**，不读 **`addrlen`**、不 **`write_to_user`**（与 Linux **`move_addr_to_user`** 省略拷贝，issue-256）。**`addr` 非空**时 **`addrlen.get_as_mut()`** 仍须早于 **`local_addr`/`peer_addr`**（issue-119），再 **`write_to_user`**（**`addr`** 在 **`fill_addr`** 写回时访问；**`*addrlen==0`** 见 issue-090 **`InvalidInput`**）。
 - **`socket(2)`/`socketpair(2)`**：**`type`** 仅允许 **`SOCK_TYPE_MASK`（0xf）** 内 **`SOCK_*`** 与 **`O_CLOEXEC|O_NONBLOCK`**；其它位 **`InvalidInput`**（对齐 Linux **`EINVAL`**）。**`ty`** 取 **`raw_ty & SOCK_TYPE_MASK`**。**`AF_UNIX`**：**`proto` 须为 0**，否则 **`EPROTONOSUPPORT`**（issue-241；**`AF_INET`** 仍按 **`IPPROTO_TCP`/`UDP`**）。**`AF_UNIX` `SOCK_SEQPACKET`**：未实现 Unix SEQPACKET 传输；**`socket`** 与 **`socketpair`** 均 **`ESOCKTNOSUPPORT`**，勿将 **`SOCK_SEQPACKET`** 与 **`DgramTransport`** 混用（issue-251）。**`socketpair`**：**`fds.get_as_mut()`** 先于 **`new_pair`/`Socket::new`**（issue-286）；再依次 **`add_to_fd_table`**；第二端失败须 **`close_file_like`** 已装第一端（issue-150，与 issue-148 **`pipe2`** 同类）。
 - **`shutdown(2)`**（**`AF_INET` UDP**）：**`UdpSocket`** **`SHUT_RD`/`SHUT_WR`** 分别置 **`rx_shut`/`tx_shut`**，**`recv`**/**`send`** 失败（**`EINVAL`/`EPIPE`** 类），**`poll`** 不再对关闭侧置 **`IN`/`OUT`**；**`SHUT_RDWR`** 置两标志并 **`smoltcp` `close()`**（issue-274；此前凡 **`how`** 均 **`close()`**）。

@@ -1,0 +1,27 @@
+{
+  "id": "issue-322",
+  "title": "`accept4(2)`：`sys_accept4` 在 `Socket::from_fd(fd)` 之前校验 `flags`（未知位 → `EINVAL`），与 Linux 先解析监听 `fd`（`EBADF`）再处理 `flags` 时，「无效 `fd`」与「非法 `flags`」的 `EBADF`/`EINVAL` 优先级可能不完全一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T16:05:00Z",
+  "severity": "low",
+  "fix_summary": "将 `Socket::from_fd(fd)?` 提前到 `VALID_ACCEPT4_FLAGS` 掩码校验之前，使无效监听 fd 时 `EBADF` 先于非法 flags 的 `EINVAL`；注释 issue-322 及与 issue-317/315/320 同类。更新 `executor-memory` accept4 条、表格与最近更新；新增 `issue-322.json`。",
+  "files_changed": ["kernel/src/syscall/net/socket.rs", "auto-evolve/memory/executor-memory.md", "auto-evolve/issue-pool/issue-322.json"],
+  "description": "**`kernel/src/syscall/net/socket.rs`** **`sys_accept4`** **（** **约** **132–148** **行** **）** **顺序** **：** **`flags & !VALID_ACCEPT4_FLAGS`** **→** **`InvalidInput`** **，** **再** **`Socket::from_fd(fd)?`** **。** **当** **调用** **同时** **存在** **无效** **监听** **`fd`** **与** **含** **未知** **`flags`** **位** **时** **，** **本** **实现** **固定** **先** **`EINVAL`** **；** **Linux** **`__sys_accept4`** **通常** **先** **`sockfd_lookup`/`fget`** **得到** **`EBADF`** **，** **再** **校验** **`SOCK_CLOEXEC`/`SOCK_NONBLOCK`** **等** **。** **与** **issue-317**/**issue-320**/**issue-315** **类** **「** **`flags`** **校验** **与** **`fd`** **解析** **顺序** **」** **同类** **。** **同** **文件** **中** **issue-149** **已** **保证** **成功** **路径** **上** **向** **用户** **写** **地址** **在** **`add_to_fd`** **前** **，** **未** **单独** **约定** **错误** **路径** **上** **`flags`/`fd`** **先后** **。**\n\n**建议** **：** **对照** **Linux** **`net/socket.c`** **`__sys_accept4`** **，** **将** **`Socket::from_fd(fd)?`** **提前** **到** **`flags`** **掩码** **校验** **之前** **，** **或** **注释** **说明** **有意** **先** **拒绝** **非法** **`flags`** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["accept4"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/socket.rs:132-165"],
+    "related_files": [],
+    "key_insight": "accept4 flags vs listening fd EBADF order"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：无效监听 fd + 非法 accept4 flags 对照 Linux 返回顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游 `accept4` 错误优先级一致，或注释说明差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "先 `Socket::from_fd(fd)?`，再校验 `flags` 掩码；与 `sys_splice`/`pidfd_getfd` 重排风格一致。",
+  "references": ["man 2 accept4", "kernel/src/syscall/net/socket.rs", "issue-149", "issue-317", "issue-320"]
+}
