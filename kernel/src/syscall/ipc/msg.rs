@@ -695,6 +695,9 @@ pub fn sys_msgctl(msqid: i32, cmd: i32, buf: usize) -> AxResult<isize> {
 
     // IPC_INFO (put before looking up the queue!)
     if cmd == IPC_INFO {
+        if buf == 0 {
+            return Err(AxError::BadAddress);
+        }
         // IPC_INFO uses msqid=0, no actual queue needed
         // Return system-level information
         #[repr(C)]
@@ -728,6 +731,9 @@ pub fn sys_msgctl(msqid: i32, cmd: i32, buf: usize) -> AxResult<isize> {
 
     // MSG_INFO (put before looking up the queue!)
     if cmd == MSG_INFO {
+        if buf == 0 {
+            return Err(AxError::BadAddress);
+        }
         let msg_manager = MSG_MANAGER.lock();
         // Manually create IpcPerm
         let msg_perm = IpcPerm {
@@ -785,6 +791,10 @@ pub fn sys_msgctl(msqid: i32, cmd: i32, buf: usize) -> AxResult<isize> {
                     return Err(AxError::from(LinuxError::EACCES));
                 }
 
+                if buf == 0 {
+                    return Err(AxError::BadAddress);
+                }
+
                 let ptr = buf as *mut msqid_ds;
                 ptr.vm_write(guard.msqid_ds)?;
                 Ok(actual_msqid as isize)
@@ -818,6 +828,10 @@ pub fn sys_msgctl(msqid: i32, cmd: i32, buf: usize) -> AxResult<isize> {
             return Err(AxError::from(LinuxError::EACCES)); // EACCES
         }
 
+        if buf == 0 {
+            return Err(AxError::BadAddress);
+        }
+
         // Copy queue status to user space
         let ptr = buf as *mut msqid_ds;
         ptr.vm_write(msg_queue.msqid_ds)?;
@@ -834,6 +848,9 @@ pub fn sys_msgctl(msqid: i32, cmd: i32, buf: usize) -> AxResult<isize> {
     }
 
     if cmd == IPC_SET {
+        if buf == 0 {
+            return Err(AxError::BadAddress);
+        }
         let ptr = buf as *const msqid_ds;
         let (uid, gid, mode, msg_qbytes) = read_msqid_ds_ipc_set_user(ptr)?;
 

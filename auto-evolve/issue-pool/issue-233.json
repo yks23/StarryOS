@@ -1,0 +1,27 @@
+{
+  "id": "issue-233",
+  "title": "msgctl：`IPC_INFO`/`MSG_INFO`/`MSG_STAT`/`IPC_STAT` 等写回前未显式拒绝 `buf==NULL`",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`sys_msgctl`**：在 **`IPC_INFO`/`MSG_INFO`/`MSG_STAT`/`IPC_STAT`/`IPC_SET`** 访问用户 **`buf` 前 `buf==0` → `BadAddress`**（**`IPC_STAT`/`MSG_STAT`** 在权限校验之后、`vm_write`/`read_msqid_ds_ipc_set_user` 之前）；**`IPC_RMID`** 仍不检查 **`buf`**。",
+  "files_changed": ["kernel/src/syscall/ipc/msg.rs"],
+  "description": "**`kernel/src/syscall/ipc/msg.rs`** **`sys_msgctl`**（约 **678** 行起）第三参数为 **`buf: usize`**，在 **`IPC_INFO`**（约 **697–726** 行）、**`MSG_INFO`**（约 **730–766** 行）、**`MSG_STAT`**（约 **769–793** 行）、**`IPC_STAT`**（约 **810–825** 行）等分支将 **`buf`** 转为 **`*mut T`** 后 **`vm_write`**，**未** 在写回前统一 **`if buf == 0 { return Err(BadAddress); }`**。\n\n**Linux `msgctl(2)`**：需向用户空间拷贝结构的命令在 **`buf`/`arg` 为 NULL** 时返回 **`EFAULT`**（在 **`EINVAL`**/`EACCES`** 等之前或按具体路径）。当前依赖 **`vm_write`** 对 **NULL** 的 **`BadAddress`**，与 **`issue-230`/`231`/`232`** 在 **`uname`/`clock_gettime`/`getitimer`** 采用的**显式** **`is_null()`** 风格不一致，**错误顺序**也不如显式分支清晰。\n\n**建议**：在 **`IPC_INFO`/`MSG_INFO`/`MSG_STAT`/`IPC_STAT`/`IPC_SET`** 各 **`vm_write`/`read_*_user` 前** 对 **`buf == 0`**（或 **`ptr.is_null()`**）返回 **`AxError::BadAddress`**；**`IPC_RMID`** 等 **`buf` 可忽略** 的路径单独说明。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["msgctl"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/ipc/msg.rs:678-826"],
+    "related_files": ["kernel/src/syscall/sys.rs:154-233"],
+    "key_insight": "usize 转指针后 vm_write；无显式 NULL 分支"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；`msgctl(0, IPC_INFO, NULL)` 等。",
+    "expected_output_contains": "",
+    "pass_criteria": "NULL `buf` → EFAULT/BadAddress 或与 Linux 一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos：通过（exit 0）"
+  },
+  "suggested_fix": "各需用户缓冲的分支在访问前 `if buf == 0 { return Err(AxError::BadAddress); }` 或封装 `UserPtr::from(buf).require_non_null()`。",
+  "references": ["man 2 msgctl", "issue-230", "issue-213"]
+}
