@@ -6,6 +6,7 @@ mod inotify;
 mod net;
 mod pidfd;
 mod pipe;
+pub(crate) mod record_lock;
 pub mod signalfd;
 pub mod timerfd;
 
@@ -218,6 +219,7 @@ pub fn add_file_like(f: Arc<dyn FileLike>, cloexec: bool) -> AxResult<c_int> {
 /// Close a file by `fd`.
 pub fn close_file_like(fd: c_int) -> AxResult {
     flock::release_fd(fd);
+    record_lock::release_fd(fd);
     let f = FD_TABLE
         .write()
         .remove(fd as usize)
