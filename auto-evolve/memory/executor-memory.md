@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-151 resolved（**`getrandom`**：**`GRND_FLAGS_MASK`** 校验先于 **`len==0`** **`Ok(0)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-150 resolved（**`socketpair`**：第二端 **`add_to_fd_table`** 失败时 **`close_file_like(fd1)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-149 resolved（**`accept4`/`accept`**：**`addr` 非空**时先 **`write_to_user`** 再 **`add_to_fd_table`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-148 resolved（**`pipe2`**：**`fds.vm_write`** 失败时 **`close_file_like`** 读/写两端；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -131,6 +132,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-151 | getrandom len==0 仍先校验 flags | resolved | 2026-04-12 |
 | issue-150 | socketpair 第二 fd 失败回滚第一端 | resolved | 2026-04-12 |
 | issue-149 | accept4先写 sockaddr 再装 fd | resolved | 2026-04-12 |
 | issue-148 | pipe2 vm_write 失败关闭两端 fd | resolved | 2026-04-12 |
@@ -303,7 +305,7 @@
 - **`getrusage(2)`**：**`who`** 非法 → **`InvalidInput`**（**EINVAL**）；**`usage`** 为 **NULL** → **`BadAddress`**（**EFAULT**），须在聚合 **`Rusage`** 之前检查，与 Linux 顺序一致。
 - **`prlimit64`**：对齐 Linux **`do_prlimit`**（issue-141）：**`old_limit` 非空**时先在进程内保存变更前的 **`rlimit64`**；**`new_limit` 非空**时先 **`vm_read`** 并校验（**`rlim_cur`≤`rlim_max`**、非法抬高硬上限 **`EPERM`**，同 issue-044），成功后再更新内核 **`rlimit`**；最后再 **`vm_write(old_limit)`** 写出快照。**`new_limit`** 读/校验失败时不应已写出 **`old`**。可降低硬上限或保持不变并更新 **`rlim_cur`**（在 **`rlim_cur <= rlim_max`** 前提下）。
 - **`ioctl(FIONBIO)`**：第三参为 **`int *`**（Linux）；用 **`(arg as *const c_int).vm_read()`** 读整型，**`set_nonblocking(value != 0)`**；勿只读单字节、勿将取值限制为 0/1（**`2`**、**`256`** 等小端首字节为 0 的非零值须启用 **`O_NONBLOCK`**）。
-- **`getrandom(2)`**：**`flags`** 须为 **`linux_raw_sys::general`** 中 **`GRND_NONBLOCK|GRND_RANDOM|GRND_INSECURE`** 的子集（与 **`uapi/linux/random.h`** 一致），否则 **`EINVAL`**；勿用 **`from_bits_retain`** 静默丢弃未知位。
+- **`getrandom(2)`**：**`flags`** 须为 **`linux_raw_sys::general`** 中 **`GRND_NONBLOCK|GRND_RANDOM|GRND_INSECURE`** 的子集（与 **`uapi/linux/random.h`** 一致），否则 **`EINVAL`**；掩码校验须先于 **`len==0`** 的 **`Ok(0)`** 早退（issue-151，与 issue-042 互补）。勿用 **`from_bits_retain`** 静默丢弃未知位。
 - **`fadvise64`**：管道等不可 seek 的 fd 上 Linux 为 **`ESPIPE`**（非法 seek），非 **`EPIPE`**（断管）。实现上 **`Pipe::from_fd`** 分支返回 **`LinuxError::ESPIPE.into()`**（**`axerrno::LinuxError`**），勿用 **`AxError::BrokenPipe`**。真 **`fadvise`** 语义仍为桩；**`advice≤5`** 且非 pipe 时 **`offset`/`len`** 须非负，且 cast 为 **`u64`** 后 **`checked_add`** 不溢出，否则 **`InvalidInput`**（**EINVAL**），与 **`sys_fallocate`** 一致。
 - **`fsync(2)`/`fdatasync(2)`**：须 **`get_file_like`** 后对 **`File`** 或 **`MemfdCreatedFile`**（包装 **`File`**）调用 **`axfs::File::sync`**；**pipe**、**socket**、**目录**、**epoll** 等其它 **`FileLike`** → **`InvalidInput`**（**EINVAL**），勿用 **`File::from_fd`**（会得到 **`BrokenPipe`**/**`IsADirectory`**，issue-130）。无效 **`fd`** 仍为 **`BadFileDescriptor`**（**EBADF**）。
 - **`read(2)`/`write(2)`**（经 **`readv`/`writev`**）：**`Directory`** **`FileLike::read`/`write`** 须 **`IsADirectory`**（**EISDIR**），勿 **`BadFileDescriptor`**（**EBADF**），与 Linux 及 **`pread`/`pwrite`** 经 **`File::from_fd`** 行为一致（issue-143）。
@@ -384,6 +386,7 @@
 - issue-148：**`pipe2`** +坏 **`fds`**：**`vm_write`** 失败不应泄漏两个管道 **fd**。
 - issue-149：**`accept4`** **`addr` 非空** + 坏 **`sockaddr`/`addrlen`**：**`EFAULT`** 不应多出新 **socket fd**。
 - issue-150：**`socketpair`** 仅余 1 **fd** 槽或第二端 **`add_to_fd_table`** 失败：不应残留已装第一端 **fd**。
+- issue-151：**`getrandom(..., len=0, flags=~0)`** → **`EINVAL`**，勿 **`Ok(0)`**。
 - issue-053：请跑 **`/bin/test_memfd_create_invalid_flags`**（**`memfd_create(..., 0x80000000)`** → **`EINVAL`**）。
 - issue-052：请跑 **`/bin/test_fchownat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`uid`/`gid`** 不变）。
 - issue-051：请跑 **`/bin/test_utimensat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`mtime`** 不变）。

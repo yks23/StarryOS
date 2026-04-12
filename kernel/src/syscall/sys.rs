@@ -225,11 +225,12 @@ bitflags::bitflags! {
 const GRND_FLAGS_MASK: u32 = GRND_NONBLOCK | GRND_RANDOM | GRND_INSECURE;
 
 pub fn sys_getrandom(buf: *mut u8, len: usize, flags: u32) -> AxResult<isize> {
-    if len == 0 {
-        return Ok(0);
-    }
+    // Linux getrandom: validate GRND_* before count==0 short-circuit (issue-151).
     if flags & !GRND_FLAGS_MASK != 0 {
         return Err(AxError::InvalidInput);
+    }
+    if len == 0 {
+        return Ok(0);
     }
     let flags = GetRandomFlags::from_bits_truncate(flags);
 
