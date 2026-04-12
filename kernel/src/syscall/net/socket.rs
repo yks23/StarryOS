@@ -42,6 +42,11 @@ pub fn sys_socket(domain: u32, raw_ty: u32, proto: u32) -> AxResult<isize> {
     validate_socket_type(raw_ty)?;
     let ty = raw_ty & SOCK_TYPE_MASK;
 
+    // Linux `unix_create`: Unix domain sockets require `protocol == 0` → EPROTONOSUPPORT otherwise.
+    if domain == AF_UNIX && proto != 0 {
+        return Err(AxError::from(LinuxError::EPROTONOSUPPORT));
+    }
+
     let pid = current().as_thread().proc_data.proc.pid();
     let socket = match (domain, ty) {
         (AF_INET, SOCK_STREAM) => {
@@ -185,6 +190,9 @@ pub fn sys_socketpair(
 
     if domain != AF_UNIX {
         return Err(AxError::from(LinuxError::EAFNOSUPPORT));
+    }
+    if proto != 0 {
+        return Err(AxError::from(LinuxError::EPROTONOSUPPORT));
     }
 
     let pid = current().as_thread().proc_data.proc.pid();
