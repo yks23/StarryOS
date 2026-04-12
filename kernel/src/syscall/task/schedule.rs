@@ -133,12 +133,10 @@ pub fn sys_clock_nanosleep(
     if flags & !TIMER_ABSTIME != 0 {
         return Err(AxError::InvalidInput);
     }
-    let req = read_timespec_user(req)?.try_into_time_value()?;
-    debug!("sys_clock_nanosleep <= clock_id: {clock_id}, flags: {flags}, req: {req:?}");
-
     let id = clock_id as u32;
-    // Align with `sys_clock_gettime` (issue-250, issue-263): HAL has one monotonic counter, so
-    // BOOTTIME / MONOTONIC_* / RAW / COARSE share `monotonic_time` for sleep timelines.
+    // Linux `clock_nanosleep`: validate `clock_id` before `copy_from_user(req)` (EINVAL before EFAULT
+    // on bad `req`; issue-332). Align with `sys_clock_gettime` (issue-250, issue-263): HAL has one
+    // monotonic counter, so BOOTTIME / MONOTONIC_* / RAW / COARSE share `monotonic_time` for sleep.
     let clock = match id {
         CLOCK_REALTIME => axhal::time::wall_time,
         CLOCK_MONOTONIC
@@ -150,6 +148,9 @@ pub fn sys_clock_nanosleep(
             return Err(AxError::InvalidInput);
         }
     };
+
+    let req = read_timespec_user(req)?.try_into_time_value()?;
+    debug!("sys_clock_nanosleep <= clock_id: {clock_id}, flags: {flags}, req: {req:?}");
 
     let dur = if flags & TIMER_ABSTIME != 0 {
         req.saturating_sub(clock())

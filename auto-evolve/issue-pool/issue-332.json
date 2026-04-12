@@ -1,0 +1,27 @@
+{
+  "id": "issue-332",
+  "title": "`clock_nanosleep(2)`：`sys_clock_nanosleep` 在 `read_timespec_user(req)` 之后才根据 `clock_id` 判定不支持 → `EINVAL`，与 Linux `clock_nanosleep` 常先校验 `clock_id`/`flags` 再 `copy_from_user(req)` 时，「不支持的 `clock_id`」与「非法 `req` 指针」的 `EINVAL`/`EFAULT` 优先级可能不完全一致",
+  "status": "resolved",
+  "created_at": "2026-04-13T23:00:00Z",
+  "severity": "low",
+  "fix_summary": "将 `clock_id` → `clock` 的 match（与 issue-250/issue-263 一致）提前到 `read_timespec_user(req)` 之前；`flags & !TIMER_ABSTIME` 仍最先。注释 issue-332。更新 `executor-memory` nanosleep 条、表格与最近更新；新增 `issue-332.json`。",
+  "files_changed": ["kernel/src/syscall/task/schedule.rs", "auto-evolve/memory/executor-memory.md", "auto-evolve/issue-pool/issue-332.json"],
+  "description": "**`kernel/src/syscall/task/schedule.rs`** **`sys_clock_nanosleep`** **（** **约** **126–151** **行** **）** **顺序** **：** **`flags & !TIMER_ABSTIME`** **→** **`read_timespec_user(req)?`** **→** **`match clock_id`** **→** **不** **支持** **则** **`InvalidInput`** **。** **当** **`clock_id`** **为** **本** **实现** **未** **覆盖** **的** **值** **且** **`req`** **为** **无效** **用户** **指针** **时** **，** **本** **路径** **先** **在** **`read_timespec_user`** **失败** **为** **`EFAULT`** **类** **错误** **；** **Linux** **常见** **在** **`copy_from_user`** **之前** **拒绝** **非法** **`clock_id`** **为** **`EINVAL`** **。** **与** **issue-263** **`clock_id`** **覆盖** **说明** **、** **issue-250** **/`sys_clock_gettime`** **分支** **可** **对照** **。**\n\n**建议** **：** **将** **`clock_id`** **可** **支持** **性** **（** **与** **`sys_clock_gettime`** **一致** **）** **提前** **到** **`read_timespec_user(req)`** **之前** **，** **或** **注释** **说明** **与** **上游** **错误** **顺序** **差异** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["clock_nanosleep"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/schedule.rs:126-180"],
+    "related_files": [],
+    "key_insight": "clock_nanosleep read req before unsupported clock_id EINVAL order"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：不支持 `clock_id` + 坏 `req` 对照 Linux 返回顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游 `clock_nanosleep` 校验顺序一致，或注释说明差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "先匹配/拒绝不支持的 `clock_id`（及 `flags`），再 `read_timespec_user(req)`。",
+  "references": ["man 2 clock_nanosleep", "kernel/src/syscall/task/schedule.rs", "issue-263", "issue-250"]
+}
