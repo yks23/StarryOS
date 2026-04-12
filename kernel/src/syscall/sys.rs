@@ -183,11 +183,17 @@ bitflags::bitflags! {
     }
 }
 
+/// Linux `getrandom(2)` only allows `GRND_*` bits defined in `uapi/linux/random.h`.
+const GRND_FLAGS_MASK: u32 = GRND_NONBLOCK | GRND_RANDOM | GRND_INSECURE;
+
 pub fn sys_getrandom(buf: *mut u8, len: usize, flags: u32) -> AxResult<isize> {
     if len == 0 {
         return Ok(0);
     }
-    let flags = GetRandomFlags::from_bits_retain(flags);
+    if flags & !GRND_FLAGS_MASK != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    let flags = GetRandomFlags::from_bits_truncate(flags);
 
     debug!("sys_getrandom <= buf: {buf:p}, len: {len}, flags: {flags:?}");
 
