@@ -66,12 +66,17 @@ pub fn sys_mount(
     flags: i32,
     data: *const c_void,
 ) -> AxResult<isize> {
-    validate_mount_flags(flags)?;
-    validate_mount_data(data)?;
-
+    // Copy user strings before rejecting invalid `flags`/`data` content, similar to Linux
+    // `copy_mount_string` / `copy_mount_options` ordering: **EFAULT** / length-class errors from
+    // paths or `data` surface before **EINVAL** from unsupported `MS_*` or non-empty `data`
+    // (issue-303).
     let source = vm_load_string(source)?;
     let target = vm_load_string(target)?;
     let fs_type = vm_load_string(fs_type)?;
+    validate_mount_data(data)?;
+
+    validate_mount_flags(flags)?;
+
     debug!("sys_mount <= source: {source:?}, target: {target:?}, fs_type: {fs_type:?}, flags: {flags}");
 
     validate_fs_type(&fs_type)?;

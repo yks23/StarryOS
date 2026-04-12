@@ -1,0 +1,27 @@
+{
+  "id": "issue-303",
+  "title": "`mount(2)`：`sys_mount` 先校验 `flags`/`data` 再 `vm_load_string` 三段路径字符串，可能与 Linux 对用户参数的 `copy_from_user`/校验链顺序不同，导致 `EFAULT`/`EINVAL`/`ENAMETOOLONG` 等错误码优先级与上游不完全一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T12:05:00Z",
+  "severity": "low",
+  "fix_summary": "重排 `sys_mount`：`vm_load_string(source/target/fs_type)` 与 `validate_mount_data(data)` 先于 `validate_mount_flags`，使坏指针/长度类错误优先于非法 `MS_*` 的 EINVAL；在 `sys_mount` 内增加与 Linux `copy_mount_string` 顺序对照的注释。`executor-memory` `mount`/`umount2` 条补充 issue-303。",
+  "files_changed": ["kernel/src/syscall/fs/mount.rs", "auto-evolve/memory/executor-memory.md"],
+  "description": "**`kernel/src/syscall/fs/mount.rs`** **`sys_mount`** **当前** **顺序** **为** **`validate_mount_flags`** **→** **`validate_mount_data`** **→** **`vm_load_string(source/target/fs_type)`** **。** **Linux** **`mount(2)`** **内核** **路径** **通常** **在** **早期** **从** **用户空间** **拷贝** **`source`/`target`/`type`** **字符串** **并** **做** **长度** **/** **路径** **相关** **检查** **；** **与** **本** **实现** **在** **无效** **`flags`** **或** **`data`** **指针** **场景** **下** **返回** **错误** **的** **先后** **可能** **不同** **（** **例如** **某** **类** **坏** **指针** **与** **非法** **`MS_*`** **组合** **时** **优先** **`EFAULT`** **还是** **`EINVAL`** **）** **。**\n\n**影响** **主要** **为** **极端** **/** **模糊** **测试** **与** **与** **Linux** **行为** **逐** **条** **对齐** **的** **回归** **期望** **；** **功能** **子集** **（** **仅** **`flags==0`** **、** **`data`** **空** **/** **合法** **）** **通常** **不受影响** **。**\n\n**建议** **：** **对照** **上游** **`do_mount`** **/** **`copy_mount_string`** **等** **对** **用户** **参数** **的** **访问** **顺序** **，** **决定** **是否** **调整** **`sys_mount`** **内** **校验** **顺序** **或** **在** **注释** **中** **明确** **「** **与** **Linux** **错误** **优先级** **可能** **不同** **」** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["mount"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/mount.rs:62-85"],
+    "related_files": [],
+    "key_insight": "mount 参数校验顺序 vs Linux copy_from_user 链"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：构造 `mount` 非法 flags + 非法指针组合，对照 Linux 错误码顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游 `mount(2)` 错误优先级一致，或文档/注释明确说明有意差异及原因。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "查阅 Linux `mount` 用户参数拷贝与校验顺序，按需重排 `sys_mount` 或补充模块级说明。",
+  "references": ["man 2 mount", "kernel/src/syscall/fs/mount.rs"]
+}
