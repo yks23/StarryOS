@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-067 resolved（**`mount`**：**`flags`** 须为 **0**（未实现 **`MS_*`**）；**`data`** 仅 **`NULL`** 或空 C 串；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-066 resolved（**`mmap`** **`flags`**：**`ALLOWED_MAP_FLAGS`**（uapi **`MAP_*`** + **`MAP_HUGE_*`** 域）未知位 **`InvalidInput`**；扩展 **`MmapFlags`** 使合法组合走 **`from_bits`**；**`from_bits` 失败** 时 **`SHARED_VALIDATE` 类型 → `OperationNotSupported`** 否则 **`InvalidInput`**，勿 **`from_bits_truncate`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-065 resolved（**`mmap`**：**`MmapProt::from_bits`** 与 **`mprotect`** 一致；**`PROT_GROWSDOWN`/`GROWSUP`** 在 **`mmap`** 拒绝；**`mprotect`** 用 **`intersects`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-064 resolved（**`copy_file_range`**：常规文件 + 同 inode 区间重叠 **`EINVAL`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -48,6 +49,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-067 | mount flags==0 + data NULL/empty | resolved | 2026-04-13 |
 | issue-066 | mmap flags ALLOWED_MAP_FLAGS + 勿 from_bits_truncate | resolved | 2026-04-13 |
 | issue-065 | mmap prot from_bits 与 mprotect 一致 | resolved | 2026-04-13 |
 | issue-064 | copy_file_range 重叠/常规文件 EINVAL | resolved | 2026-04-13 |
@@ -146,7 +148,7 @@
 - **`clock_gettime` / `clock_getres`**：未实现的 **`clockid_t`** 须 **`EINVAL`**，**勿**对未知 id 回退 **`wall_time()`**。**`clock_id_supported`** 与已实现时钟一致（**REALTIME/REALTIME_COARSE、MONOTONIC/RAW/COARSE、BOOTTIME、CPUTIME_ID** 等）；**`clock_getres`** 对不支持 id 同样 **`EINVAL`**（即使 **`res==NULL`**）。
 - `bpf` / `userfaultfd`：未实现时返回 **`AxError::Unsupported`（ENOSYS）**，勿再 `sys_dummy_fd`；`perf_event_open` 可返回 **`PermissionDenied`（EPERM）** 以匹配测试与常见无能力场景。`io_uring_setup` 若仅消除 dummy 路径：最小桩返回 `anon_inode:[io_uring]` 的 `IoUringFd`，写回 `sq_entries`/`cq_entries`；真 io_uring 需 ring mmap 与提交队列。
 - `fsopen`：无 fs-context 实现时返回 **`NoSuchDevice`（ENODEV）**（或 EINVAL），勿发 `anon_inode:[dummy]`；`fspick`/`open_tree` 可 **`Unsupported`**。`memfd_secret` 在用户态常以两参探测（与 `memfd_create` 同形）时，可 **`sys_memfd_create` 复用** 以获得真实 memfd 路径。已移除 **`sys_dummy_fd`** 分配假 fd 的路径。
-- **`mount`/`umount2`**：**`sys_mount`** 仅允许 **`SUPPORTED_MOUNT_FSTYPES`**（当前 **`tmpfs`**）；空或未知 **`fstype`** → **`EINVAL`**。**`sys_umount2`** 的 **`flags`** 须为 **`MNT_FORCE|DETACH|EXPIRE|UMOUNT_NOFOLLOW`** 子集，否则 **`EINVAL`**。未建模 **`CAP_SYS_ADMIN`** 等挂载权限。
+- **`mount`/`umount2`**：**`sys_mount`** 仅允许 **`SUPPORTED_MOUNT_FSTYPES`**（当前 **`tmpfs`**）；空或未知 **`fstype`** → **`EINVAL`**。**`mount`** 的 **`flags`** 当前须为 **0**（未实现 **`MS_RDONLY`/`MS_BIND`/…**）；**`data`** 须为 **`NULL`** 或空 C 字符串（非空 **`tmpfs` 选项** → **`EINVAL`**）。**`sys_umount2`** 的 **`flags`** 须为 **`MNT_FORCE|DETACH|EXPIRE|UMOUNT_NOFOLLOW`** 子集，否则 **`EINVAL`**。未建模 **`CAP_SYS_ADMIN`** 等挂载权限。
 - `/proc/self/fd/N` 的 readlink 内容来自 `FileLike::path()`；`inotify_init1`/`fanotify_init` 须使用独立 `InotifyFd`/`FanotifyFd`（`anon_inode:[inotify]` / `anon_inode:[fanotify]`），不能再用 `anon_inode:[dummy]`，否则用户态假阳性。
 - POSIX `timer_create` / `timer_settime` / `timer_gettime` / `timer_delete`：未实现时须返回 **`AxError::Unsupported`（ENOSYS）**，禁止 `Ok(0)` 导致用户态 `timer_t` 未写入却被当作成功；若将来实现，需向 `timer_create` 第四参写入非空 id 并接 `sigevent`/线程定时逻辑。
 - `flock(2)`：按 inode（`File`/`Directory` 的 `metadata` dev/ino）维护 BSD 风格互斥/共享锁；同一 fd 升级/幂等、关闭 fd 须从全局表移除；`LOCK_NB` 冲突映射 `AxError::WouldBlock`（EAGAIN）；阻塞模式在 `WouldBlock` 上 `yield_now` 轮询。

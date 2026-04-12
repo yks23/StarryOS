@@ -22,17 +22,41 @@ fn validate_fs_type(fs_type: &str) -> AxResult<()> {
     Ok(())
 }
 
+/// Supported `mount(2)` subset: no `MS_*` bits (no `MS_RDONLY`/`MS_BIND`/… until implemented).
+fn validate_mount_flags(flags: i32) -> AxResult<()> {
+    if flags != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    Ok(())
+}
+
+/// Until `tmpfs`/`MemoryFs` options are parsed, only `NULL` or an empty C string.
+fn validate_mount_data(data: *const c_void) -> AxResult<()> {
+    if data.is_null() {
+        return Ok(());
+    }
+    let s = vm_load_string(data.cast::<c_char>())?;
+    if s.is_empty() {
+        Ok(())
+    } else {
+        Err(AxError::InvalidInput)
+    }
+}
+
 pub fn sys_mount(
     source: *const c_char,
     target: *const c_char,
     fs_type: *const c_char,
-    _flags: i32,
-    _data: *const c_void,
+    flags: i32,
+    data: *const c_void,
 ) -> AxResult<isize> {
+    validate_mount_flags(flags)?;
+    validate_mount_data(data)?;
+
     let source = vm_load_string(source)?;
     let target = vm_load_string(target)?;
     let fs_type = vm_load_string(fs_type)?;
-    debug!("sys_mount <= source: {source:?}, target: {target:?}, fs_type: {fs_type:?}");
+    debug!("sys_mount <= source: {source:?}, target: {target:?}, fs_type: {fs_type:?}, flags: {flags}");
 
     validate_fs_type(&fs_type)?;
 
