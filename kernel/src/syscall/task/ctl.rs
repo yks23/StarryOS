@@ -7,7 +7,7 @@ use starry_vm::{VmMutPtr, VmPtr, vm_write_slice};
 
 use crate::{
     mm::vm_load_string,
-    task::{AsThread, get_process_data},
+    task::{AsThread, CRED_NO_CHANGE, get_process_data},
 };
 
 const CAPABILITY_VERSION_3: u32 = 0x20080522;
@@ -53,15 +53,27 @@ pub fn sys_umask(mask: u32) -> AxResult<isize> {
     Ok(old as isize)
 }
 
-pub fn sys_setreuid(_ruid: u32, _euid: u32) -> AxResult<isize> {
+pub fn sys_setreuid(ruid: u32, euid: u32) -> AxResult<isize> {
+    current()
+        .as_thread()
+        .proc_data
+        .setresuid(ruid, euid, CRED_NO_CHANGE)?;
     Ok(0)
 }
 
-pub fn sys_setresuid(_ruid: u32, _euid: u32, _suid: u32) -> AxResult<isize> {
+pub fn sys_setresuid(ruid: u32, euid: u32, suid: u32) -> AxResult<isize> {
+    current()
+        .as_thread()
+        .proc_data
+        .setresuid(ruid, euid, suid)?;
     Ok(0)
 }
 
-pub fn sys_setresgid(_rgid: u32, _egid: u32, _sgid: u32) -> AxResult<isize> {
+pub fn sys_setresgid(rgid: u32, egid: u32, sgid: u32) -> AxResult<isize> {
+    current()
+        .as_thread()
+        .proc_data
+        .setresgid(rgid, egid, sgid)?;
     Ok(0)
 }
 

@@ -230,6 +230,7 @@ impl CloneArgs {
                 signal_actions,
                 exit_signal,
             );
+            proc_data.copy_credentials_from(old_proc_data.as_ref());
             proc_data.set_umask(old_proc_data.umask());
             proc_data.set_heap_top(old_proc_data.get_heap_top());
 

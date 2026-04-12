@@ -2,12 +2,13 @@
 
 ## 最近更新
 - 日期：2026-04-12
-- 本轮尝试修复：issue-014（fsopen/fspick/open_tree/memfd_secret dummy fd）
-- 结果：resolved（`fsopen` → ENODEV；`fspick`/`open_tree` → ENOSYS；`memfd_secret` → 复用 `memfd_create`；删除 `sys_dummy_fd`；`cargo clippy --target riscv64gc-unknown-none-elf -F qemu` 通过）
+- 本轮尝试修复：issue-022（setuid/getuid 凭证）
+- 结果：resolved（`ProcessData` 维护 r/e/s uid+gid；`setuid`/`setresuid`/`setreuid`/`setgid`/`setresgid`；fork 继承；`cargo clippy --target riscv64gc-unknown-none-elf -F qemu` 通过）
 
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-022 | setuid/getuid 恒0 / setresuid 空操作 | resolved | 2026-04-12 |
 | issue-014 | 挂载 API / memfd_secret dummy fd | resolved | 2026-04-12 |
 | issue-013 | bpf/io_uring 等 dummy fd 误导 | resolved | 2026-04-12 |
 | issue-010 | timerfd DummyFd / poll 永不触发 | resolved | 2026-04-12 |
@@ -38,8 +39,10 @@
 - `fcntl` 记录锁（`F_SETLK`/`F_SETLKW`/`F_GETLK` 及 `F_OFD_*` 同路径）：仅对普通 `File` fd；`flock64` 区间经 SEEK_SET/CUR/END 解析；写锁与读/写冲突、读锁仅与写冲突；同进程占位前先对重叠区间解锁再插入；`F_SETLK` 冲突返回 `WouldBlock`；`close_file_like` 调用 `record_lock::release_fd` 清除该 fd 登记锁。
 - 作业控制：`ProcessData::jobctl` 记录 `stop_sig` / `stop_wait_pending` / `continued_wait_pending`；`SignalOSAction::Stop` 不再 `do_exit`，而是唤醒父 `child_exit_event` 并在内核循环中等待 `SIGCONT`（循环内调用 `check_signals` 以处理入队信号）；`Continue` 清除停止并在曾停止时置 `continued_wait_pending`；`waitpid` 对 `WUNTRACED` 或 **options==0** 写 `(sig<<8)|0x7f`，对 `WCONTINUED` 或 **options==0** 写 `0xffff`。
 - 地址空间并发：`ProcessData.aspace` 为 `Arc<RwLock<AddrSpace>>`；修改页表（缺页 populate、mmap 等）用 `write()`；纯查询（如 mincore、`mremap` 查 VMA、futex 地址解析、部分 `can_access_range`）用 `read()`。缺页仍会写锁直至支持按页或 per-VMA 锁。
+- 进程凭证：`ProcessData` 中 **`ruid/euid/suid`** 与 **`rgid/egid/sgid`**（`AtomicU32`）；`getuid`→`ruid`，`geteuid`→`euid`，gid 同理；`setuid`/`setgid` 为三 ID 同步设置；`setresuid`/`setresgid` 中 **`CRED_NO_CHANGE`=`u32::MAX`** 表示不改；**`euid==0`（或 `egid==0`）** 视为特权可任意改，否则新值须属于当前 `{r,e,s}` 之一否则 **`PermissionDenied`**。`clone` 新建进程在 `ProcessData::new` 后 **`copy_credentials_from`** 父 `ProcessData`。完整 Linux 能力集与 setfsuid 等仍未建模。
 
 ## 给 Debugger 的消息
+- issue-022：请在 rootfs 跑 `/bin/test_setuid_stub`；未接 `setfsuid`/文件置位 exec 等。
 - issue-014：请在 rootfs 跑 `/bin/test_dummy_fsapi`；真 Linux `memfd_secret` 常为单参 flags，本内核按测试与 `memfd_create` 同形两参接入。
 - issue-013：请在 rootfs 跑 `/bin/test_dummy_fd_advanced`；`io_uring_setup` 仅为路径与 params 桩，真实 liburing 仍可能因缺 ring失败。
 - issue-010：timerfd 与 issue-011 同一套 `kernel/src/file/timerfd.rs`；请在带 `/bin/test_timerfd` 的 rootfs 中 QEMU 验证 poll+read。

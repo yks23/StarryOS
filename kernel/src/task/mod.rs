@@ -15,6 +15,7 @@ use core::{
     sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicUsize, Ordering},
 };
 
+use axerrno::{AxError, AxResult};
 use axpoll::PollSet;
 use axsync::{Mutex, spin::SpinNoIrq};
 use axtask::{TaskExt, TaskInner};
@@ -29,6 +30,9 @@ use starry_signal::{
 
 pub use self::{futex::*, ops::*, resources::*, signal::*, stat::*, timer::*, user::*};
 use crate::mm::AddrSpace;
+
+/// Sentinel for `setresuid` / `setresgid` / `setreuid` unused slots: Linux `(uid_t)-1` / `(gid_t)-1`.
+pub const CRED_NO_CHANGE: u32 = u32::MAX;
 
 /// Job-control state shared by all threads in a process (`SIGSTOP` / `SIGCONT`).
 #[derive(Default)]
@@ -236,6 +240,15 @@ pub struct ProcessData {
 
     /// The default mask for file permissions.
     umask: AtomicU32,
+
+    /// Real / effective / saved user-IDs (`setresuid` / `getuid` family).
+    ruid: AtomicU32,
+    euid: AtomicU32,
+    suid: AtomicU32,
+    /// Real / effective / saved group-IDs (`setresgid` / `getgid` family).
+    rgid: AtomicU32,
+    egid: AtomicU32,
+    sgid: AtomicU32,
 }
 
 impl ProcessData {
@@ -272,7 +285,111 @@ impl ProcessData {
             futex_table: Arc::new(FutexTable::new()),
 
             umask: AtomicU32::new(0o022),
+
+            ruid: AtomicU32::new(0),
+            euid: AtomicU32::new(0),
+            suid: AtomicU32::new(0),
+            rgid: AtomicU32::new(0),
+            egid: AtomicU32::new(0),
+            sgid: AtomicU32::new(0),
         })
+    }
+
+    /// Copy r/e/s uid and gid from a parent process (fork / vfork child).
+    pub fn copy_credentials_from(&self, parent: &ProcessData) {
+        let o = Ordering::SeqCst;
+        self.ruid.store(parent.ruid.load(o), o);
+        self.euid.store(parent.euid.load(o), o);
+        self.suid.store(parent.suid.load(o), o);
+        self.rgid.store(parent.rgid.load(o), o);
+        self.egid.store(parent.egid.load(o), o);
+        self.sgid.store(parent.sgid.load(o), o);
+    }
+
+    #[inline]
+    pub fn getuid(&self) -> u32 {
+        self.ruid.load(Ordering::SeqCst)
+    }
+
+    #[inline]
+    pub fn geteuid(&self) -> u32 {
+        self.euid.load(Ordering::SeqCst)
+    }
+
+    #[inline]
+    pub fn getgid(&self) -> u32 {
+        self.rgid.load(Ordering::SeqCst)
+    }
+
+    #[inline]
+    pub fn getegid(&self) -> u32 {
+        self.egid.load(Ordering::SeqCst)
+    }
+
+    fn cred_change_allowed(new: u32, r: u32, e: u32, s: u32) -> bool {
+        new == r || new == e || new == s
+    }
+
+    /// Linux-like `setresuid`: `CRED_NO_CHANGE` leaves that component unchanged.
+    pub fn setresuid(&self, req_r: u32, req_e: u32, req_s: u32) -> AxResult<()> {
+        let old_r = self.ruid.load(Ordering::SeqCst);
+        let old_e = self.euid.load(Ordering::SeqCst);
+        let old_s = self.suid.load(Ordering::SeqCst);
+
+        if old_e != 0 {
+            if req_r != CRED_NO_CHANGE && !Self::cred_change_allowed(req_r, old_r, old_e, old_s) {
+                return Err(AxError::PermissionDenied);
+            }
+            if req_e != CRED_NO_CHANGE && !Self::cred_change_allowed(req_e, old_r, old_e, old_s) {
+                return Err(AxError::PermissionDenied);
+            }
+            if req_s != CRED_NO_CHANGE && !Self::cred_change_allowed(req_s, old_r, old_e, old_s) {
+                return Err(AxError::PermissionDenied);
+            }
+        }
+
+        let o = Ordering::SeqCst;
+        if req_r != CRED_NO_CHANGE {
+            self.ruid.store(req_r, o);
+        }
+        if req_e != CRED_NO_CHANGE {
+            self.euid.store(req_e, o);
+        }
+        if req_s != CRED_NO_CHANGE {
+            self.suid.store(req_s, o);
+        }
+        Ok(())
+    }
+
+    /// Linux-like `setresgid`.
+    pub fn setresgid(&self, req_r: u32, req_e: u32, req_s: u32) -> AxResult<()> {
+        let old_r = self.rgid.load(Ordering::SeqCst);
+        let old_e = self.egid.load(Ordering::SeqCst);
+        let old_s = self.sgid.load(Ordering::SeqCst);
+
+        if old_e != 0 {
+            if req_r != CRED_NO_CHANGE && !Self::cred_change_allowed(req_r, old_r, old_e, old_s) {
+                return Err(AxError::PermissionDenied);
+            }
+            if req_e != CRED_NO_CHANGE && !Self::cred_change_allowed(req_e, old_r, old_e, old_s) {
+                return Err(AxError::PermissionDenied);
+            }
+            if req_s != CRED_NO_CHANGE && !Self::cred_change_allowed(req_s, old_r, old_e, old_s) {
+                return Err(AxError::PermissionDenied);
+            }
+        }
+
+        let o = Ordering::SeqCst;
+        if req_r != CRED_NO_CHANGE {
+            self.rgid.store(req_r, o);
+        }
+        if req_e != CRED_NO_CHANGE {
+            self.egid.store(req_e, o);
+        }
+        if req_s != CRED_NO_CHANGE {
+            self.sgid.store(req_s, o);
+        }
+        Ok(())
     }
 
     /// Get the top address of the user heap.
