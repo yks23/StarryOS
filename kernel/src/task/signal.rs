@@ -91,11 +91,12 @@ pub fn with_blocked_signals<R>(
     let sig = &curr.as_thread().signal;
 
     let old_blocked = blocked.map(|set| sig.set_blocked(set));
-    f().inspect(|_| {
-        if let Some(old) = old_blocked {
-            sig.set_blocked(old);
-        }
-    })
+    let result = f();
+    // Result::inspect only runs on Ok; restore mask on Err too (ppoll/pselect/epoll_pwait).
+    if let Some(old) = old_blocked {
+        sig.set_blocked(old);
+    }
+    result
 }
 
 pub(super) fn send_signal_thread_inner(task: &TaskInner, thr: &Thread, sig: SignalInfo) {
