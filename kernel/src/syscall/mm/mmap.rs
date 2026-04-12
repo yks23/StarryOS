@@ -405,7 +405,19 @@ pub fn sys_madvise(addr: usize, length: usize, advice: i32) -> AxResult<isize> {
             let mut aspace = curr.as_thread().proc_data.aspace.write();
             aspace.madvise_dontneed(start, length)?;
         }
-        _ => {}
+        MADV_WILLNEED | MADV_POPULATE_READ => {
+            let curr = current();
+            let mut aspace = curr.as_thread().proc_data.aspace.write();
+            aspace.populate_area(start, length, MappingFlags::READ)?;
+        }
+        MADV_POPULATE_WRITE => {
+            let curr = current();
+            let mut aspace = curr.as_thread().proc_data.aspace.write();
+            aspace.populate_area(start, length, MappingFlags::READ | MappingFlags::WRITE)?;
+        }
+        // Pure locality hints; no Starry pager policy yet.
+        MADV_NORMAL | MADV_RANDOM | MADV_SEQUENTIAL => {}
+        _ => return Err(AxError::OperationNotSupported),
     }
     Ok(0)
 }

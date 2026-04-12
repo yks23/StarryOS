@@ -1,0 +1,27 @@
+{
+  "id": "issue-173",
+  "title": "madvise：除 MADV_DONTNEED/MADV_FREE 外大量已接受 advice 无操作仍 Ok(0)，与 Linux 提示语义不符",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`MADV_WILLNEED`/`MADV_POPULATE_READ`** 调 **`AddrSpace::populate_area(..., READ)`**；**`MADV_POPULATE_WRITE`** 调 **`populate_area(..., READ|WRITE)`**。**`MADV_NORMAL`/`RANDOM`/`SEQUENTIAL`** 仍为无操作。**其余白名单 advice** 返回 **`OperationNotSupported`**，不再假成功。",
+  "files_changed": ["kernel/src/syscall/mm/mmap.rs"],
+  "description": "**`sys_madvise`**（`kernel/src/syscall/mm/mmap.rs`）先将 **`advice`** 与 **`KNOWN_MADV_ADVICE`** 白名单比对，未知值 **`EINVAL`**；对白名单内值在 **`match`** 中**仅** **`MADV_DONTNEED | MADV_FREE`** 调用 **`aspace.madvise_dontneed`**，**其余分支 **`_ => {}`** **什么都不做** 并 **`Ok(0)`**。**Linux** 上 **`MADV_WILLNEED`** 会尽力将区间页纳入页缓存；**`MADV_RANDOM`/`MADV_SEQUENTIAL`** 影响预读策略；**`MADV_PAGEOUT`/`MADV_COLD`** 等有定义行为（成功或 **`EINVAL`/`ENOMEM`** 视实现）。**Starry** 对这类 hint **全部假成功**，工作负载若依赖 **`madvise`** 调节缺页/预读（数据库、VM、JIT），行为与 **Linux** 不一致；**`MADV_NORMAL`** 等可 no-op，但 **`WILLNEED`** 等不宜长期静默。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["madvise"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/mm/mmap.rs:360-411"],
+    "related_files": [],
+    "key_insight": "`match` 仅处理 DONTNEED/FREE，其余 `_ => {}`"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "对匿名映射 **`mmap` 后 **`madvise(MADV_WILLNEED)`**，用 **`mincore`** 或缺页计数对比 **Linux** 与 **Starry**；或对 **`MADV_SEQUENTIAL`** 大顺序读观察预读差异。",
+    "expected_output_contains": "",
+    "pass_criteria": "对 **`MADV_WILLNEED`** 等有文档行为的 advice **实现等价效果**，或明确 **`EOPNOTSUPP`/`EINVAL`** 且**不**一律 **`Ok(0)`** 误导。",
+    "last_result": "`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` 通过（2026-04-12）。"
+  },
+  "suggested_fix": "在 **`aspace`** 层为 **`WILLNEED`** 触发 **`touch`/fault-in**；**`SEQUENTIAL`/`RANDOM`** 可挂 **`VMA` 标志** 供 **`readahead`** 使用；暂不支持则 **`return Err(Unsupported)`** 而非 **`Ok(0)`**（需权衡应用兼容性）。",
+  "references": ["man 2 madvise", "Linux madvise.c"]
+}
