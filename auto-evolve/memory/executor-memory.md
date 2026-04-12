@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-077 resolved（**`memfd_create`/`memfd_secret`**：**`MemfdCreatedFile`**，**`path`** → **`/memfd:{name}`**；仍用 **`/tmp/memfd-*`** 作实际文件；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-076 resolved（**`poll`/`ppoll`** **`do_poll`**：**`fd < 0`** 时 **`revents = 0`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-075 resolved（**`sendmsg` `CMsg::parse`**：**`SOL_SOCKET`** 下 **`SCM_CREDENTIALS`/`SCM_TIMESTAMP*`/`SCM_SECURITY`** → **`Unsupported`**；**`SCM_RIGHTS`** 仍支持；其它未知 **`InvalidInput`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-074 resolved（**`addr.rs`** INET：**`addrlen >= sizeof(sockaddr_in|in6)`**，vsock：**`sockaddr_vm`** 同理；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -57,6 +58,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-077 | memfd name → MemfdCreatedFile path /memfd: | resolved | 2026-04-13 |
 | issue-076 | poll fd<0 清零 revents | resolved | 2026-04-13 |
 | issue-075 | sendmsg cmsg 已知 SCM_* → Unsupported | resolved | 2026-04-13 |
 | issue-074 | INET sockaddr addrlen >= sizeof struct | resolved | 2026-04-13 |
@@ -150,7 +152,7 @@
 - **`fchmodat(2)`** / **`fchmod`**： **`flags`** 须为 Linux **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW`** 的子集（**`sys_fchmod`** 用 **`AT_EMPTY_PATH`**），否则 **`EINVAL`**；勿未校验即传入 **`resolve_at`**。
 - **`utimensat(2)`**：**`path==NULL`** 时逻辑上含 **`AT_EMPTY_PATH`**；**`flags`** 须为 **`AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH`** 的子集（与 Linux **`VALID_UTIMENSAT_FLAGS`**），在 **`update_times`/`resolve_at`** 前校验，非法位 **`EINVAL`**（含双 **`UTIME_OMIT`** 时亦应先拒绝非法 **`flags`**）。
 - **`fchownat(2)`** / **`fchown`** / **`lchown`**：**`flags`** 须为 **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW`** 的子集（**`VALID_FCHOWNAT_FLAGS`**），否则 **`EINVAL`**；**`sys_fchown`** 用 **`AT_EMPTY_PATH`**，**`lchown`** 用 **`AT_SYMLINK_NOFOLLOW`**。
-- **`memfd_create(2)`/`memfd_secret(2)`**：**`flags`** 低位须为 **`MFD_CLOEXEC|ALLOW_SEALING|HUGETLB|EXEC|NOEXEC_SEAL`** 的子集；**`MFD_HUGE_MASK<<MFD_HUGE_SHIFT`** 域须为 **0** 或等于某一 **`linux_raw_sys::general::MFD_HUGE_*`**（勿仅用 **`(MFD_HUGE_MASK<<SHIFT)`** 整域放行，否则 **`0x80000000`** 等无效编码会误过）。
+- **`memfd_create(2)`/`memfd_secret(2)`**：**`flags`** 低位须为 **`MFD_CLOEXEC|ALLOW_SEALING|HUGETLB|EXEC|NOEXEC_SEAL`** 的子集；**`MFD_HUGE_MASK<<MFD_HUGE_SHIFT`** 域须为 **0** 或等于某一 **`linux_raw_sys::general::MFD_HUGE_*`**（勿仅用 **`(MFD_HUGE_MASK<<SHIFT)`** 整域放行，否则 **`0x80000000`** 等无效编码会误过）。**`name`** 经 **`UserConstPtr::get_as_str`** 读入，**`MemfdCreatedFile`** 的 **`FileLike::path`** 为 **`/memfd:{sanitized}`**（供 **`/proc/self/fd`** readlink）；**`tmpfs`** 上仍用唯一 **`/tmp/memfd-....`** 作真实 backing。
 - **`faccessat2(2)`**：**`flags`** 须为 **`AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH | AT_EACCESS`** 的子集（**`VALID_FACCESSAT_FLAGS`**），否则 **`EINVAL`**；**`AT_EACCESS`** 与 **`resolve_at`** 语义可仍简化，但须先拒绝未知位。
 - **`statx(2)`**：**`flags`** 须为 **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW | AT_STATX_SYNC_TYPE`** 的子集；**`AT_STATX_FORCE_SYNC`** 与 **`AT_STATX_DONT_SYNC`** 不能同时置位（**`(flags & AT_STATX_SYNC_TYPE) == AT_STATX_SYNC_TYPE`** → **`EINVAL`**）；再 **`resolve_at`**。
 - **SysV `msgsnd`/`msgrcv`**：**`MessageQueue`** 含 **`recv_notify`/`send_notify`**（**`event_listener::Event`**）；满且非 **`IPC_NOWAIT`** 时 **`msgsnd`** 在 **`send_notify`** 上阻塞，空且非 **`IPC_NOWAIT`** 时 **`msgrcv`** 在 **`recv_notify`** 上阻塞（**`block_on(interruptible(listener))`**）；入队后 **`recv_notify.notify`**，出队后 **`send_notify.notify`**；**`msgctl(IPC_RMID)`** 置 **`mark_removed`** 后 **`wake_waiters`**。信号 **`EINTR`** 依赖 **`interruptible`**。

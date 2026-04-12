@@ -20,7 +20,7 @@ use linux_raw_sys::{
     },
 };
 
-use super::{FileLike, Kstat, get_file_like};
+use super::{FileLike, Kstat, get_file_like, memfd::MemfdCreatedFile};
 use crate::file::{IoDst, IoSrc};
 
 pub fn with_fs<R>(dirfd: c_int, f: impl FnOnce(&mut FsContext) -> AxResult<R>) -> AxResult<R> {
@@ -64,6 +64,8 @@ pub fn resolve_at(dirfd: c_int, path: Option<&str>, flags: u32) -> AxResult<Reso
             let f = file_like.clone();
             Ok(if let Some(file) = f.downcast_ref::<File>() {
                 ResolveAtResult::File(file.inner().backend()?.location().clone())
+            } else if let Some(m) = f.downcast_ref::<MemfdCreatedFile>() {
+                ResolveAtResult::File(m.inner_file().inner().backend()?.location().clone())
             } else if let Some(dir) = f.downcast_ref::<Directory>() {
                 ResolveAtResult::File(dir.inner().clone())
             } else {

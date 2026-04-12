@@ -2,14 +2,15 @@ pub mod epoll;
 pub mod event;
 pub(crate) mod flock;
 mod fs;
+pub(crate) mod memfd;
 mod inotify;
+pub mod io_uring;
 mod net;
 mod pidfd;
 mod pipe;
 pub(crate) mod record_lock;
 pub mod signalfd;
 pub mod timerfd;
-pub mod io_uring;
 
 use alloc::{borrow::Cow, sync::Arc};
 use core::{ffi::c_int, time::Duration};
@@ -27,12 +28,13 @@ use spin::RwLock;
 
 pub use self::{
     fs::{Directory, File, resolve_at, with_fs},
+    memfd::MemfdCreatedFile,
     inotify::{FanotifyFd, InotifyFd},
+    io_uring::IoUringFd,
     net::Socket,
     pidfd::PidFd,
     pipe::Pipe,
     timerfd::TimerFd,
-    io_uring::IoUringFd,
 };
 use crate::task::{AX_FILE_LIMIT, AsThread};
 

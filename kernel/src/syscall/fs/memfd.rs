@@ -11,11 +11,9 @@ use linux_raw_sys::general::{
 };
 
 use crate::{
-    file::{File, FileLike},
+    file::{File, FileLike, MemfdCreatedFile},
     mm::UserConstPtr,
 };
-
-// TODO: correct memfd implementation
 
 /// Linux `memfd_create(2)`: base flags plus at most one valid `MFD_HUGE_*` encoding in the
 /// `MFD_HUGE_MASK << MFD_HUGE_SHIFT` field (see `linux/uapi/linux/memfd.h`). A full huge-tlb
@@ -51,21 +49,24 @@ fn validate_memfd_flags(flags: u32) -> AxResult<()> {
     Ok(())
 }
 
-pub fn sys_memfd_create(_name: UserConstPtr<c_char>, flags: u32) -> AxResult<isize> {
+pub fn sys_memfd_create(name: UserConstPtr<c_char>, flags: u32) -> AxResult<isize> {
     validate_memfd_flags(flags)?;
-    // This is cursed
+    let name_str = name.get_as_str()?;
+    // Backing store: unique tmpfs path; `name_str` is only for `FileLike::path` (e.g. `/proc/self/fd/N`).
     for id in 0..0xffff {
-        let name = format!("/tmp/memfd-{id:04x}");
+        let tmp_path = format!("/tmp/memfd-{id:04x}");
         let fs = FS_CONTEXT.lock().clone();
-        if fs.resolve(&name).is_err() {
+        if fs.resolve(&tmp_path).is_err() {
             let file = OpenOptions::new()
                 .read(true)
                 .write(true)
                 .create(true)
-                .open(&fs, &name)?
+                .open(&fs, &tmp_path)?
                 .into_file()?;
             let cloexec = flags & MFD_CLOEXEC != 0;
-            return File::new(file).add_to_fd_table(cloexec).map(|fd| fd as _);
+            return MemfdCreatedFile::new(File::new(file), name_str)
+                .add_to_fd_table(cloexec)
+                .map(|fd| fd as _);
         }
     }
     Err(AxError::TooManyOpenFiles)
