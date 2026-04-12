@@ -278,6 +278,9 @@ pub struct ProcessData {
 
     /// Supplementary group IDs (`getgroups` / `setgroups`); excludes primary `rgid`.
     supplementary_gids: Mutex<Vec<u32>>,
+
+    /// Process nice (`getpriority` / `setpriority`, range -20..=19 on Linux; default 0).
+    nice: AtomicI32,
 }
 
 impl ProcessData {
@@ -323,6 +326,8 @@ impl ProcessData {
             sgid: AtomicU32::new(0),
 
             supplementary_gids: Mutex::new(Vec::new()),
+
+            nice: AtomicI32::new(0),
         })
     }
 
@@ -340,6 +345,18 @@ impl ProcessData {
         let mut cg = self.supplementary_gids.lock();
         cg.clear();
         cg.extend_from_slice(&pg);
+
+        self.nice
+            .store(parent.nice.load(Ordering::SeqCst), Ordering::SeqCst);
+    }
+
+    #[inline]
+    pub fn get_nice(&self) -> i32 {
+        self.nice.load(Ordering::Relaxed)
+    }
+
+    pub fn set_nice(&self, value: i32) {
+        self.nice.store(value, Ordering::Relaxed);
     }
 
     #[inline]

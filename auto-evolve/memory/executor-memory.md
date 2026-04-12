@@ -2,12 +2,13 @@
 
 ## 最近更新
 - 日期：2026-04-13
-- 本轮尝试修复：issue-002（sched_get/setscheduler/getparam 桩）
-- 结果：resolved（`Thread` 持久化 policy/priority；syscall 读/写 `sched_param`；`cargo clippy --target riscv64gc-unknown-none-elf -F qemu` 通过）
+- 本轮尝试修复：issue-003（getpriority/setpriority nice）
+- 结果：resolved（`ProcessData::nice` + `sys_setpriority`；`getpriority` 读实际值；`cargo clippy --target riscv64gc-unknown-none-elf -F qemu` 通过）
 
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-003 | getpriority 固定 nice / setpriority | resolved | 2026-04-13 |
 | issue-002 | sched_get/setscheduler/getparam 桩 | resolved | 2026-04-13 |
 | issue-001 | sched_get/setaffinity 仅当前任务 | resolved | 2026-04-13 |
 | issue-034 | accept4 写 local非 peer | resolved | 2026-04-12 |
@@ -51,8 +52,10 @@
 - **`accept` / `accept4`**：向用户写入的 sockaddr 必须是 **`peer_addr()`**（远端），勿用 **`local_addr()`**（本端监听地址）；与 **`getpeername(accepted_fd)`** 一致。
 - **`sched_getaffinity` / `sched_setaffinity`**：`pid==0` 为当前任务；非零先 **`get_task(pid)`**，失败再 **`get_process_data(pid)`** 取 **`proc.threads()` 最小 tid** 定位线程组代表线程。set 时当前任务走 **`set_current_affinity`**（SMP 迁移），其它任务仅 **`set_cpumask`**。未完整建模 CAP、僵尸 **`ESRCH`** 等。
 - **`sched_getscheduler` / `sched_setscheduler` / `sched_getparam`**：每线程在 **`Thread`** 上存 **`sched_policy`**（默认0，即 `SCHED_NORMAL`/`SCHED_OTHER`）与 **`sched_priority`**（默认 0）。`setscheduler` 从用户读 **`sched_param`** 并校验策略与优先级范围后写入；`getscheduler`/`getparam` 返回已存值。策略未接入 axtask 真实 RT 调度，仅保证与用户态查询一致。
+- **`getpriority` / `setpriority`**：每进程 **`ProcessData::nice`**（**-20..=19**，默认 **0**）；`fork` 经 **`copy_credentials_from`** 继承。**`setpriority`** 为新 syscall 分发。**`PRIO_PGRP`/`PRIO_USER`** 在 **`processes()`** 上取匹配进程的 **最小 nice**（最高调度优先级）。未建模 **`CAP_SYS_NICE`** 与特权 **`nice`** 下限等 **`EPERM`**。
 
 ## 给 Debugger 的消息
+- issue-003：请在 rootfs 跑 `/bin/test_getpriority`（`setpriority`/`getpriority` 对 `PRIO_PROCESS`）。
 - issue-002：请在 rootfs 跑 `/bin/test_sched_policy_stubs`（`SCHED_OTHER` 往返与 `sched_getparam` 写缓冲区）。
 - issue-001：请在 rootfs 跑 `/bin/test_sched_affinity`（对存活子进程 `sched_getaffinity`）；多线程非 leader PID 行为弱于 Linux。
 - issue-034：请在 rootfs 跑 `/bin/test_accept_peer_addr`（IPv4 accept 与 getpeername 一致性）。
