@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-084 resolved（**`getrusage`**：**`RUSAGE_SELF`/`RUSAGE_THREAD`**填 **`ru_maxrss`**（**`AddrSpace::resident_set_size_kb`**，当前常驻快照）；**`Rusage`** 注释未实现域；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-083 resolved（**`mincore`**：**`length==0`** 在 **`vec` NULL 检查**之前 **`Ok(0)`**，对齐 Linux/POSIX no-op；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-082 resolved（**`futex`** **`FUTEX_REQUEUE`/`CMP_REQUEUE`**：**`wake` 后无条件对剩余等待者 `requeue`（上限 `nr_requeue`）**；返回 **`woke + requeued`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-081 resolved（**`select`/`pselect6`** **`do_select`**：输出 **`fd_set`** 先在内核缓冲中构建，**仅在 `with_blocked_signals` 成功返回后**拷贝到用户；阻塞期间保留用户侧输入位图；空 **`FdPollSet`** 立即写回零并 **`Ok(0)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -64,6 +65,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-084 | getrusage ru_maxrss from AddrSpace RSS KiB | resolved | 2026-04-13 |
 | issue-083 | mincore length 0 before vec NULL check | resolved | 2026-04-13 |
 | issue-082 | futex REQUEUE wake then always requeue | resolved | 2026-04-13 |
 | issue-081 | select fd_set kernel buffer, copy on return | resolved | 2026-04-12 |

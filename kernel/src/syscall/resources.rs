@@ -6,9 +6,15 @@ use starry_process::Pid;
 use starry_vm::{VmMutPtr, VmPtr};
 
 use crate::{
+    mm::AddrSpace,
     task::{AsThread, Thread, get_process_data, get_task, time_value_from_nanos},
     time::TimeValueLike,
 };
+
+#[inline]
+fn rss_kb_from_aspace(aspace: &AddrSpace) -> i64 {
+    aspace.resident_set_size_kb().try_into().unwrap_or(i64::MAX)
+}
 
 pub fn sys_prlimit64(
     pid: Pid,
@@ -48,16 +54,26 @@ pub fn sys_prlimit64(
     Ok(0)
 }
 
+/// CPU and memory stats for `getrusage(2)`.
+///
+/// Linux also exposes `ru_minflt` / `ru_majflt` / `ru_nvcsw` / `ru_nivcsw` / etc.
+/// Those are not wired in Starry yet; they remain zero in the returned `rusage`.
 #[derive(Default)]
 struct Rusage {
     utime: TimeValue,
     stime: TimeValue,
+    /// `ru_maxrss` in kilobytes (Linux ABI). Zero means unset (e.g. `RUSAGE_CHILDREN`).
+    ru_maxrss_kb: i64,
 }
 
 impl Rusage {
     fn from_thread(thread: &Thread) -> Self {
         let (utime, stime) = thread.time.borrow().output();
-        Self { utime, stime }
+        Self {
+            utime,
+            stime,
+            ru_maxrss_kb: 0,
+        }
     }
 
     fn collate(mut self, other: Rusage) -> Self {
@@ -73,6 +89,7 @@ impl From<Rusage> for rusage {
         let mut usage: rusage = unsafe { core::mem::zeroed() };
         usage.ru_utime = __kernel_old_timeval::from_time_value(value.utime);
         usage.ru_stime = __kernel_old_timeval::from_time_value(value.stime);
+        usage.ru_maxrss = value.ru_maxrss_kb as _;
         usage
     }
 }
@@ -87,7 +104,9 @@ pub fn sys_getrusage(who: i32, usage: *mut rusage) -> AxResult<isize> {
 
     let result = match who {
         RUSAGE_SELF => {
-            thr.proc_data
+            let rss_kb = rss_kb_from_aspace(&thr.proc_data.aspace.read());
+            let mut u = thr
+                .proc_data
                 .proc
                 .threads()
                 .into_iter()
@@ -97,7 +116,9 @@ pub fn sys_getrusage(who: i32, usage: *mut rusage) -> AxResult<isize> {
                     } else {
                         acc
                     }
-                })
+                });
+            u.ru_maxrss_kb = rss_kb;
+            u
         }
         RUSAGE_CHILDREN => {
             // Linux: resources of terminated and waited-for children only — not sibling pthreads.
@@ -105,9 +126,15 @@ pub fn sys_getrusage(who: i32, usage: *mut rusage) -> AxResult<isize> {
             Rusage {
                 utime: time_value_from_nanos(cu_ns),
                 stime: time_value_from_nanos(cs_ns),
+                ..Default::default()
             }
         }
-        RUSAGE_THREAD => Rusage::from_thread(thr),
+        RUSAGE_THREAD => {
+            let rss_kb = rss_kb_from_aspace(&thr.proc_data.aspace.read());
+            let mut u = Rusage::from_thread(thr);
+            u.ru_maxrss_kb = rss_kb;
+            u
+        }
         _ => return Err(AxError::InvalidInput),
     };
     usage.vm_write(result.into())?;

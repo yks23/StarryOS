@@ -540,6 +540,35 @@ impl AddrSpace {
         self.areas.iter()
     }
 
+    /// Resident set size for user mappings: sum of virtual ranges that currently
+    /// have populated page-table entries (same stepping idea as `mincore`).
+    ///
+    /// Linux `ru_maxrss` is a peak/high-water metric in KiB; we report the
+    /// **current** resident snapshot in KiB as a practical approximation.
+    pub fn resident_set_size_kb(&self) -> usize {
+        let mut bytes = 0usize;
+        for area in self.areas.iter() {
+            if !area.flags().contains(MappingFlags::USER) {
+                continue;
+            }
+            let mut vaddr = area.start();
+            let end = area.end();
+            while vaddr < end {
+                match self.pt.query(vaddr) {
+                    Ok((_, _, size)) => {
+                        let step = (size as usize).min(end - vaddr);
+                        bytes += step;
+                        vaddr += step;
+                    }
+                    Err(_) => {
+                        vaddr += PAGE_SIZE_4K;
+                    }
+                }
+            }
+        }
+        bytes / 1024
+    }
+
     /// Writes back dirty pages for every file-backed VMA overlapping `range`.
     ///
     /// Used by `msync(2)` so `MAP_SHARED` updates become visible to ordinary
