@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use axerrno::{AxError, AxResult};
 use axhal::time::TimeValue;
 use axpoll::IoEvents;
-use axtask::future::{self, block_on, poll_io};
+use axtask::future::{self, block_on, interruptible, poll_io};
 use linux_raw_sys::general::{POLLNVAL, pollfd, timespec};
 use starry_signal::SignalSet;
 
@@ -55,7 +55,10 @@ fn do_poll(
     }
 
     with_blocked_signals(sigmask, || {
-        match block_on(future::timeout(
+        // `future::timeout` takes a wall-clock deadline via `timeout_at` (`Option<TimeValue>`).
+        // `interruptible` surfaces pending signals as `Interrupted` → `EINTR` (Linux `ppoll` /
+        // `poll_schedule_timeout`); `Elapsed` is timer expiry only — do not conflate (issue-355).
+        match block_on(interruptible(future::timeout_at(
             timeout,
             poll_io(&fds, IoEvents::empty(), false, || {
                 let mut res = 0usize;
@@ -80,9 +83,10 @@ fn do_poll(
                     Err(AxError::WouldBlock)
                 }
             }),
-        )) {
-            Ok(r) => r.map(|c: isize| c + nval_ready),
-            Err(_) => {
+        ))) {
+            Ok(Ok(Ok(n))) => Ok(n + nval_ready),
+            Ok(Ok(Err(e))) => Err(e),
+            Ok(Err(_elapsed)) => {
                 // Timeout: Linux counts every pollfd with non-zero revents (includes POLLNVAL).
                 let mut total = 0isize;
                 for fd in poll_fds.iter() {
@@ -92,6 +96,7 @@ fn do_poll(
                 }
                 Ok(total)
             }
+            Err(_) => Err(AxError::Interrupted),
         }
     })
 }
@@ -125,6 +130,5 @@ pub fn sys_ppoll(
             read_timespec_user(timeout.address().as_usize() as *const timespec)?.try_into_time_value()?,
         )
     };
-    // TODO: handle signal
     do_poll(fds, timeout, nullable!(sigmask.get_as_ref())?.copied())
 }
