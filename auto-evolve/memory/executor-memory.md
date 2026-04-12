@@ -2,12 +2,13 @@
 
 ## 最近更新
 - 日期：2026-04-13
-- 本轮尝试修复：issue-008（shared futex 全局表 Mutex）
-- 结果：resolved（`SHARED_FUTEX_TABLES` 16 路分片 Mutex；按 region 指针选片；`cargo clippy --target riscv64gc-unknown-none-elf -F qemu` 通过）
+- 本轮尝试修复：issue-018（sched_getscheduler RR桩 / duplicate issue-002）
+- 结果：resolved（主线已实现 `Thread` policy/priority + syscall；本次仅闭合 issue 池条目与文档；`cargo clippy --target riscv64gc-unknown-none-elf -F qemu` 通过）
 
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-018 | sched_getscheduler RR 桩（同 issue-002） | resolved | 2026-04-13 |
 | issue-008 | shared futex 全局 FutexTables Mutex | resolved | 2026-04-13 |
 | issue-007 | ELF 加载器 Mutex 串行 execve | resolved | 2026-04-13 |
 | issue-003 | getpriority 固定 nice / setpriority | resolved | 2026-04-13 |
@@ -53,12 +54,13 @@
 - **`execve` 多线程**：在替换映像前若 **`proc.threads().len() > 1`**，对其余 tid **`SIGKILL`** 并 **`yield_now`** 直至仅剩当前线程（对齐 Linux 先杀线程组再 exec）；长时间未收敛则 **`WouldBlock`**。非 vfork/线程本地存储析构等细语义仍弱于 Linux。
 - **`accept` / `accept4`**：向用户写入的 sockaddr 必须是 **`peer_addr()`**（远端），勿用 **`local_addr()`**（本端监听地址）；与 **`getpeername(accepted_fd)`** 一致。
 - **`sched_getaffinity` / `sched_setaffinity`**：`pid==0` 为当前任务；非零先 **`get_task(pid)`**，失败再 **`get_process_data(pid)`** 取 **`proc.threads()` 最小 tid** 定位线程组代表线程。set 时当前任务走 **`set_current_affinity`**（SMP 迁移），其它任务仅 **`set_cpumask`**。未完整建模 CAP、僵尸 **`ESRCH`** 等。
-- **`sched_getscheduler` / `sched_setscheduler` / `sched_getparam`**：每线程在 **`Thread`** 上存 **`sched_policy`**（默认0，即 `SCHED_NORMAL`/`SCHED_OTHER`）与 **`sched_priority`**（默认 0）。`setscheduler` 从用户读 **`sched_param`** 并校验策略与优先级范围后写入；`getscheduler`/`getparam` 返回已存值。策略未接入 axtask 真实 RT 调度，仅保证与用户态查询一致。
+- **`sched_getscheduler` / `sched_setscheduler` / `sched_getparam`**：每线程在 **`Thread`** 上存 **`sched_policy`**（默认0，即 `SCHED_NORMAL`/`SCHED_OTHER`）与 **`sched_priority`**（默认 0）。`setscheduler` 从用户读 **`sched_param`** 并校验策略与优先级范围后写入；`getscheduler`/`getparam` 返回已存值。策略未接入 axtask 真实 RT 调度，仅保证与用户态查询一致。**issue-018** 与 **issue-002** 描述同一修复；验收可用 **`test_sched_stubs.c`**（默认 **`sched_getscheduler(0)==SCHED_OTHER`**）或 **`test_sched_policy_stubs.c`**。
 - **`getpriority` / `setpriority`**：每进程 **`ProcessData::nice`**（**-20..=19**，默认 **0**）；`fork` 经 **`copy_credentials_from`** 继承。**`setpriority`** 为新 syscall 分发。**`PRIO_PGRP`/`PRIO_USER`** 在 **`processes()`** 上取匹配进程的 **最小 nice**（最高调度优先级）。未建模 **`CAP_SYS_NICE`** 与特权 **`nice`** 下限等 **`EPERM`**。
 - **ELF `execve` 缓存**：全局 **`ELF_LOADER`** 为 **`spin::RwLock<ElfLoader>`**（LRU 32）。**`ensure_elf_cached`**：先读锁命中则返回；未命中则在**无 ELF 锁**下 **`ElfCacheEntry::load`**，再写锁 **去重插入**。**`map_cached_elf_into_uspace`** 持**读锁**做 **`lookup_entry`**、**`uspace.clear`**、**`map_elf`**（多进程可并发读同一缓存项）。写锁仅覆盖 LRU 变更；高并发 + 满缓存时仍存在 **LRU 驱逐** 与「装入后、映射前被挤掉」的极小理论窗口（可后续改为 `Arc` 条目或分片）。
 - **跨进程 shared futex**：**`futex_table_for(Shared)`** 使用 **`SHARED_FUTEX_TABLES[shard]`**（**16** 个 **`Mutex<FutexTables>`**），**`shard = (ptr ^ ptr>>12 ^ ptr>>24) % 16`**，`ptr` 为 **`Weak::as_ptr(region)`**。每片内仍为 **`BTreeMap` + 约每 100 次 `retain` GC**；不同共享 region 多数走不同分片。私有 futex 仍 **`ProcessData::futex_table`**。
 
 ## 给 Debugger 的消息
+- issue-018 / issue-002：可在 rootfs 跑 **`/bin/test_sched_stubs`** 或 **`/bin/test_sched_policy_stubs`**。
 - issue-008：请在 rootfs 跑 `/bin/test_futex_shared_stress`（pthread/musl futex）。
 - issue-007：请在 rootfs 放 `/bin/true`，跑 `/bin/test_elf_parallel_exec`（双进程并行 `execve`）。
 - issue-003：请在 rootfs 跑 `/bin/test_getpriority`（`setpriority`/`getpriority` 对 `PRIO_PROCESS`）。
