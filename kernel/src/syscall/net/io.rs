@@ -62,6 +62,9 @@ fn send_impl(
         return Err(AxError::InvalidInput);
     }
 
+    // Linux __sys_sendto / sendmsg: sockfd_lookup before copy sockaddr (EBADF before EFAULT).
+    let socket = Socket::from_fd(fd)?;
+
     let addr = if addr.is_null() || addrlen == 0 {
         None
     } else {
@@ -69,8 +72,6 @@ fn send_impl(
     };
 
     debug!("sys_send <= fd: {fd}, flags: {flags}, addr: {addr:?}");
-
-    let socket = Socket::from_fd(fd)?;
     let sent = socket.send(
         &mut src,
         SendOptions {
