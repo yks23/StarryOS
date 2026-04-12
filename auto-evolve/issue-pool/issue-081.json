@@ -1,0 +1,28 @@
+{
+  "id": "issue-081",
+  "title": "select/pselect6 在阻塞等待前对用户 fd_set 执行 FD_ZERO，阻塞期间与 Linux 可见语义可能不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T12:00:00Z",
+  "resolved_at": "2026-04-12T23:30:00Z",
+  "severity": "low",
+  "fix_summary": "**`do_select`**：为每个非空用户 **`fd_set`** 维护内核侧 **`__kernel_fd_set`**（**`FD_ZERO`** 后仅在 **`poll_io`** 内 **`FD_SET`**）；**不再**在 **`block_on`** 前对用户缓冲 **`FD_ZERO`**。**`with_blocked_signals` 成功**后 **`copy_nonoverlapping`** 一次性写回用户；**`poll_result` 失败**时不改用户缓冲。**`FdPollSet` 为空**时直接写回全零输出并 **`Ok(0)`**（避免无意义阻塞）。",
+  "files_changed": ["kernel/src/syscall/io_mpx/select.rs"],
+  "description": "**`do_select`**（`kernel/src/syscall/io_mpx/select.rs`）在取得 **`FD_TABLE`** 快照、构造 **`FdPollSet`** 之后、进入 **`block_on(poll_io(...))`** **之前**，对非空用户指针执行 **`FD_ZERO`** 清空 **`readfds`/`writefds`/`exceptfds`**（约 **101–108** 行）。Linux **`select(2)`**/**`pselect(2)`** 典型实现会在内核中保留输入掩码的副本并在**成功返回时**再写回用户缓冲；在**阻塞尚未结束**时，用户空间 **`fd_set`** 通常仍保留**调用前**的输入位图（直至本次系统调用完成并写回输出）。当前实现在**进入可能长时间阻塞的 **`poll_io`** 路径之前**已将用户缓冲清零，若同进程其他线程在 **`select`** 阻塞期间读取同一 **`fd_set`** 缓冲，可观察到「**全空**」而 Linux 上多为「**仍为本次调用传入的输入掩码**」，存在可观察语义差异（竞态/调试器/罕见共享缓冲用法）。**`poll_io`** 回调内再 **`FD_SET`** 就绪位，无法消除阻塞窗口内的上述差异。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["select", "pselect6"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/io_mpx/select.rs:98-146"],
+    "related_files": [],
+    "key_insight": "`FD_ZERO` 在 `poll_io` 之前；Linux 多在返回阶段写回输出集合"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "双线程：线程 A 阻塞 **`pselect6`**（无就绪 fd、长超时）；线程 B 在 A 阻塞期间读取 A 传入的同一 **`fd_set`** 内存。Linux 上通常仍见输入位；Starry 若已 **`FD_ZERO`** 则见全 0。",
+    "expected_output_contains": "",
+    "pass_criteria": "仅在 **`select`** 返回（成功/超时/错误）时修改用户 **`fd_set`**，或与 Linux 文档化行为一致；或文档化「阻塞期内用户缓冲可被提前清零」。",
+    "last_result": "2026-04-12：内核侧 **`fd_set` + 返回时写回**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** PASS"
+  },
+  "suggested_fix": "将输出 **`fd_set`** 写入内核侧临时缓冲，仅在 **`poll_io`** 完成（或确定立即返回）后一次性拷贝到用户；或在阻塞路径上延迟 **`FD_ZERO`** 直至即将写回。需评估 **`EINTR`**/**信号** 路径与 **`nullable`** 指针。",
+  "references": ["man 2 select", "man 2 pselect"]
+}
