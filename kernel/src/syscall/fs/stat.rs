@@ -4,8 +4,8 @@ use axerrno::{AxError, AxResult};
 use axfs::FS_CONTEXT;
 use axfs_ng_vfs::{Location, NodePermission};
 use linux_raw_sys::general::{
-    __kernel_fsid_t, AT_EACCESS, AT_EMPTY_PATH, AT_STATX_SYNC_TYPE, AT_SYMLINK_NOFOLLOW, F_OK,
-    R_OK, W_OK, X_OK, stat, statfs, statx,
+    __kernel_fsid_t, AT_EACCESS, AT_EMPTY_PATH, AT_NO_AUTOMOUNT, AT_STATX_SYNC_TYPE,
+    AT_SYMLINK_NOFOLLOW, F_OK, R_OK, W_OK, X_OK, stat, statfs, statx,
 };
 use starry_vm::{VmMutPtr, VmPtr};
 
@@ -47,6 +47,18 @@ pub fn sys_fstatat(
     statbuf: *mut stat,
     flags: u32,
 ) -> AxResult<isize> {
+    // Linux do_fstatat: reject unknown flags before copy_from_user(pathname) (EINVAL before EFAULT).
+    // Same mask as Linux `VALID_NEWFSTATAT_FLAGS` (AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT |
+    // AT_EMPTY_PATH | AT_STATX_SYNC_TYPE).
+    const VALID_NEWFSTATAT_FLAGS: u32 =
+        AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT | AT_STATX_SYNC_TYPE;
+    if flags & !VALID_NEWFSTATAT_FLAGS != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    if flags & AT_STATX_SYNC_TYPE == AT_STATX_SYNC_TYPE {
+        return Err(AxError::InvalidInput);
+    }
+
     let path = path.nullable().map(vm_load_string).transpose()?;
 
     debug!("sys_fstatat <= dirfd: {dirfd}, path: {path:?}, flags: {flags}");

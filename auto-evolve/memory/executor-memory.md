@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-131 resolved（**`fstatat`/`newfstatat`**：**`VALID_NEWFSTATAT_FLAGS`** + **`AT_STATX_SYNC_TYPE`** 互斥先于 **`vm_load_string(path)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-130 resolved（**`fsync`/`fdatasync`**：**`get_file_like`** 后仅 **`File`**/**`MemfdCreatedFile`** 调 **`sync`**，否则 **`InvalidInput`**（**EINVAL**），对齐 Linux **pipe/socket** 等；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-129 resolved（**`faccessat2`**：**`VALID_FACCESSAT_FLAGS`** 与 **`VALID_ACCESS_MODE`** 先于 **`vm_load_string(path)`**（issue-128 掩码语义不变）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-128 resolved（**`faccessat2`**：**`mode`** 须为 **`F_OK|R_OK|W_OK|X_OK`** 子集（**`VALID_ACCESS_MODE`**），先于 **`resolve_at`**，非法位 **`InvalidInput`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -111,6 +112,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-131 | fstatat/newfstatat flags 掩码 EINVAL | resolved | 2026-04-12 |
 | issue-130 | fsync/fdatasync 非文件 fd → EINVAL | resolved | 2026-04-12 |
 | issue-129 | faccessat2 flags/mode 先于读 path | resolved | 2026-04-12 |
 | issue-128 | faccessat2 mode 非法位 EINVAL | resolved | 2026-04-12 |
@@ -254,6 +256,7 @@
 - **`fchownat(2)`** / **`fchown`** / **`lchown`**：**`flags`** 须为 **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW`** 的子集（**`VALID_FCHOWNAT_FLAGS`**），否则 **`EINVAL`**；**`sys_fchown`** 用 **`AT_EMPTY_PATH`**，**`lchown`** 用 **`AT_SYMLINK_NOFOLLOW`**。
 - **`memfd_create(2)`/`memfd_secret(2)`**：**`flags`** 低位须为 **`MFD_CLOEXEC|ALLOW_SEALING|HUGETLB|EXEC|NOEXEC_SEAL`** 的子集；**`MFD_HUGE_MASK<<MFD_HUGE_SHIFT`** 域须为 **0** 或等于某一 **`linux_raw_sys::general::MFD_HUGE_*`**（勿仅用 **`(MFD_HUGE_MASK<<SHIFT)`** 整域放行，否则 **`0x80000000`** 等无效编码会误过）。**`name`** 经 **`UserConstPtr::get_as_str`** 读入，**`MemfdCreatedFile`** 的 **`FileLike::path`** 为 **`/memfd:{sanitized}`**（供 **`/proc/self/fd`** readlink）；**`tmpfs`** 上仍用唯一 **`/tmp/memfd-....`** 作真实 backing。
 - **`faccessat2(2)`**：**`flags`** 须为 **`AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH | AT_EACCESS`** 的子集（**`VALID_FACCESSAT_FLAGS`**），否则 **`EINVAL`**；**`mode`** 须为 **`F_OK|R_OK|W_OK|X_OK`** 子集（**`linux_raw_sys`** 上 **`F_OK==0`**，与 Linux **`~(F_OK|R_OK|W_OK|X_OK)`** 掩码一致），否则 **`EINVAL`**（issue-128）。上述 **`flags`/`mode`** 须在 **`vm_load_string(path)`** 与 **`resolve_at`** 之前完成（issue-129，非法参数先 **EINVAL** 于 **EFAULT**）；**`AT_EACCESS`** 与 **`resolve_at`** 语义可仍简化，但须先拒绝未知位。
+- **`fstatat(2)`/`newfstatat(2)`**（**`sys_fstatat`**）：**`flags`** 须为 **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT | AT_STATX_SYNC_TYPE`** 的子集（Linux **`VALID_NEWFSTATAT_FLAGS`**）；**`AT_STATX_FORCE_SYNC`** 与 **`AT_STATX_DONT_SYNC`** 不能同时置位；须在 **`vm_load_string(path)`** 之前校验（issue-131）。**`AT_NO_AUTOMOUNT`** 等可仍为 no-op，但未知位须 **`EINVAL`**。**`resolve_at`** 仍只消费 **`AT_EMPTY_PATH`**/**`AT_SYMLINK_NOFOLLOW`**。
 - **`statx(2)`**：**`flags`** 须为 **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW | AT_STATX_SYNC_TYPE`** 的子集；**`AT_STATX_FORCE_SYNC`** 与 **`AT_STATX_DONT_SYNC`** 不能同时置位（**`(flags & AT_STATX_SYNC_TYPE) == AT_STATX_SYNC_TYPE`** → **`EINVAL`**）；上述须在 **`vm_load_string(path)`** 之前完成（issue-127，非法 flags 先 **EINVAL**）；再 **`resolve_at`**。
 - **SysV `msgsnd`/`msgrcv`**：**`MessageQueue`** 含 **`recv_notify`/`send_notify`**（**`event_listener::Event`**）；满且非 **`IPC_NOWAIT`** 时 **`msgsnd`** 在 **`send_notify`** 上阻塞，空且非 **`IPC_NOWAIT`** 时 **`msgrcv`** 在 **`recv_notify`** 上阻塞（**`block_on(interruptible(listener))`**）；入队后 **`recv_notify.notify`**，出队后 **`send_notify.notify`**；**`msgctl(IPC_RMID)`** 置 **`mark_removed`** 后 **`wake_waiters`**。信号 **`EINTR`** 依赖 **`interruptible`**。
 - **`getrusage(RUSAGE_CHILDREN)`**：须为 **`wait`** 回收子进程的 **CPU** 累计（**`ProcessData::child_utime_ns`/`child_stime_ns`**），与 **`times`/`waitpid`** 累加路径一致；**勿**把 **`proc.threads()`** 中除当前线程外的 **pthread** 当作子进程。
@@ -315,6 +318,7 @@
 - issue-128：可跑 **`faccessat2(AT_FDCWD, \"/\", R_OK|0x100, 0)`**（非法 **`mode`** → **`EINVAL`**；Linux 对齐）。
 - issue-129：非法 **`flags`** 或 **`mode`** + 坏 **`path`** 指针，首错应 **`EINVAL`**（先于 **EFAULT** 类）。
 - issue-130：**`fsync`/`fdatasync`** 在 **pipe**/**socket** fd 上应 **`EINVAL`**，勿 **`BrokenPipe`**/**`IsADirectory`**。
+- issue-131：**`fstatat`** 非法 **`flags`**（如保留高位）→ **`EINVAL`**；可与 **`statx`** 非法 flags 用例类比。
 - issue-053：请跑 **`/bin/test_memfd_create_invalid_flags`**（**`memfd_create(..., 0x80000000)`** → **`EINVAL`**）。
 - issue-052：请跑 **`/bin/test_fchownat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`uid`/`gid`** 不变）。
 - issue-051：请跑 **`/bin/test_utimensat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`mtime`** 不变）。
