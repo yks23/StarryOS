@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-141 resolved（**`prlimit64`**：内核内快照 **`old`** →读/校验/应用 **`new_limit`** → 再 **`vm_write(old_limit)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-140 resolved（**`readlink`**/**`readlinkat`**：**`bufsiz==0`** → **`InvalidInput`**（**EINVAL**），在 **`vm_load_string(path)`** 与 VFS 解析前；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-139 resolved（**`fchownat`**/**`fchmodat`**：**`VALID_FCHOWNAT_FLAGS`**/**`VALID_FCHMODAT_FLAGS`** 先于 **`vm_load_string(path)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-138 resolved（**`unlinkat`**/**`renameat2`**：**`flags`** / **`RENAME_*`** 校验先于 **`vm_load_string`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -121,6 +122,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-141 | prlimit64 old 出参晚于 new 读/校验 | resolved | 2026-04-12 |
 | issue-140 | readlinkat bufsiz==0 → EINVAL | resolved | 2026-04-12 |
 | issue-139 | fchownat/fchmodat flags 先于 vm_load_string | resolved | 2026-04-12 |
 | issue-138 | unlinkat/renameat2 flags 先于路径 | resolved | 2026-04-12 |
@@ -280,7 +282,7 @@
 - **SysV `msgsnd`/`msgrcv`**：**`MessageQueue`** 含 **`recv_notify`/`send_notify`**（**`event_listener::Event`**）；满且非 **`IPC_NOWAIT`** 时 **`msgsnd`** 在 **`send_notify`** 上阻塞，空且非 **`IPC_NOWAIT`** 时 **`msgrcv`** 在 **`recv_notify`** 上阻塞（**`block_on(interruptible(listener))`**）；入队后 **`recv_notify.notify`**，出队后 **`send_notify.notify`**；**`msgctl(IPC_RMID)`** 置 **`mark_removed`** 后 **`wake_waiters`**。信号 **`EINTR`** 依赖 **`interruptible`**。
 - **`getrusage(RUSAGE_CHILDREN)`**：须为 **`wait`** 回收子进程的 **CPU** 累计（**`ProcessData::child_utime_ns`/`child_stime_ns`**），与 **`times`/`waitpid`** 累加路径一致；**勿**把 **`proc.threads()`** 中除当前线程外的 **pthread** 当作子进程。
 - **`getrusage(2)`**：**`who`** 非法 → **`InvalidInput`**（**EINVAL**）；**`usage`** 为 **NULL** → **`BadAddress`**（**EFAULT**），须在聚合 **`Rusage`** 之前检查，与 Linux 顺序一致。
-- **`prlimit64`**：若 **`new_limit.rlim_max >`** 当前硬 **`limit.max`**（无 **`CAP_SYS_RESOURCE`** 等能力建模时视为非法抬高），须 **`OperationNotPermitted`（EPERM）**；勿静默 **`Ok(0)`**。可降低硬上限或保持不变并更新 **`rlim_cur`**（在 **`rlim_cur <= rlim_max`** 前提下）。
+- **`prlimit64`**：对齐 Linux **`do_prlimit`**（issue-141）：**`old_limit` 非空**时先在进程内保存变更前的 **`rlimit64`**；**`new_limit` 非空**时先 **`vm_read`** 并校验（**`rlim_cur`≤`rlim_max`**、非法抬高硬上限 **`EPERM`**，同 issue-044），成功后再更新内核 **`rlimit`**；最后再 **`vm_write(old_limit)`** 写出快照。**`new_limit`** 读/校验失败时不应已写出 **`old`**。可降低硬上限或保持不变并更新 **`rlim_cur`**（在 **`rlim_cur <= rlim_max`** 前提下）。
 - **`ioctl(FIONBIO)`**：第三参为 **`int *`**（Linux）；用 **`(arg as *const c_int).vm_read()`** 读整型，**`set_nonblocking(value != 0)`**；勿只读单字节、勿将取值限制为 0/1（**`2`**、**`256`** 等小端首字节为 0 的非零值须启用 **`O_NONBLOCK`**）。
 - **`getrandom(2)`**：**`flags`** 须为 **`linux_raw_sys::general`** 中 **`GRND_NONBLOCK|GRND_RANDOM|GRND_INSECURE`** 的子集（与 **`uapi/linux/random.h`** 一致），否则 **`EINVAL`**；勿用 **`from_bits_retain`** 静默丢弃未知位。
 - **`fadvise64`**：管道等不可 seek 的 fd 上 Linux 为 **`ESPIPE`**（非法 seek），非 **`EPIPE`**（断管）。实现上 **`Pipe::from_fd`** 分支返回 **`LinuxError::ESPIPE.into()`**（**`axerrno::LinuxError`**），勿用 **`AxError::BrokenPipe`**。真 **`fadvise`** 语义仍为桩；**`advice≤5`** 且非 pipe 时 **`offset`/`len`** 须非负，且 cast 为 **`u64`** 后 **`checked_add`** 不溢出，否则 **`InvalidInput`**（**EINVAL**），与 **`sys_fallocate`** 一致。
@@ -351,6 +353,7 @@
 - issue-138：**`unlinkat`**/**`renameat2`** 非法 **`flags`** + 坏 path，首错 **`EINVAL`**（先于 **EFAULT**）。
 - issue-139：**`fchownat`**/**`fchmodat`** 非法 **`flags`** + 坏 **`path`**，首错 **`EINVAL`**（先于 **EFAULT**）；可扩展现有 **`/bin/test_fchownat_invalid_flags`**/**`test_fchmodat_invalid_flags`** 思路加坏指针组合。
 - issue-140：**`readlinkat`** 对已存在 symlink，**`bufsiz==0`** → **`EINVAL`**，勿 **`Ok(0)`**；可与坏 **`path`** 组合验证 **EINVAL** 先于 **ENOENT/EFAULT**。
+- issue-141：**`prlimit64`** 同时 **`old_limit`** + 非法 **`new_limit`**（**`rlim_cur`>`rlim_max`** 或不可读 **`new`**）：**`old`** 缓冲应未被写入；首错 **`EINVAL`**/**`EFAULT`**。
 - issue-053：请跑 **`/bin/test_memfd_create_invalid_flags`**（**`memfd_create(..., 0x80000000)`** → **`EINVAL`**）。
 - issue-052：请跑 **`/bin/test_fchownat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`uid`/`gid`** 不变）。
 - issue-051：请跑 **`/bin/test_utimensat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`mtime`** 不变）。

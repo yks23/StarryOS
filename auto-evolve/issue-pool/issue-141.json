@@ -1,0 +1,27 @@
+{
+  "id": "issue-141",
+  "title": "prlimit64 先 vm_write(old_limit) 再 vm_read/校验 new_limit，失败时用户可见 old 与 EFAULT/EINVAL 顺序可偏离 Linux",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_prlimit64` 先在进程内保存 `old` 的 `rlimit64` 快照，再 `vm_read`/校验/应用 `new_limit`，最后才 `vm_write(old_limit)`；`new` 读失败或 `EINVAL`/`EPERM` 时不再提前写出 `old`，对齐 Linux `do_prlimit` 顺序。",
+  "files_changed": ["kernel/src/syscall/resources.rs"],
+  "description": "**`sys_prlimit64`**（`kernel/src/syscall/resources.rs`）在 **`resource`** 与 **`get_process_data(pid)`** 通过后，若 **`old_limit`** 非空则立刻 **`old_limit.vm_write(...)`** 写出当前 **`rlimit64`**，随后才对非空 **`new_limit`** 执行 **`vm_read_uninit`**、**`rlim_cur > rlim_max`** 校验及 **`EPERM`** 等。**Linux** **`do_prlimit`** 常见顺序为：先自用户空间读取并校验 **`new_rlim`**（若提供），再更新限制，最后再 **`copy_to_user`** **`old_rlim`**（若提供）；若 **`new`** 非法或拷贝失败，通常不保证已写入 **`old`**，且 **`EFAULT`**/**`EINVAL`** 相对 **`old` 出参** 的先后与 **Starry** 可能不同。当 **`new_limit`** 指针坏页或 **`rlim_cur > rlim_max`** 时：**Starry** 可能已把 **`old`** 写入用户缓冲；**Linux** 可能不写入或错误码次序不同。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["prlimit64"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/resources.rs:19-55"],
+    "related_files": [],
+    "key_insight": "`old_limit` 出参早于 `new_limit` 读与校验"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "同时提供 **`old_limit`** 与非法 **`new_limit`**（**`rlim_cur > rlim_max`** 或不可读指针）；对比 **Linux** 与 **Starry** 的 **`old_limit`** 缓冲是否被写入及首错 **`EINVAL`**/**`EFAULT`**。",
+    "expected_output_contains": "",
+    "pass_criteria": "**`new_limit`** 读/校验/权限失败时 **`old_limit`** 写入行为与 **Linux** 一致，或文档化当前顺序。",
+    "last_result": "`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` 通过（2026-04-12）。"
+  },
+  "suggested_fix": "对齐 **`do_prlimit`**：若存在 **`new_limit`**，先 **`copy_from_user`** 并校验再更新内核 **`rlimit`**；若存在 **`old_limit`**，在成功路径或 **`Linux`** 等价阶段再 **`copy_to_user`**；或整体文档化与 **Linux** 的差异。",
+  "references": ["man 2 prlimit", "Linux kernel do_prlimit"]
+}

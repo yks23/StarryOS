@@ -27,13 +27,16 @@ pub fn sys_prlimit64(
     }
 
     let proc_data = get_process_data(pid)?;
-    if let Some(old_limit) = old_limit.nullable() {
+
+    // Linux do_prlimit: copy_from_user(new) + validate + apply before copy_to_user(old), so
+    // EFAULT/EINVAL/EPERM on new do not write old (issue-141).
+    let old_snapshot = old_limit.nullable().map(|_| {
         let limit = &proc_data.rlim.read()[resource];
-        old_limit.vm_write(rlimit64 {
+        rlimit64 {
             rlim_cur: limit.current,
             rlim_max: limit.max,
-        })?;
-    }
+        }
+    });
 
     if let Some(new_limit) = new_limit.nullable() {
         // FIXME: AnyBitPattern
@@ -49,6 +52,10 @@ pub fn sys_prlimit64(
         }
         limit.max = new_limit.rlim_max;
         limit.current = new_limit.rlim_cur;
+    }
+
+    if let (Some(old_out), Some(snapshot)) = (old_limit.nullable(), old_snapshot) {
+        old_out.vm_write(snapshot)?;
     }
 
     Ok(0)
