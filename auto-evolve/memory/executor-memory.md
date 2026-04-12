@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-169 resolved（**绝对路径忽略 `dirfd`**：**`dirfd_for_path_resolution`** + **`resolve_at`/`openat`**；**`*at`** 路径 syscall 相对路径才 **`Directory::from_fd`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-168 resolved（**Unix `SO_PASSCRED`**：**`axnet-ng`** **`StreamTransport`/`DgramTransport`** 增加 **`pass_cred`**，`get`/`set` **`PassCredentials`** 读写；**`accept`** 继承监听端；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-167 resolved（**`getsockopt` `TCP_INFO`**：**`TcpSocket`** **`TcpInfo` → `Ok(false)`/`ENOPROTOOPT`**；**`sys_getsockopt`** 提前分支避免 **`()` 选项把 `*optlen` 置 0**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-166 resolved（**`fspick`/`open_tree`** stub：**`dfd != AT_FDCWD`** 先 **`<Directory as FileLike>::from_fd`** 再 **`get_as_str`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）

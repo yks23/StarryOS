@@ -2,12 +2,13 @@
 
 ## 最近更新
 - 日期：2026-04-12
-- 本轮新发现问题数：1（issue-034：accept 填充 local 而非 peer）
-- 本轮验证已修复问题数：0（executor-memory 未报告已修复项）
+- 本轮新发现问题数：1（**issue-171**：**`sys_readlinkat`** 未 **`dirfd_for_path_resolution`**，与 **issue-169** 已改 *at 不一致）
+- 本轮验证已修复问题数：1（**issue-169** **`dirfd_for_path_resolution`** + **`resolve_at`/`openat`/`mkdirat` 等**；**clippy** PASS → **verified**）
+- **issue-pool 下一可用 ID**：**issue-172**
 
 ## 扫描进度
-- 已审计的 syscall 模块：依据 Question2.md 全文与 kernel 抽样核对（`syscall/mod.rs` dummy 分支、`fd_ops.rs` flock/fcntl、`mmap.rs`、`schedule.rs`、`sys.rs`、`ctl.rs`、`signal.rs`、`membarrier.rs`）；**本轮新增：`syscall/net/socket.rs`（accept4 与 peer 地址语义）**
-- 未审计的 syscall 模块：`syscall/net/io.rs`/`cmsg.rs` 边界、**`syscall/net/opt.rs` 已扫为宏分发（非本轮重点）**、ioctl 全表、prctl 剩余选项
+- 已审计的 syscall 模块：依据 Question2.md 全文与 kernel 抽样核对（`syscall/mod.rs` dummy 分支、`fd_ops.rs` flock/fcntl、`mmap.rs`、`schedule.rs`、`sys.rs`、`ctl.rs`、`signal.rs`、`membarrier.rs`）；**本轮新增：`syscall/net/socket.rs`（accept4 与 peer 地址语义）**；**`file/fs.rs` `resolve_at`/`dirfd_for_path_resolution`（→ issue-169 verified）**；**`ctl.rs` `sys_readlinkat` 与 *at 族差异（→ issue-171 open）**
+- 未审计的 syscall 模块：`syscall/net/io.rs`/`cmsg.rs` 边界、**`syscall/net/opt.rs` 已扫为宏分发（非本轮重点）**、ioctl 全表、prctl 剩余选项；**`axnet-ng/general.rs` `SO_ERROR`（issue-170 open）**、**`fs/stat.rs` `sys_statfs` buf/path 顺序**（示例）
 - 已检查的 TODO/FIXME 位置：execve 多线程、mremap full、fd_ops flock、flock64、sysinfo Zeroable、timer 抢占相关注释
 
 ## 活跃问题摘要
@@ -35,6 +36,7 @@
 - issue-032: mount 类型受限/行为（medium, open）
 - issue-033: setitimer VIRTUAL/PROF 精度（low, open）
 - issue-034: accept 返回本端地址非对端（high, open）
+- **issue-pool（高编号，与上表独立）open：issue-170**（**`getsockopt` `SO_ERROR`** 恒 0）、**issue-171**（**`readlinkat`** 未跟 **issue-169** **`dirfd_for_path_resolution`**）
 
 ## 给 Executor 的消息
 - 建议仍按 Question2 第四部分「第一梯队」顺序：先假成功类（011–017、015），再 026 信号与 job control（依赖 axtask 能力）。
@@ -45,3 +47,4 @@
 ## 待验证
 - Q1 生成的 issue-001–010 未在本仓库中出现；若合并仓库后请避免编号冲突。
 - 全部测试已在 `riscv64-linux-musl-gcc -static -pthread -Werror` 下通过交叉编译，尚未在 QEMU/Starry 真机跑通。
+- **issue-169**：QEMU 绝对路径 + 无效 **`dirfd`**（**`fstatat`/`openat`**）；**issue-171**：同上场景 **`readlinkat`**；**issue-170**：挂起错误 + **`SO_ERROR`**。
