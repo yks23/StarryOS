@@ -51,20 +51,18 @@ pub fn sys_mincore(addr: usize, length: usize, vec: *mut u8) -> AxResult<isize> 
         return Err(AxError::InvalidInput);
     }
 
-    // EFAULT: vec must not be null (basic check, vm_write_slice will do full validation)
+    // length=0: Linux mm/mincore.c returns0 without touching `vec` (NULL is ok).
+    // POSIX: zero-length mincore is a no-op after addr alignment is checked.
+    if length == 0 {
+        return Ok(0);
+    }
+
+    // EFAULT: vec must not be null when any output is produced
     if vec.is_null() {
         return Err(AxError::BadAddress);
     }
 
     debug!("sys_mincore <= addr: {addr:#x}, length: {length:#x}, vec: {vec:?}");
-
-    // Special case: length=0
-    // According to Linux kernel (mm/mincore.c), length=0 returns success
-    // WITHOUT validating that addr is mapped.  This is intentional behavior
-    // to match POSIX semantics where a zero-length operation is a no-op.
-    if length == 0 {
-        return Ok(0);
-    }
 
     // Calculate number of pages to check
     let page_count = length.div_ceil(PAGE_SIZE_4K);
