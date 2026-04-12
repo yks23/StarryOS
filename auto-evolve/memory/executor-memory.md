@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-185 resolved（**`setsockopt`/`getsockopt` `IP_TTL`**：**`conv::IpTtl`** 要求 **`optlen >= sizeof(i32)`**，读 **`i32`** 后 **`u8::try_from`**；**`IP_TTL`** 显式分支（不经 **`call_dispatch` `$conv:ty`**）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-184 resolved（**`getrusage`**：**`From<Rusage> for rusage`** 全字段字面量，去掉 **`mem::zeroed`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-187 resolved（**`mount`**：**`validate_mount_source`**约束 **`tmpfs`** 的 **`source`**；非法路径 **`EINVAL`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-186 resolved（**`sendmsg`**：**`msg_control` 区间** **`ptr_end`**与循环上界均 **`checked_add`**，防 **`usize` 溢出**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）

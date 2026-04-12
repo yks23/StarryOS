@@ -1,6 +1,6 @@
 use axerrno::{AxError, AxResult, LinuxError};
 use axnet::options::{Configurable, GetSocketOption, SetSocketOption};
-use linux_raw_sys::net::{socklen_t, TCP_INFO};
+use linux_raw_sys::net::{socklen_t, IP_TTL, TCP_INFO};
 
 use crate::{
     file::{FileLike, Socket},
@@ -12,10 +12,13 @@ const PROTO_TCP: u32 = linux_raw_sys::net::IPPROTO_TCP as u32;
 const PROTO_IP: u32 = linux_raw_sys::net::IPPROTO_IP as u32;
 
 mod conv {
+    use core::mem::size_of;
+
     use axerrno::{AxError, AxResult};
     use axnet::options::UnixCredentials;
-    use linux_raw_sys::{general::timeval, net::ucred};
+    use linux_raw_sys::{general::timeval, net::socklen_t, net::ucred};
 
+    use crate::mm::UserConstPtr;
     use crate::time::TimeValueLike;
 
     pub struct Int<T>(T);
@@ -73,6 +76,23 @@ mod conv {
             })
         }
     }
+
+    /// Linux `IP_TTL` uses `int` / `sizeof(int)` for `optlen` (man 7 ip); values are 0–255.
+    pub struct IpTtl;
+
+    impl IpTtl {
+        pub fn sys_to_rust(val: UserConstPtr<u8>, len: socklen_t) -> AxResult<u8> {
+            if (len as usize) < size_of::<i32>() {
+                return Err(AxError::InvalidInput);
+            }
+            let v = *val.cast::<i32>().get_as_ref()?;
+            u8::try_from(v).map_err(|_| AxError::InvalidInput)
+        }
+
+        pub fn rust_to_sys(val: u8) -> AxResult<i32> {
+            Ok(val as i32)
+        }
+    }
 }
 
 macro_rules! call_dispatch {
@@ -95,8 +115,6 @@ macro_rules! call_dispatch {
 
             (PROTO_TCP, TCP_NODELAY) => NoDelay as IntBool,
             (PROTO_TCP, TCP_MAXSEG) => MaxSegment as Int<usize>,
-
-            (PROTO_IP, IP_TTL) => Ttl as Int<u8>,
         }
     }};
     ($dispatch:ident, $in:expr, $($pat:pat => $which:ident $(as $conv:ty)?),* $(,)?) => {
@@ -145,6 +163,12 @@ pub fn sys_getsockopt(
             .get_option(GetSocketOption::TcpInfo(&mut dummy))
             .map(|_| 0);
     }
+    if level == PROTO_IP && optname == IP_TTL {
+        let mut val = 0u8;
+        socket.get_option(GetSocketOption::Ttl(&mut val))?;
+        *get(optval, optlen)? = conv::IpTtl::rust_to_sys(val)?;
+        return Ok(0);
+    }
     macro_rules! dispatch {
         ($which:ident) => {
             socket.get_option(GetSocketOption::$which(get(optval, optlen)?))?;
@@ -185,6 +209,11 @@ pub fn sys_setsockopt(
     }
 
     let socket = Socket::from_fd(fd)?;
+    if level == PROTO_IP && optname == IP_TTL {
+        let val = conv::IpTtl::sys_to_rust(optval, optlen)?;
+        socket.set_option(SetSocketOption::Ttl(&val))?;
+        return Ok(0);
+    }
     macro_rules! dispatch {
         ($which:ident) => {
             socket.set_option(SetSocketOption::$which(get(optval, optlen)?))?;
