@@ -433,6 +433,15 @@ pub fn sys_shmget(key: i32, size: usize, shmflg: usize) -> AxResult<isize> {
 }
 
 pub fn sys_shmat(shmid: i32, addr: usize, shmflg: u32) -> AxResult<isize> {
+    // Resolve `shmid` before rejecting unknown `shmflg` bits so invalid segment id surfaces first
+    // (Linux `do_shmat` / `shm_lock` ordering; same theme as `sys_memfd_create` name vs `flags`,
+    // issue-305; issue-307).
+    let shm_inner = {
+        let shm_manager = SHM_MANAGER.lock();
+        shm_manager
+            .get_inner_by_shmid(shmid)
+            .ok_or(AxError::InvalidInput)?
+    };
     const VALID_SHMAT_FLAGS: u32 = ShmAtFlags::SHM_RDONLY.bits()
         | ShmAtFlags::SHM_RND.bits()
         | ShmAtFlags::SHM_REMAP.bits();
@@ -441,12 +450,6 @@ pub fn sys_shmat(shmid: i32, addr: usize, shmflg: u32) -> AxResult<isize> {
     }
     let shm_flg = ShmAtFlags::from_bits(shmflg).ok_or(AxError::InvalidInput)?;
 
-    let shm_inner = {
-        let shm_manager = SHM_MANAGER.lock();
-        shm_manager
-            .get_inner_by_shmid(shmid)
-            .ok_or(AxError::InvalidInput)?
-    };
     let mut shm_inner = shm_inner.lock();
     let mut mapping_flags = shm_inner.mapping_flags;
 

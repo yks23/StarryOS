@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-16：issue-307 resolved（**`shmat`**：**`get_inner_by_shmid`** **先于** **`shmflg`** **掩码**；**`shm.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-15：issue-306 resolved（**`sched_getaffinity`**：**`user_mask`** **== NULL** → **`BadAddress`**，**`vm_write_slice`** **前**；**`schedule.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-305 resolved（**`memfd_create`/`memfd_secret`**：**`sys_memfd_create`** **`name.get_as_str()`** **先于** **`validate_memfd_flags`**，**EFAULT**/**名字** **先于** **非法** **`MFD_*`** **EINVAL**；**`memfd.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-304 resolved（**`capget`/`capset`**：**`sys_capget`/`sys_capset`** **`header`/`data` == NULL** → **`BadAddress`（EFAULT）**，先于 **`read_cap_header`**，与 **issue-283** **`fstatat`/`statx`** **一致**；**`ctl.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -330,6 +331,7 @@
 | issue-271 | mlock/mlock2 addr 须页对齐 EINVAL | resolved | 2026-04-12 |
 | issue-272 | lseek SEEK_SET 负 offset EINVAL | resolved | 2026-04-12 |
 | issue-273 | prlimit64 跨 pid 权限 EPERM | resolved | 2026-04-12 |
+| issue-307 | shmat shmid 解析先于 shmflg 校验 | resolved | 2026-04-16 |
 | issue-306 | sched_getaffinity user_mask NULL → BadAddress | resolved | 2026-04-15 |
 | issue-305 | memfd_create name 先于 flags 校验 | resolved | 2026-04-13 |
 | issue-304 | capget/capset NULL header/data → BadAddress | resolved | 2026-04-13 |
@@ -552,7 +554,7 @@
 - **SysV `msgsnd`/`msgrcv`**：**`MessageQueue`** 含 **`recv_notify`/`send_notify`**（**`event_listener::Event`**）；满且非 **`IPC_NOWAIT`** 时 **`msgsnd`** 在 **`send_notify`** 上阻塞，空且非 **`IPC_NOWAIT`** 时 **`msgrcv`** 在 **`recv_notify`** 上阻塞（**`block_on(interruptible(listener))`**）；入队后 **`recv_notify.notify`**，出队后 **`send_notify.notify`**；**`msgctl(IPC_RMID)`** 置 **`mark_removed`** 后 **`wake_waiters`**。信号 **`EINTR`** 依赖 **`interruptible`**。
 - **SysV `msgctl(2)`**：**`IPC_INFO`/`MSG_INFO`/`MSG_STAT`/`IPC_STAT`/`IPC_SET`** 在 **`vm_write`**/**`read_msqid_ds_ipc_set_user`** 前 **`buf==0` → `BadAddress`**（**`IPC_STAT`/`MSG_STAT`** 在 **`EACCES`** 之后、`vm_write` 之前，issue-233）；**`IPC_RMID`** 忽略 **`buf`**。
 - **SysV `shmctl(IPC_STAT)`**：**`buf`** 须为可写 **`shmid_ds`**（**`UserPtr::get_as_mut`**），**`NULL`** → **`BadAddress`**（**EFAULT**），勿 **`nullable!`** 跳过拷贝仍 **`Ok(0)`** 并更新 **`shm_ctime`**（issue-152）；与 **`IPC_SET`** 对 **`buf`** 一致。
-- **SysV `shmat`**：未知或已回收 **`shmid`** → **`get_inner_by_shmid` `None`** → **`InvalidInput`**（**EINVAL**），勿 **`unwrap`**（issue-227；与 **`sys_shmdt`/`sys_shmctl`** 一致）。
+- **SysV `shmat`**：**`get_inner_by_shmid`** **先于** **`shmflg`/`ShmAtFlags`** **校验**，无效 **`shmid`** **先于** **未知** **`SHM_*`** **位** **的** **EINVAL**（**issue-307**；与 **issue-305** **`memfd_create`** **资源**/**句柄** **先于** **flags** **同类**）。未知或已回收 **`shmid`** → **`get_inner_by_shmid` `None`** → **`InvalidInput`**（**EINVAL**），勿 **`unwrap`**（issue-227；与 **`sys_shmdt`/`sys_shmctl`** 一致）。
 - **SysV `shmdt(2)`**：**`shmaddr`** 须为 **`shmat`** 返回的映射起始地址；**`NULL`/`0`** 与**非 4K 页对齐** → **`InvalidInput`**（**EINVAL**），须在 **`get_shmid_by_vaddr`**/**`unmap`** 之前校验（issue-245；与 **`sys_mincore`** 页对齐风格一致）。
 - **`getrusage(RUSAGE_CHILDREN)`**：须为 **`wait`** 回收子进程的 **CPU** 累计（**`ProcessData::child_utime_ns`/`child_stime_ns`**），与 **`times`/`waitpid`** 累加路径一致；**勿**把 **`proc.threads()`** 中除当前线程外的 **pthread** 当作子进程。
 - **`getrusage(2)`**：**`who`** 非法 → **`InvalidInput`**（**EINVAL**）；**`usage`** 为 **NULL** → **`BadAddress`**（**EFAULT**），须在聚合 **`Rusage`** 之前检查，与 Linux 顺序一致。

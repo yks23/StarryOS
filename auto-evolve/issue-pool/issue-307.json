@@ -1,0 +1,27 @@
+{
+  "id": "issue-307",
+  "title": "`shmat(2)`：`sys_shmat` 先校验 `shmflg`/`ShmAtFlags` 再 `get_inner_by_shmid`，非法 `SHM_*` 与无效 `shmid`（已删除/越界）组合时，错误优先级可能与 Linux（`ipc` 对象查找与 `shmflg` 净化顺序）不完全一致",
+  "status": "resolved",
+  "created_at": "2026-04-16T12:05:00Z",
+  "severity": "low",
+  "fix_summary": "重排 `sys_shmat`：先 `SHM_MANAGER.lock()` + `get_inner_by_shmid(shmid)`，再校验 `shmflg`/`ShmAtFlags`，使无效 `shmid` 先于非法 flags 的 EINVAL；注释引用 Linux `do_shmat`、issue-305/issue-307。`executor-memory` SysV shmat 条补充。",
+  "files_changed": ["kernel/src/syscall/ipc/shm.rs", "auto-evolve/memory/executor-memory.md"],
+  "description": "**`kernel/src/syscall/ipc/shm.rs`** **`sys_shmat`** **（** **约** **435–449** **行** **）** **顺序** **为** **`shmflg` 掩码** **/** **`ShmAtFlags::from_bits`** **→** **`shm_manager.get_inner_by_shmid(shmid)`** **。** **当** **同时** **存在** **未知** **`shmflg` 位** **或** **互斥** **组合** **与** **无效** **`shmid`** **时** **，** **本** **实现** **固定** **先** **因** **flags** **返回** **`InvalidInput`** **，** **不会** **到达** **`shmid`** **解析** **路径** **（** **如** **`EINVAL`/`EIDRM`/`EINVAL`** **等** **与** **Linux** **一致** **的** **语义** **需** **对照** **上游** **）** **。** **与** **issue-303**/**issue-305** **「** **标量** **校验** **先于** **句柄** **/****资源** **解析** **」** **同类** **。**\n\n**建议** **：** **对照** **Linux** **`do_shmat`** **/** **`shm_lock`** **链** **对** **`shmflg`** **与** **`shmid`** **的** **校验** **顺序** **，** **按需** **重排** **或** **在** **`sys_shmat`** **注释** **中** **说明** **与** **上游** **差异** **或** **有意** **简化** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["shmat"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/ipc/shm.rs:435-450"],
+    "related_files": ["kernel/src/syscall/fs/memfd.rs"],
+    "key_insight": "shmat flags 校验先于 shmid 解析；与 Linux 顺序可能不同"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：非法 shmflg + 无效 shmid，对照 Linux 错误码顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游 `shmat` 错误优先级一致，或文档/注释明确说明差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "查阅 Linux `shmat` 对 `shmflg` 与 `shmid` 的处理顺序，按需重排 `sys_shmat` 或补充注释（可引用 issue-305）。",
+  "references": ["man 2 shmat", "kernel/src/syscall/ipc/shm.rs", "issue-305"]
+}
