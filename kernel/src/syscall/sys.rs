@@ -37,24 +37,32 @@ pub fn sys_getegid() -> AxResult<isize> {
 }
 
 pub fn sys_getresuid(ruid: *mut u32, euid: *mut u32, suid: *mut u32) -> AxResult<isize> {
-    if ruid.is_null() || euid.is_null() || suid.is_null() {
-        return Err(AxError::BadAddress);
-    }
+    // Linux: each pointer may be NULL to skip that field.
     let (r, e, s) = current().as_thread().proc_data.get_resuid();
-    *UserPtr::from(ruid).get_as_mut()? = r;
-    *UserPtr::from(euid).get_as_mut()? = e;
-    *UserPtr::from(suid).get_as_mut()? = s;
+    if !ruid.is_null() {
+        *UserPtr::from(ruid).get_as_mut()? = r;
+    }
+    if !euid.is_null() {
+        *UserPtr::from(euid).get_as_mut()? = e;
+    }
+    if !suid.is_null() {
+        *UserPtr::from(suid).get_as_mut()? = s;
+    }
     Ok(0)
 }
 
 pub fn sys_getresgid(rgid: *mut u32, egid: *mut u32, sgid: *mut u32) -> AxResult<isize> {
-    if rgid.is_null() || egid.is_null() || sgid.is_null() {
-        return Err(AxError::BadAddress);
-    }
+    // Linux: each pointer may be NULL to skip that field.
     let (r, e, s) = current().as_thread().proc_data.get_resgid();
-    *UserPtr::from(rgid).get_as_mut()? = r;
-    *UserPtr::from(egid).get_as_mut()? = e;
-    *UserPtr::from(sgid).get_as_mut()? = s;
+    if !rgid.is_null() {
+        *UserPtr::from(rgid).get_as_mut()? = r;
+    }
+    if !egid.is_null() {
+        *UserPtr::from(egid).get_as_mut()? = e;
+    }
+    if !sgid.is_null() {
+        *UserPtr::from(sgid).get_as_mut()? = s;
+    }
     Ok(0)
 }
 
