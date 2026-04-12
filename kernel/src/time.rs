@@ -4,6 +4,7 @@ use linux_raw_sys::general::{
     __kernel_old_timespec, __kernel_old_timeval, __kernel_sock_timeval, __kernel_timespec,
     timespec, timeval,
 };
+use starry_vm::VmPtr;
 
 /// A helper trait for converting from and to `TimeValue`.
 pub trait TimeValueLike {
@@ -126,5 +127,15 @@ impl TimeValueLike for __kernel_sock_timeval {
             self.tv_sec as u64,
             self.tv_usec as u32 * 1000,
         ))
+    }
+}
+
+/// Read one user `timespec` field-by-field (issue-201/207; avoids bulk `assume_init`).
+pub(crate) fn read_timespec_user(p: *const timespec) -> AxResult<timespec> {
+    unsafe {
+        Ok(timespec {
+            tv_sec: core::ptr::addr_of!((*p).tv_sec).vm_read()?,
+            tv_nsec: core::ptr::addr_of!((*p).tv_nsec).vm_read()?,
+        })
     }
 }

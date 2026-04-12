@@ -10,7 +10,7 @@ use starry_vm::{VmMutPtr, VmPtr};
 
 use crate::{
     task::{AsThread, FutexKey, futex_table_for, get_task},
-    time::TimeValueLike,
+    time::{TimeValueLike, read_timespec_user},
 };
 
 fn assert_unsigned(value: u32) -> AxResult<u32> {
@@ -47,8 +47,7 @@ pub fn sys_futex(
             }
 
             let timeout = if let Some(ts) = timeout.nullable() {
-                // FIXME: AnyBitPattern
-                let ts = unsafe { ts.vm_read_uninit()?.assume_init() }.try_into_time_value()?;
+                let ts = read_timespec_user(ts)?.try_into_time_value()?;
                 Some(ts)
             } else {
                 None

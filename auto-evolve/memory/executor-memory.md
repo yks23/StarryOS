@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-207 resolved（**`futex` `FUTEX_WAIT`/`FUTEX_WAIT_BITSET`**：用户 **`timespec` 超时** 经 **`crate::time::read_timespec_user`**（**`tv_sec`/`tv_nsec` 字段 `vm_read`**）；**`ctl`/`schedule`/`signal`** 重复实现并入 **`time.rs`**；去掉 **`assume_init`/`FIXME`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-206 resolved（**`rt_sigprocmask`/`rt_sigaction`/`rt_sigtimedwait`/`rt_sigsuspend`/`sigaltstack`**：**`SignalSet`/`kernel_sigaction`/`SignalStack`/`timespec`** 字段或 **`usize` 位型读**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-205 resolved（**`nanosleep`/`clock_nanosleep`**：用户 **`timespec` `req`** 字段级 **`vm_read`**；去掉 **`assume_init`/`FIXME`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-204 resolved（**`setitimer`**：**`itimerval`**/**`timeval`** 字段级 **`vm_read`**；去掉 **`assume_init`/`FIXME`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）

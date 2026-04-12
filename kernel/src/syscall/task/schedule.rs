@@ -14,7 +14,7 @@ use starry_vm::{VmMutPtr, VmPtr, vm_load, vm_write_slice};
 
 use crate::{
     task::{AsThread, ProcessData, get_process_data, get_process_group, get_task, processes},
-    time::TimeValueLike,
+    time::{TimeValueLike, read_timespec_user},
 };
 
 /// Linux `struct sched_param` (user ABI): single `sched_priority` field.
@@ -93,16 +93,6 @@ fn sleep_impl(clock: impl Fn() -> TimeValue, dur: TimeValue) -> TimeValue {
     let _ = block_on(interruptible(sleep(dur)));
 
     clock() - start
-}
-
-/// Read one user `timespec` field-by-field (issue-205 / no bulk `assume_init` on padding).
-fn read_timespec_user(p: *const timespec) -> AxResult<timespec> {
-    unsafe {
-        Ok(timespec {
-            tv_sec: core::ptr::addr_of!((*p).tv_sec).vm_read()?,
-            tv_nsec: core::ptr::addr_of!((*p).tv_nsec).vm_read()?,
-        })
-    }
 }
 
 /// Sleep some nanoseconds (POSIX/Linux: interval on the monotonic clock).

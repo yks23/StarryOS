@@ -31,7 +31,7 @@ use crate::{
     },
     mm::vm_load_string,
     task::AsThread,
-    time::TimeValueLike,
+    time::{TimeValueLike, read_timespec_user},
 };
 
 /// The ioctl() system call manipulates the underlying device parameters
@@ -509,17 +509,6 @@ fn update_times(
             ..Default::default()
         })?;
     Ok(())
-}
-
-/// Read one user `timespec` field-by-field (issue-201 / no bulk `assume_init` on padding).
-fn read_timespec_user(p: *const timespec) -> AxResult<timespec> {
-    // SAFETY: `p` is userspace; addresses are those of `repr(C)` fields only.
-    unsafe {
-        Ok(timespec {
-            tv_sec: core::ptr::addr_of!((*p).tv_sec).vm_read()?,
-            tv_nsec: core::ptr::addr_of!((*p).tv_nsec).vm_read()?,
-        })
-    }
 }
 
 #[cfg(target_arch = "x86_64")]

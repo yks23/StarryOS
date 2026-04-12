@@ -29,7 +29,7 @@ use crate::{
         AsThread, block_next_signal, check_signals, processes, send_signal_to_process,
         send_signal_to_process_group, send_signal_to_thread,
     },
-    time::TimeValueLike,
+    time::{TimeValueLike, read_timespec_user},
 };
 
 /// Matches `starry-signal` `build.rs` / `cfg(sa_restorer)` for `kernel_sigaction` layout.
@@ -103,15 +103,6 @@ fn read_signal_set_user(p: *const SignalSet) -> AxResult<SignalSet> {
     let p = p.cast::<kernel_sigset_t>();
     let word = unsafe { core::ptr::addr_of!((*p).sig[0]).vm_read()? };
     Ok(kernel_sigset_t { sig: [word] }.into())
-}
-
-fn read_timespec_user(p: *const timespec) -> AxResult<timespec> {
-    unsafe {
-        Ok(timespec {
-            tv_sec: core::ptr::addr_of!((*p).tv_sec).vm_read()?,
-            tv_nsec: core::ptr::addr_of!((*p).tv_nsec).vm_read()?,
-        })
-    }
 }
 
 fn read_signal_stack_user(p: *const SignalStack) -> AxResult<SignalStack> {
