@@ -42,17 +42,19 @@ pub fn sys_signalfd4(
     sigsetsize: usize,
     flags: u32,
 ) -> AxResult<isize> {
+    // NULL `mask` **EFAULT** before **EINVAL** from bad `sigsetsize`/`flags`/`CLOEXEC` combo (Linux
+    // user-pointer access order; issue-321; orthogonal to `fd` vs `read_signal_set_user`, issue-319).
+    if mask.is_null() {
+        // Linux `signalfd4(2)`: `mask` must point to valid user memory; NULL → EFAULT.
+        return Err(AxError::BadAddress);
+    }
+
     check_sigset_size(sigsetsize)?;
 
     let flags = SignalfdFlags::from_bits(flags).ok_or(AxError::InvalidInput)?;
 
     if fd != -1 && flags.contains(SignalfdFlags::CLOEXEC) {
         return Err(AxError::InvalidInput);
-    }
-
-    if mask.is_null() {
-        // Linux `signalfd4(2)`: `mask` must point to valid user memory; NULL → EFAULT.
-        return Err(AxError::BadAddress);
     }
 
     // If fd is not -1, resolve `fd` before `read_signal_set_user` so **EBADF** precedes **EFAULT** on

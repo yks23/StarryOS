@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-30：issue-321 resolved（**`signalfd4`**：**`mask.is_null()`** **先于** **`check_sigset_size`/`flags`**，**EFAULT** **先于** **`EINVAL`**；**`signalfd.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-29：issue-320 resolved（**`pidfd_getfd`/`pidfd_send_signal`**：**`PidFd::from_fd`** **先于** **`flags != 0`**，**`EBADF`** **先于** **`EINVAL`**；**`pidfd.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-28：issue-319 resolved（**`signalfd4`**：**`fd != -1`** **时** **`Signalfd::from_fd`** **先于** **`read_signal_set_user`**，**`EBADF`** **先于** **`EFAULT`**；**`signalfd.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-27：issue-318 resolved（**`truncate`**：**`path.get_as_str()`** **先于** **`length < 0`**，**EFAULT** **先于** **`EINVAL`**；**`fs/io.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -344,6 +345,7 @@
 | issue-271 | mlock/mlock2 addr 须页对齐 EINVAL | resolved | 2026-04-12 |
 | issue-272 | lseek SEEK_SET 负 offset EINVAL | resolved | 2026-04-12 |
 | issue-273 | prlimit64 跨 pid 权限 EPERM | resolved | 2026-04-12 |
+| issue-321 | signalfd4 NULL mask 先于 sigsetsize/flags | resolved | 2026-04-30 |
 | issue-320 | pidfd_getfd/send_signal from_fd 先于 flags | resolved | 2026-04-29 |
 | issue-319 | signalfd4 修改 fd 时 from_fd 先于读 mask | resolved | 2026-04-28 |
 | issue-318 | truncate path.get_as_str 先于 length<0 | resolved | 2026-04-27 |
@@ -549,7 +551,7 @@
 - 全核 membarrier（多 hart）在 Linux 上依赖 IPI；若未来启用 `axfeat/smp` + `axfeat/ipi`，可在各核 IPI handler 中执行与 `sys_membarrier` 相同的 fence，并用同步原语等待全部完成。
 - `rt_sigreturn` 通过 `block_next_signal` 标记「下一次回到用户循环时跳过一次 `check_signals`」；该标志必须是 **per-thread**（`Thread::skip_next_signal_check`），不可用进程级或全局 AtomicBool。
 - **`rt_sigpending`**：**`set`** 为必填输出（Linux **`NULL` → EFAULT**），**`set.is_null()` → `BadAddress`**，须在 **`vm_write`** 前校验。**`rt_sigprocmask(2)`**：**`set==NULL`** 时仅 **`copy_to_user(old)`**（若 **`oldset` 非空**），**`how`** 忽略；**`set` 非空**时须先校验 **`how`**（**`SIG_BLOCK`/`SIG_UNBLOCK`/`SIG_SETMASK`**）再 **`vm_read(set)`**，成功后再 **`vm_write(oldset)`** 与 **`set_blocked`**，非法 **`how`** 或 **`set`** 读失败不得改写 **`oldset`**（issue-146）。**`rt_sigaction(2)`**：持锁后先 **`clone`** 当前表项为 **`old`**；**`act` 非空**时先 **`vm_read(act)`** 并写回 **`actions[signo]`**，再 **`vm_write(oldact)`**（**`old.into()`**）；**`act`** 读失败不得改写 **`oldact`**（issue-147）。**`act==NULL`** 时仅 **`vm_write(oldact)`** 查询。**`oldact`** 仍为 **`nullable()`**。
-- **`signalfd4`**：**`mask`** 为必填输入（Linux **`NULL` → EFAULT**），**`mask.is_null()` → `BadAddress`**，须在 **`read_signal_set_user`** 前校验。**`fd != -1`**（修改已有 **signalfd**）：**`Signalfd::from_fd(fd)`** **先于** **`read_signal_set_user`**，**`EBADF`** **先于** **不可读** **`mask`** **的** **`BadAddress`**（**issue-319**；**`fd == -1`** **新建** **仍** **先** **读** **`mask`**）。**`read_signal_set_user`** 与 **`rt_sigprocmask`** 同字级路径（**issue-210**）。
+- **`signalfd4`**：**`mask.is_null()` → `BadAddress`** **先于** **`check_sigset_size`**/**`SignalfdFlags`**/**`CLOEXEC`** **组合** **的** **`EINVAL`**（**issue-321**；**`mask`** **为** **必填** **用户** **指针**）。**`fd != -1`**：**`Signalfd::from_fd(fd)`** **先于** **`read_signal_set_user`**，**`EBADF`** **先于** **不可读** **`mask`** **的** **`BadAddress`**（**issue-319**）。**`read_signal_set_user`** 与 **`rt_sigprocmask`** 同字级路径（**issue-210**）。
 - **`sigaltstack(2)`**：**`ss==NULL`** 时 **`set_stack(SignalStack::default())`**（**`SS_DISABLE`**），禁用备用栈（issue-244）；非空 **`ss`** 且 **`ss.size < MINSIGSTKSZ` → EINVAL**（issue-098）。
 - **`rt_sigtimedwait`/`rt_sigsuspend`**：**`set`** 为必填可读 **`sigset_t`**（**`NULL` → EFAULT**），**`set.is_null()` → `BadAddress`**，须在 **`vm_read_uninit`** 前校验；**`timeout`/`info`** 等仍 **`nullable()`**。
 - **`rt_sigqueueinfo`/`rt_tgsigqueueinfo`**：Linux 分别为 **3/4 个**用户参数（**`uinfo`** 为最后一参），**无** **`sigsetsize`**；勿从 **`a3`/`a4`** 读 **`sigsetsize`** 或调用 **`check_sigset_size`**（残留寄存器会误 **EINVAL**）。**`rt_sig*`** 中带 **`sigsetsize`** 的是 **`rt_sigprocmask`**、**`rt_sigaction`**、**`rt_sigpending`**、**`rt_sigtimedwait`**、**`rt_sigsuspend`** 等，勿与 queueinfo 混淆。**`make_queue_signal_info`**：**`signo==0`** → **`Ok(None)`**；否则 **`parse_signo`** 后 **`uinfo==NULL` → `BadAddress`** 再 **`vm_read`**（**`pidfd_send_signal`** 同路径）。
