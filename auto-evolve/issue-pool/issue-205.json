@@ -1,0 +1,31 @@
+{
+  "id": "issue-205",
+  "title": "nanosleep/clock_nanosleep：`vm_read_uninit`+`assume_init` 读用户 `timespec`，`FIXME AnyBitPattern` 与 issue-204 同类",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`schedule.rs`**：新增 **`read_timespec_user`**（**`tv_sec`/`tv_nsec`** 字段 **`vm_read`**）。**`sys_nanosleep`**/**`sys_clock_nanosleep`** 用其读 **`req`**，去掉 **`vm_read_uninit`/`assume_init`** 与 **`FIXME`**；**`rem`** 写回与 **issue-180** **`flags`** 校验不变。**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过。",
+  "files_changed": [
+    "kernel/src/syscall/task/schedule.rs",
+    "auto-evolve/issue-pool/issue-205.json",
+    "auto-evolve/memory/executor-memory.md"
+  ],
+  "description": "**`kernel/src/syscall/task/schedule.rs`** **`sys_nanosleep`**（约 **100–101** 行）带 **`// FIXME: AnyBitPattern`**，与 **`sys_clock_nanosleep`**（约 **127** 行，无单独 FIXME）均在读取 **`req`** 时使用 **`unsafe { req.vm_read_uninit()?.assume_init() }`**，再 **`try_into_time_value`**。**`rem`** 写回已用 **`timespec::from_time_value`**（安全构造）。**`assume_init`** 与 **issue-201/204** 同类：依赖 **`linux_raw_sys::general::timespec`** 与 **uapi** 布局完全一致；升级或 padding 假设偏离时有 **可审计性/UB** 风险。**`sys_clock_nanosleep`** 的 **`flags`** 校验已由 **issue-180** 覆盖；本条仅针对 **`req` 读入路径**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["nanosleep", "clock_nanosleep"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/schedule.rs:98-166"],
+    "related_files": [],
+    "key_insight": "`clock_nanosleep` 已校验 flags；`req` 仍 `assume_init`"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "静态审查 + **`linux_raw_sys` 升级**试编译；对齐 **issue-201**/**issue-204** 的字段级 **`vm_read`** 修复。",
+    "expected_output_contains": "",
+    "pass_criteria": "消除 **`assume_init`** 或证明 **`timespec`** 全 **`Pod`** 且 **`vm_read_uninit`** 与 **uapi** 逐字节一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（2026-04-12）"
+  },
+  "suggested_fix": "对 **`timespec`** 拆 **`tv_sec`/`tv_nsec` 两次标量 `vm_read`**（或 **`zerocopy::FromBytes`**），再 **`try_into_time_value`**；删除 **`FIXME`**。",
+  "references": ["man 2 nanosleep", "man 2 clock_nanosleep", "issue-180", "issue-204", "issue-201"]
+}

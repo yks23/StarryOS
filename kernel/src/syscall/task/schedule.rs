@@ -95,10 +95,19 @@ fn sleep_impl(clock: impl Fn() -> TimeValue, dur: TimeValue) -> TimeValue {
     clock() - start
 }
 
+/// Read one user `timespec` field-by-field (issue-205 / no bulk `assume_init` on padding).
+fn read_timespec_user(p: *const timespec) -> AxResult<timespec> {
+    unsafe {
+        Ok(timespec {
+            tv_sec: core::ptr::addr_of!((*p).tv_sec).vm_read()?,
+            tv_nsec: core::ptr::addr_of!((*p).tv_nsec).vm_read()?,
+        })
+    }
+}
+
 /// Sleep some nanoseconds (POSIX/Linux: interval on the monotonic clock).
 pub fn sys_nanosleep(req: *const timespec, rem: *mut timespec) -> AxResult<isize> {
-    // FIXME: AnyBitPattern
-    let req = unsafe { req.vm_read_uninit()?.assume_init() }.try_into_time_value()?;
+    let req = read_timespec_user(req)?.try_into_time_value()?;
     debug!("sys_nanosleep <= req: {req:?}");
 
     let actual = sleep_impl(axhal::time::monotonic_time, req);
@@ -124,7 +133,7 @@ pub fn sys_clock_nanosleep(
     if flags & !TIMER_ABSTIME != 0 {
         return Err(AxError::InvalidInput);
     }
-    let req = unsafe { req.vm_read_uninit()?.assume_init() }.try_into_time_value()?;
+    let req = read_timespec_user(req)?.try_into_time_value()?;
     debug!("sys_clock_nanosleep <= clock_id: {clock_id}, flags: {flags}, req: {req:?}");
 
     let id = clock_id as u32;
