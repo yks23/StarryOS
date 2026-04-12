@@ -25,12 +25,14 @@ pub fn sys_execve(
     argv: *const *const c_char,
     envp: *const *const c_char,
 ) -> AxResult<isize> {
-    let path = vm_load_string(path)?;
-
-    // Linux `execve(2)`: `argv` must be a valid pointer to a NULL-terminated array → EFAULT.
+    // Linux bprm_execve/copy_strings: `argv` must be valid; NULL argv → EFAULT before copying
+    // pathname from user (issue-325; same class as issue-323/issue-321).
     if argv.is_null() {
         return Err(AxError::BadAddress);
     }
+
+    let path = vm_load_string(path)?;
+
     let args = vm_load_until_nul(argv)?
         .into_iter()
         .map(vm_load_string)
