@@ -1,19 +1,46 @@
 use axerrno::{AxError, AxResult};
 use axhal::time::TimeValue;
 use axtask::{
-    AxCpuMask, current,
+    AxCpuMask, AxTaskRef, current,
     future::{block_on, interruptible, sleep},
 };
 use linux_raw_sys::general::{
     __kernel_clockid_t, CLOCK_MONOTONIC, CLOCK_REALTIME, PRIO_PGRP, PRIO_PROCESS, PRIO_USER,
     SCHED_RR, TIMER_ABSTIME, timespec,
 };
+use starry_process::Pid;
 use starry_vm::{VmMutPtr, VmPtr, vm_load, vm_write_slice};
 
 use crate::{
-    task::{get_process_data, get_process_group},
+    task::{get_process_data, get_process_group, get_task},
     time::TimeValueLike,
 };
+
+/// Linux `sched_*affinity` `pid`: `0` is the calling task; otherwise a TID, or a thread-group PID
+/// (we fall back to the smallest member TID, typically the leader).
+fn sched_resolve_task(pid: i32) -> AxResult<AxTaskRef> {
+    if pid < 0 {
+        return Err(AxError::InvalidInput);
+    }
+    if pid == 0 {
+        return get_task(0);
+    }
+    let pid_u = pid as Pid;
+    match get_task(pid_u) {
+        Ok(t) => Ok(t),
+        Err(AxError::NoSuchProcess) => {
+            let pdata = get_process_data(pid_u)?;
+            let tid = pdata
+                .proc
+                .threads()
+                .into_iter()
+                .min()
+                .ok_or(AxError::NoSuchProcess)?;
+            get_task(tid)
+        }
+        Err(e) => Err(e),
+    }
+}
 
 pub fn sys_sched_yield() -> AxResult<isize> {
     axtask::yield_now();
@@ -93,12 +120,8 @@ pub fn sys_sched_getaffinity(pid: i32, cpusetsize: usize, user_mask: *mut u8) ->
         return Err(AxError::InvalidInput);
     }
 
-    // TODO: support other threads
-    if pid != 0 {
-        return Err(AxError::OperationNotPermitted);
-    }
-
-    let mask = current().cpumask();
+    let task = sched_resolve_task(pid)?;
+    let mask = task.cpumask();
     let mask_bytes = mask.as_bytes();
 
     vm_write_slice(user_mask, mask_bytes)?;
@@ -106,11 +129,7 @@ pub fn sys_sched_getaffinity(pid: i32, cpusetsize: usize, user_mask: *mut u8) ->
     Ok(mask_bytes.len() as _)
 }
 
-pub fn sys_sched_setaffinity(
-    _pid: i32,
-    cpusetsize: usize,
-    user_mask: *const u8,
-) -> AxResult<isize> {
+pub fn sys_sched_setaffinity(pid: i32, cpusetsize: usize, user_mask: *const u8) -> AxResult<isize> {
     let size = cpusetsize.min(axhal::cpu_num().div_ceil(8));
     let user_mask = vm_load(user_mask, size)?;
     let mut cpu_mask = AxCpuMask::new();
@@ -121,8 +140,17 @@ pub fn sys_sched_setaffinity(
         }
     }
 
-    // TODO: support other threads
-    axtask::set_current_affinity(cpu_mask);
+    let task = sched_resolve_task(pid)?;
+    if task.id() == current().id() {
+        if !axtask::set_current_affinity(cpu_mask) {
+            return Err(AxError::InvalidInput);
+        }
+    } else {
+        if cpu_mask.is_empty() {
+            return Err(AxError::InvalidInput);
+        }
+        task.set_cpumask(cpu_mask);
+    }
 
     Ok(0)
 }
