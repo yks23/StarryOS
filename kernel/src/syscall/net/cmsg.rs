@@ -1,4 +1,4 @@
-use alloc::{sync::Arc, vec::Vec};
+use alloc::{sync::Arc, vec, vec::Vec};
 use core::mem::size_of;
 
 use axerrno::{AxError, AxResult};
@@ -97,6 +97,11 @@ impl CMsgBuilder {
         self.capacity.saturating_sub(self.written)
     }
 
+    /// Build one ancillary message. The `body` closure fills the **payload** slice and returns the
+    /// byte length written (≤ slice length). Payload is staged in a kernel buffer first; the user
+    /// `cmsghdr` (`cmsg_len` / `cmsg_level` / `cmsg_type`) and payload are committed only after
+    /// `body` succeeds, so a failing `body` (e.g. `SCM_RIGHTS` install) does not leave a partially
+    /// filled `cmsghdr` in user memory (issue-362; Linux-style atomicity for this path).
     pub fn push(
         &mut self,
         level: u32,
@@ -110,20 +115,24 @@ impl CMsgBuilder {
         let body_capacity = remaining - size_of::<cmsghdr>();
         let cmsg_base = self.hdr.address().as_usize();
 
-        let hdr = self.hdr.get_as_mut()?;
-        hdr.cmsg_level = level as _;
-        hdr.cmsg_type = ty as _;
-
-        let data = UserPtr::<u8>::from(cmsg_base + size_of::<cmsghdr>())
-            .get_as_mut_slice(body_capacity)?;
-        let body_len = body(data)?;
+        let mut kbuf = vec![0u8; body_capacity];
+        let body_len = body(&mut kbuf)?;
 
         let cmsg_len = size_of::<cmsghdr>() + body_len;
         let padded = cmsg_align(cmsg_len)?;
         if padded > remaining {
             return Err(AxError::InvalidInput);
         }
+
+        let hdr = self.hdr.get_as_mut()?;
         hdr.cmsg_len = cmsg_len;
+        hdr.cmsg_level = level as _;
+        hdr.cmsg_type = ty as _;
+
+        UserPtr::<u8>::from(cmsg_base + size_of::<cmsghdr>())
+            .get_as_mut_slice(body_len)?
+            .copy_from_slice(&kbuf[..body_len]);
+
         if padded > cmsg_len {
             UserPtr::<u8>::from(cmsg_base + cmsg_len)
                 .get_as_mut_slice(padded - cmsg_len)?

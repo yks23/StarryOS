@@ -1,0 +1,32 @@
+{
+  "id": "issue-362",
+  "title": "`recvmsg(2)` 辅助：`CMsgBuilder::push` 在调用 `body` 闭包前已向用户 `cmsghdr` 写入 `cmsg_level`/`cmsg_type`；若 `body` 返回 `Err`，用户缓冲可能留下未配平 `cmsg_len` 的部分头字段，与 Linux 整段控制消息成功或失败的原子可观察语义不一致",
+  "status": "resolved",
+  "created_at": "2026-04-14T14:05:00Z",
+  "resolved_at": "2026-04-14T00:00:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/net/cmsg.rs`** **`CMsgBuilder::push`** **（** **约** **100–135** **行** **）** **：** **`self.hdr.get_as_mut()`** **后** **立即** **写入** **`hdr.cmsg_level`** **与** **`hdr.cmsg_type`** **，** **再** **调用** **`body(data)?`** **。** **若** **`body`** **失败** **，** **错误** **向上** **返回** **时** **`cmsg_len`** **尚未** **写入** **（** **仍** **为** **旧** **值** **或** **未** **定义** **）** **，** **用户** **可见** **部分** **更新的** **`cmsghdr`** **。** **Linux** **`recvmsg`** **路径** **通常** **在** **`copy_to_user`** **整** **条** **控制** **消息** **成功** **前** **不** **提交** **头** **字段** **，** **或** **失败** **时** **不** **写** **。**\n\n**建议** **：** **先** **`body`** **到** **内核** **栈** **缓冲** **再** **一次** **`vm_write`** **头** **+** **体** **；** **或** **失败** **时** **恢复** **用户** **头** **两** **字段** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["recvmsg"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/cmsg.rs:100-135"],
+    "related_files": ["kernel/src/syscall/net/io.rs"],
+    "key_insight": "CMsgBuilder partial cmsghdr write before body Err"
+  },
+  "fix_summary": "**`CMsgBuilder::push`**：**`body`** **先** **填充** **内核** **`vec![0; body_capacity]`**，**`body(&mut kbuf)?`** **成功** **后** **再** **`get_as_mut` `cmsghdr`** **写** **`cmsg_len`/`cmsg_level`/`cmsg_type`** **并** **`copy_from_slice`** **payload**；**`body` `Err`** **不** **写** **用户** **头**。**issue-362**。",
+  "files_changed": [
+    "kernel/src/syscall/net/cmsg.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-362.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：构造使 SCM_RIGHTS body 失败的 recvmsg 对照用户缓冲。",
+    "expected_output_contains": "",
+    "pass_criteria": "失败路径不暴露部分写入的 `cmsghdr`，或与 Linux 一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "延迟写 `cmsg_level`/`cmsg_type` 直至 `body` 成功，或失败前回滚。",
+  "references": ["man 2 recvmsg", "kernel/net/core/sock.c", "kernel/src/syscall/net/cmsg.rs"]
+}
