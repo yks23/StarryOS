@@ -1,5 +1,5 @@
 use axerrno::{AxError, AxResult};
-use axhal::time::{TimeValue, monotonic_time, monotonic_time_nanos, nanos_to_ticks, wall_time};
+use axhal::time::{TimeValue, monotonic_time, monotonic_time_nanos, wall_time};
 use axtask::current;
 use linux_raw_sys::general::{
     __kernel_clockid_t, CLOCK_BOOTTIME, CLOCK_MONOTONIC, CLOCK_MONOTONIC_COARSE,
@@ -9,9 +9,23 @@ use linux_raw_sys::general::{
 use starry_vm::{VmMutPtr, VmPtr};
 
 use crate::{
-    task::{AsThread, ITimerType, time_value_from_nanos},
+    task::{AsThread, ITimerType},
     time::{TimeValueLike, read_timeval_user},
 };
+
+/// Linux `USER_HZ` / `_SC_CLK_TCK` for `times(2)`: `struct tms` fields and the syscall return value
+/// are `clock_t` jiffies, not microseconds (issue-224).
+const USER_HZ: u64 = 100;
+
+#[inline]
+fn cpu_nanos_to_clock_t(ns: usize) -> usize {
+    ((ns as u128).saturating_mul(USER_HZ as u128) / 1_000_000_000u128).min(usize::MAX as u128) as usize
+}
+
+#[inline]
+fn monotonic_nanos_to_jiffies(nanos: u64) -> u64 {
+    nanos.saturating_mul(USER_HZ) / 1_000_000_000
+}
 
 fn clock_id_supported(clock_id: u32) -> bool {
     matches!(
@@ -82,15 +96,16 @@ pub fn sys_clock_getres(clock_id: __kernel_clockid_t, res: *mut timespec) -> AxR
     Ok(0)
 }
 
+/// Matches Linux `struct tms`: fields are `clock_t` jiffies at `USER_HZ` (not microseconds).
 #[repr(C)]
 pub struct Tms {
-    /// user time
+    /// user CPU time (jiffies)
     tms_utime: usize,
-    /// system time
+    /// system CPU time (jiffies)
     tms_stime: usize,
-    /// user time of children
+    /// user CPU time of waited children (jiffies)
     tms_cutime: usize,
-    /// system time of children
+    /// system CPU time of waited children (jiffies)
     tms_cstime: usize,
 }
 
@@ -99,10 +114,10 @@ pub fn sys_times(tms: *mut Tms) -> AxResult<isize> {
     let (ut_ns, st_ns) = proc_data.thread_group_cpu_nanos();
     let (cu_ns, cs_ns) = proc_data.waited_children_cpu_nanos();
 
-    let utime = time_value_from_nanos(ut_ns).as_micros() as usize;
-    let stime = time_value_from_nanos(st_ns).as_micros() as usize;
-    let cutime = time_value_from_nanos(cu_ns).as_micros() as usize;
-    let cstime = time_value_from_nanos(cs_ns).as_micros() as usize;
+    let utime = cpu_nanos_to_clock_t(ut_ns);
+    let stime = cpu_nanos_to_clock_t(st_ns);
+    let cutime = cpu_nanos_to_clock_t(cu_ns);
+    let cstime = cpu_nanos_to_clock_t(cs_ns);
 
     if let Some(tms) = tms.nullable() {
         tms.vm_write(Tms {
@@ -112,7 +127,7 @@ pub fn sys_times(tms: *mut Tms) -> AxResult<isize> {
             tms_cstime: cstime,
         })?;
     }
-    Ok(nanos_to_ticks(monotonic_time_nanos()) as _)
+    Ok(monotonic_nanos_to_jiffies(monotonic_time_nanos()) as _)
 }
 
 fn read_itimerval_user(p: *const itimerval) -> AxResult<itimerval> {

@@ -1,0 +1,27 @@
+{
+  "id": "issue-224",
+  "title": "sys_times：`struct tms` 字段填入微秒，Linux 要求 `clock_t` jiffies（USER_HZ），单位与 times(2) 不符",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "medium",
+  "fix_summary": "`sys_times`：`tms_*` 与返回值由纳秒换算为 **`clock_t` jiffies**：**`ns * USER_HZ / 1e9`**（**`USER_HZ = 100`**，与常见 **`_SC_CLK_TCK`** 一致）；去掉 **`as_micros`**。syscall 返回值改为 **`monotonic_time_nanos()`** 的同尺度 jiffies，替代 **`nanos_to_ticks`**（与 **`tms`** 单位一致）。",
+  "files_changed": ["kernel/src/syscall/time.rs"],
+  "description": "**`kernel/src/syscall/time.rs`** **`sys_times`**（约 **97–116** 行）将进程/子进程 CPU 时间转为 **`time_value_from_nanos(...).as_micros() as usize`** 后写入 **`Tms { tms_utime, tms_stime, tms_cutime, tms_cstime }`**。\n\n**Linux `times(2)`**：**`struct tms`** 四字段类型为 **`clock_t`**，值为 **时钟滴答（jiffies）**，刻度由 **`sysconf(_SC_CLK_TCK)` / `USER_HZ`**（常见 **100** 或 **250**）决定；**不是** 微秒或纳秒直接暴露。\n\n当前实现等价于把 **CPU 时间**按 **微秒** 填入用户结构，**glibc `times(3)`** / **`clock()`** 若按 Linux 约定用 **`CLK_TCK`** 解释返回值会得到 **错误数量级**（差 **`1e6/USER_HZ`** 量级）。\n\n**建议**：与 **`getrusage`**/**`clock_gettime(CLOCK_PROCESS_CPUTIME_ID)`** 策略对齐：要么将 **纳秒** 转为 **`jiffies = ns * USER_HZ / 1e9`**（并统一 **`USER_HZ`** 常量）；要么在 ABI 文档中明确 **Starry `times` 返回微秒** 且 **非 Linux 兼容**（不推荐）。\n\n**注意**：**`Tms`** 当前为 **`usize`** 字段，若改为 **`i64`** / **`clock_t`** 绑定需与 **uapi** 一致。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["times"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/time.rs:85-116"],
+    "related_files": ["kernel/src/syscall/resources.rs"],
+    "key_insight": "tms 应为 jiffies/clock_t，不是 as_micros"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 **`man 2 times`**、**`include/uapi/linux/times.h`**。",
+    "expected_output_contains": "",
+    "pass_criteria": "返回值与 Linux `clock_t`/jiffies 语义一致，或显式文档化非兼容 ABI。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos：通过（exit 0）"
+  },
+  "suggested_fix": "引入 `USER_HZ`（或配置项），`tms_* = cpu_nanos * USER_HZ / 1_000_000_000`（饱和/舍入与内核一致）。",
+  "references": ["man 2 times", "issue-033 setitimer 精度", "issue-184 getrusage"]
+}

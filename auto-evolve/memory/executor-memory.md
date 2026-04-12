@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-224 resolved（**`times(2)`**：**`struct tms`** 四字段与返回值均为 **`USER_HZ`（100）jiffies**，**`cpu_nanos * USER_HZ / 1e9`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-223 resolved（**`getsockopt` `SO_RCVTIMEO`/`SO_SNDTIMEO`**：**`GetSocketOption::ReceiveTimeout`/`SendTimeout`** + **`write_timeval_user`**，与 **issue-217 `setsockopt`** 对称；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-218 resolved（**`sysinfo` `loads`**：`Ready`/`Running` 瞬时采样 + EWMA（1/5/15 分钟 τ），**`SI_LOAD_SHIFT`** 定点；UP 假定 **`NCPUS=1`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-217 resolved（**`setsockopt` `SO_RCVTIMEO`/`SO_SNDTIMEO`**：**`read_timeval_user`** + **`Duration::sys_to_rust`**，不经 **`get`/`get_as_ref` 整颗 `timeval`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -201,6 +202,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-224 | times tms/返回值 jiffies（USER_HZ=100） | resolved | 2026-04-12 |
 | issue-223 | getsockopt SO_RCVTIMEO/SO_SNDTIMEO 与 setsockopt 对称 | resolved | 2026-04-12 |
 | issue-218 | sysinfo loads 1/5/15 分钟 EWMA + SI_LOAD_SHIFT | resolved | 2026-04-12 |
 | issue-217 | setsockopt timeval 与 read_timeval_user 一致 | resolved | 2026-04-12 |
@@ -427,7 +429,7 @@
 - **`pwrite64(2)`**：**`offset < 0` → `InvalidInput`**（issue-108）；**`len == 0`** 仍须先 **`File::from_fd`** 再 **`Ok(0)`**，勿在 **`from_fd`** 前早退，以便无效 fd 得 **EBADF**（issue-125，对齐 Linux **`vfs_write`/`fget`**）。
 - **`truncate(2)`**：**`length < 0` → `InvalidInput`** 须先于 **`path.get_as_str()`**，以便坏 **`path`** 与负长度组合时优先 **EINVAL**（issue-126，与 **`ftruncate`** 及 Linux **`do_truncate`** 一致）。
 - **`recvmsg`/`recvfrom`/`sendmsg`/`sendto`**：**`flags`** 须在 **`linux_raw_sys::net::MSG_*`** 定义的 **接收** 与 **发送** 掩码内（**`RECVMSG_FLAGS_MASK`** 含 **`MSG_PEEK`**；**`SENDMSG_FLAGS_MASK`** 不含 **`MSG_PEEK`**），否则 **`EINVAL`**。**`axnet::SendFlags`** 仍为占位 **`bitflags!`**，合法 **`MSG_*`** 尚未透传到 **`SendOptions.flags`**；**`MSG_DONTWAIT`** 等语义需在 **`axnet-ng`** 扩展 **`SendFlags`** 并在各 **`SocketOps::send`/`recv`** 中实现。
-- **`times(2)`**：**`tms_utime`/`tms_stime`** = 线程组用户/系统时间（已退出线程计入 **`exited_threads_*_ns`**，存活线程取 **`TimeManager::cpu_nanos`**）；**`tms_cutime`/`tms_cstime`** = 已通过 **`wait`** 回收的子进程线程组 CPU 累计（**`waitpid`** 从僵尸 **`ProcessData`** 读 **`thread_group_cpu_nanos`** 后加到父 **`child_*_ns`**）。末线程退出时 **`register_zombie_process_data`**，**`wait`** **`free`** 后 **`remove_zombie_process_data`**。
+- **`times(2)`**：**`tms_*`** 为 **`clock_t` jiffies**（**`USER_HZ = 100`**，**`ns * USER_HZ / 1e9`**）；返回值亦为单调时钟 jiffies（issue-224）。**`tms_utime`/`tms_stime`** 来源：线程组用户/系统时间（已退出线程计入 **`exited_threads_*_ns`**，存活线程取 **`TimeManager::cpu_nanos`**）；**`tms_cutime`/`tms_cstime`** = 已通过 **`wait`** 回收的子进程线程组 CPU 累计（**`waitpid`** 从僵尸 **`ProcessData`** 读 **`thread_group_cpu_nanos`** 后加到父 **`child_*_ns`**）。末线程退出时 **`register_zombie_process_data`**，**`wait`** **`free`** 后 **`remove_zombie_process_data`**。
 - **`Socket`/`fstat`**：每个 **`Socket::new`** 分配单调 **`sock_ino`**（**`AtomicU64`**）与固定 **`SOCKFS_STAT_DEV`**；**`FileLike::stat`** 填 **`Kstat::dev`/`ino`**；**`path`** 为 **`socket:[ino]`**，与 **`st_ino`** 一致。
 - **`get_mempolicy(2)`**：无 NUMA 建模时 **`policy`** 写入 **`MPOL_DEFAULT`（0）**；若 **`nodemask`/`maxnode`** 有效则清零 **`maxnode`** 位对应字节（上限 8192 字节）以匹配 **默认** 策略的空节点掩码。
 
