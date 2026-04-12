@@ -25,7 +25,7 @@ use linux_raw_sys::{
 use starry_vm::{VmPtr, vm_write_slice};
 
 use crate::{
-    file::{Directory, File, FileLike, get_file_like, resolve_at, with_fs},
+    file::{Directory, FileLike, get_file_like, location_from_fd, resolve_at, with_fs},
     mm::vm_load_string,
     task::AsThread,
     time::TimeValueLike,
@@ -678,14 +678,7 @@ pub fn sys_sync() -> AxResult<isize> {
 
 pub fn sys_syncfs(fd: i32) -> AxResult<isize> {
     debug!("sys_syncfs <= fd: {fd}");
-    let f = get_file_like(fd)?;
-    let loc = if let Some(file) = f.downcast_ref::<File>() {
-        file.inner().backend()?.location().clone()
-    } else if let Some(dir) = f.downcast_ref::<Directory>() {
-        dir.inner().clone()
-    } else {
-        return Err(AxError::InvalidInput);
-    };
+    let loc = location_from_fd(fd)?;
     loc.filesystem().flush()?;
     Ok(0)
 }
