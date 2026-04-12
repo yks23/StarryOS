@@ -7,6 +7,7 @@ use axtask::{AxTaskExt, current, spawn_task};
 use bitflags::bitflags;
 use kspin::SpinNoIrq;
 use linux_raw_sys::general::*;
+use memory_addr::VirtAddr;
 use starry_process::Pid;
 use starry_signal::Signo;
 use starry_vm::VmMutPtr;
@@ -169,16 +170,10 @@ impl CloneArgs {
         }
         new_uctx.set_retval(0);
 
-        let set_child_tid = if flags.contains(CloneFlags::CHILD_SETTID) {
-            child_tid
-        } else {
-            0
-        };
-
         let curr = current();
         let old_proc_data = &curr.as_thread().proc_data;
 
-        let mut new_task = new_user_task(&curr.name(), new_uctx, set_child_tid);
+        let mut new_task = new_user_task(&curr.name(), new_uctx);
 
         let tid = new_task.id().as_u64() as Pid;
         if flags.contains(CloneFlags::PARENT_SETTID) && parent_tid != 0 {
@@ -265,6 +260,19 @@ impl CloneArgs {
         let thr = Thread::new(tid, new_proc_data.clone());
         if flags.contains(CloneFlags::CHILD_CLEARTID) {
             thr.set_clear_child_tid(child_tid);
+        }
+        if flags.contains(CloneFlags::CHILD_SETTID) && child_tid != 0 {
+            // Linux: child's tid at `child_tidptr` before returning to parent (EFAULT fails clone).
+            // Use the child's `AddrSpace` so fork (non-`CLONE_VM`) updates the child's mapping, not
+            // the parent's COW view. issue-413.
+            let vaddr = VirtAddr::from(child_tid);
+            let tid_bytes = unsafe {
+                core::slice::from_raw_parts(
+                    (&tid as *const Pid).cast::<u8>(),
+                    core::mem::size_of::<Pid>(),
+                )
+            };
+            new_proc_data.aspace.read().write(vaddr, tid_bytes)?;
         }
         if flags.contains(CloneFlags::PIDFD) && pidfd != 0 {
             let pidfd_obj = if flags.contains(CloneFlags::THREAD) {
