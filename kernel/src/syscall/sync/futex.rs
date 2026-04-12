@@ -147,6 +147,11 @@ pub fn sys_set_robust_list(head: *const robust_list_head, size: usize) -> AxResu
     if size != size_of::<robust_list_head>() {
         return Err(AxError::InvalidInput);
     }
+    // Linux probes user `head` at syscall time (`copy_from_user`/`access_ok`); NULL clears the list
+    // without touching user memory (issue-383; symmetric with `sys_get_robust_list` `check_access`).
+    if !head.is_null() {
+        check_access(head.addr(), size_of::<robust_list_head>()).map_err(|_| AxError::BadAddress)?;
+    }
     current().as_thread().set_robust_list_head(head.addr());
 
     Ok(0)
