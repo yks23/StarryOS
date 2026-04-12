@@ -218,6 +218,12 @@ fn min_nice_among<'a>(it: impl Iterator<Item = &'a ProcessData>) -> Option<i32> 
     it.map(ProcessData::get_nice).reduce(|a, b| a.min(b))
 }
 
+/// Linux `nice_to_rlimit()` for [`getpriority(2)`]: maps nice in **-20..=19** to **1..=40**.
+#[inline]
+fn linux_getpriority_ret(nice: i32) -> isize {
+    (20 - nice) as isize
+}
+
 pub fn sys_getpriority(which: u32, who: u32) -> AxResult<isize> {
     debug!("sys_getpriority <= which: {which}, who: {who}");
 
@@ -228,7 +234,7 @@ pub fn sys_getpriority(which: u32, who: u32) -> AxResult<isize> {
             } else {
                 get_process_data(who)?
             };
-            Ok(pdata.get_nice() as isize)
+            Ok(linux_getpriority_ret(pdata.get_nice()))
         }
         PRIO_PGRP => {
             let pgid = if who == 0 {
@@ -243,7 +249,7 @@ pub fn sys_getpriority(which: u32, who: u32) -> AxResult<isize> {
                     .filter_map(|p| (p.proc.group().pgid() == pgid).then_some(p.as_ref())),
             )
             .unwrap_or(0);
-            Ok(n as isize)
+            Ok(linux_getpriority_ret(n))
         }
         PRIO_USER => {
             let uid = if who == 0 {
@@ -258,7 +264,7 @@ pub fn sys_getpriority(which: u32, who: u32) -> AxResult<isize> {
             ) else {
                 return Err(AxError::NoSuchProcess);
             };
-            Ok(n as isize)
+            Ok(linux_getpriority_ret(n))
         }
         _ => Err(AxError::InvalidInput),
     }
