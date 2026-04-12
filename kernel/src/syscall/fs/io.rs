@@ -162,10 +162,12 @@ pub fn sys_truncate(path: UserConstPtr<c_char>, length: __kernel_off_t) -> AxRes
 
 pub fn sys_ftruncate(fd: c_int, length: __kernel_off_t) -> AxResult<isize> {
     debug!("sys_ftruncate <= {fd} {length}");
+    // Resolve `fd` before `length` so **EBADF** precedes **EINVAL** for negative `length` when both
+    // apply (Linux `ksys_ftruncate`/`vfs_ftruncate`; issue-316, issue-313 theme).
+    let f = File::from_fd(fd)?;
     if length < 0 {
         return Err(AxError::InvalidInput);
     }
-    let f = File::from_fd(fd)?;
     f.inner().access(FileFlags::WRITE)?.set_len(length as _)?;
     Ok(0)
 }

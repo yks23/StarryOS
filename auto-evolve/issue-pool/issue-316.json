@@ -1,0 +1,27 @@
+{
+  "id": "issue-316",
+  "title": "`ftruncate(2)`：`sys_ftruncate` 在 `File::from_fd(fd)` 之前校验 `length < 0` → `EINVAL`，与 Linux `ksys_ftruncate`/`vfs_ftruncate` 常见「先 `fget`/`fd` → `EBADF`」再校验 length 时，「无效 fd」与「负 length」组合的 `EBADF`/`EINVAL` 优先级可能不完全一致",
+  "status": "resolved",
+  "created_at": "2026-04-21T15:00:00Z",
+  "severity": "low",
+  "fix_summary": "重排 `sys_ftruncate`：先 `File::from_fd(fd)?`，再 `length < 0` → `InvalidInput`；注释 Linux `ksys_ftruncate`/issue-316 与 issue-313 主题。`executor-memory` 将 `truncate(2)` 与 `ftruncate(2)` 分条说明；新增 `issue-316.json`。",
+  "files_changed": ["kernel/src/syscall/fs/io.rs", "auto-evolve/memory/executor-memory.md"],
+  "description": "**`kernel/src/syscall/fs/io.rs`** **`sys_ftruncate`** **（** **约** **163–170** **行** **）** **顺序** **：** **`length < 0`** **→** **`InvalidInput`** **，** **再** **`File::from_fd(fd)?`** **。** **同** **文件** **中** **`sys_fallocate`**/**`sys_pread64`**/**`sys_pwrite64`** **在** **issue-313/314** **修复** **后** **已** **倾向** **先** **解析** **`fd`** **再** **标量** **校验** **。** **当** **调用** **同时** **存在** **无效** **`fd`** **与** **负** **`length`** **时** **，** **本** **路径** **固定** **先** **`EINVAL`** **，** **Linux** **通常** **先** **`EBADF`** **。** **与** **issue-313**/**issue-315** **类** **「** **句柄** **解析** **与** **标量** **校验** **顺序** **」** **同类** **。**\n\n**建议** **：** **将** **`File::from_fd(fd)?`** **提前** **到** **`length < 0`** **判断** **之前** **（** **或** **与** **`vfs_ftruncate`** **入口** **对齐** **）** **，** **并** **在** **注释** **中** **引用** **issue-313** **主题** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["ftruncate"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/io.rs:163-170"],
+    "related_files": [],
+    "key_insight": "ftruncate length vs EBADF order"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：无效 fd + 负 length 对照 Linux 返回顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游 `ftruncate` 错误优先级一致，或注释说明差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "先 `File::from_fd(fd)?`，再 `if length < 0 { return Err(InvalidInput); }`，与 `sys_fallocate`/`pread64` 顺序对齐。",
+  "references": ["man 2 ftruncate", "kernel/src/syscall/fs/io.rs", "issue-313", "issue-314", "issue-315"]
+}

@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-25：issue-316 resolved（**`ftruncate`**：**`File::from_fd`** **先于** **`length < 0`**，**`EBADF`** **先于** **`EINVAL`**；**`fs/io.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-24：issue-315 resolved（**`copy_file_range`**：**`from_fd(fd_in/out)`** **先于** **`flags`**，**`EBADF`** **先于** **`EINVAL`/`EOPNOTSUPP`**；**`fs/io.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-23：issue-314 resolved（**`pwrite64`**：**`File::from_fd`** **先于** **`offset < 0`**，与 **`pread64`**/**Linux** **`do_pwrite64`** **一致**；**`fs/io.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-22：issue-313 resolved（**`fallocate`**：**`File::from_fd`** **先于** **`mode`/`offset`/`len`** **校验**，**`EBADF`** **先于** **`EINVAL`/`EOPNOTSUPP`**；**`fs/io.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -339,6 +340,7 @@
 | issue-271 | mlock/mlock2 addr 须页对齐 EINVAL | resolved | 2026-04-12 |
 | issue-272 | lseek SEEK_SET 负 offset EINVAL | resolved | 2026-04-12 |
 | issue-273 | prlimit64 跨 pid 权限 EPERM | resolved | 2026-04-12 |
+| issue-316 | ftruncate from_fd 先于 length<0 | resolved | 2026-04-25 |
 | issue-315 | copy_file_range from_fd 先于 flags | resolved | 2026-04-24 |
 | issue-314 | pwrite64 from_fd 先于 offset<0（对称 pread64） | resolved | 2026-04-23 |
 | issue-313 | fallocate from_fd 先于 mode/offset/len | resolved | 2026-04-22 |
@@ -637,7 +639,8 @@
 - **`getdents64(2)`**：**`linux_dirent64`** 中 **`d_name`** 长度 ≤ **`NAME_MAX`**；记录总长 **`d_reclen`** 用 **`u16::try_from(aligned_len)`**，目录 cookie **`d_off`** 用 **`i64::try_from(VFS offset)`**，溢出/超长 → **`EINVAL`**（issue-221）；**`unsafe`** 写入前有 **`SAFETY`** 说明。**`len > 0`** 时 **`buf == NULL`** → **`BadAddress`（EFAULT）**，先于 **`from_fd`/`read_dir`**（issue-284）。
 - **`pwrite64(2)`**：**`File::from_fd(fd)`** **先于** **`offset < 0` → `InvalidInput`**，与 **`pread64`** **及** **Linux** **`do_pwrite64`** **「** **先** **`fget`** **再** **区间** **」** **一致**（**issue-314**；**`EBADF`** **先于** **负** **`offset`** **的** **`EINVAL`**）；**`offset < 0` → `InvalidInput`**（issue-108）。**`len == 0`** 仍须 **`from_fd`** **后** **`Ok(0)`**，勿在 **`from_fd`** 前因长度早退，以便无效 fd 得 **EBADF**（issue-125）。
 - **`preadv2(2)` / `pwritev2(2)`**：**`flags`**（**`RWF_*`**）须为 **`linux_raw_sys::general`** 中 **`RWF_HIPRI|DSYNC|SYNC|NOWAIT|APPEND`** 子集，否则 **`InvalidInput`**（**EINVAL**）；**`flags!=0`** → **`OperationNotSupported`**（**EOPNOTSUPP**），直至实现对应 **`RWF_*`** 语义（issue-248）。**`preadv`/`pwritev`** 经 **`flags=0`** 调用 **v2**。
-- **`truncate(2)`**：**`length < 0` → `InvalidInput`** 须先于 **`path.get_as_str()`**，以便坏 **`path`** 与负长度组合时优先 **EINVAL**（issue-126，与 **`ftruncate`** 及 Linux **`do_truncate`** 一致）。
+- **`truncate(2)`**：**`length < 0` → `InvalidInput`** 须先于 **`path.get_as_str()`**，以便坏 **`path`** 与负长度组合时优先 **EINVAL**（issue-126，与 Linux **`do_truncate`** 一致）。
+- **`ftruncate(2)`**：**`File::from_fd(fd)`** **先于** **`length < 0` → `InvalidInput`**，**`EBADF`** **先于** **负** **`length`** **的** **`EINVAL`**（**issue-316**；**Linux** **`ksys_ftruncate`/`vfs_ftruncate`**；与 **issue-313** **同类**）。**`length < 0` → `InvalidInput`**（issue-106）。
 - **`recvmsg`/`recvfrom`/`sendmsg`/`sendto`**：**`flags`** 须在 **`linux_raw_sys::net::MSG_*`** 定义的 **接收** 与 **发送** 掩码内（**`RECVMSG_FLAGS_MASK`** 含 **`MSG_PEEK`**/**`MSG_WAITALL`**/**`MSG_TRUNC`**/**`MSG_ERRQUEUE`** 等；**`SENDMSG_FLAGS_MASK`** 不含 **`MSG_PEEK`**/**`MSG_WAITALL`**/**`MSG_TRUNC`**/**`MSG_ERRQUEUE`**（issue-266 / issue-269）），否则 **`EINVAL`**。**`axnet::SendFlags`** 仍为占位 **`bitflags!`**，合法 **`MSG_*`** 尚未全量透传到 **`SendOptions.flags`**；**`MSG_DONTWAIT`** 等语义需在 **`axnet-ng`** 扩展 **`SendFlags`** 并在各 **`SocketOps::send`/`recv`** 中实现。
 - **`times(2)`**：**`tms_*`** 为 **`clock_t` jiffies**（**`USER_HZ = 100`**，**`ns * USER_HZ / 1e9`**）；**`struct Tms`** 字段类型为 **`__kernel_clock_t`**（与 **`include/uapi/linux/times.h`** 一致，issue-287；issue-224 为刻度/返回值 jiffies）。返回值亦为单调时钟 jiffies（issue-224）。**`tms_utime`/`tms_stime`** 来源：线程组用户/系统时间（已退出线程计入 **`exited_threads_*_ns`**，存活线程取 **`TimeManager::cpu_nanos`**）；**`tms_cutime`/`tms_cstime`** = 已通过 **`wait`** 回收的子进程线程组 CPU 累计（**`waitpid`** 从僵尸 **`ProcessData`** 读 **`thread_group_cpu_nanos`** 后加到父 **`child_*_ns`**）。末线程退出时 **`register_zombie_process_data`**，**`wait`** **`free`** 后 **`remove_zombie_process_data`**。
 - **`Socket`/`fstat`**：每个 **`Socket::new`** 分配单调 **`sock_ino`**（**`AtomicU64`**）与固定 **`SOCKFS_STAT_DEV`**；**`FileLike::stat`** 填 **`Kstat::dev`/`ino`**；**`path`** 为 **`socket:[ino]`**，与 **`st_ino`** 一致。
