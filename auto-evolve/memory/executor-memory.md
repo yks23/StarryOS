@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-068 resolved（**`syslog`/`klogctl`**：**`SYSLOG_ACTION_*`** 分支；读/清/控制台 → **`Unsupported`**；**`SIZE_*` → 0**；**`OPEN`/`CLOSE` → Ok(0)**；未知 **`action` → `InvalidInput`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-067 resolved（**`mount`**：**`flags`** 须为 **0**（未实现 **`MS_*`**）；**`data`** 仅 **`NULL`** 或空 C 串；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-066 resolved（**`mmap`** **`flags`**：**`ALLOWED_MAP_FLAGS`**（uapi **`MAP_*`** + **`MAP_HUGE_*`** 域）未知位 **`InvalidInput`**；扩展 **`MmapFlags`** 使合法组合走 **`from_bits`**；**`from_bits` 失败** 时 **`SHARED_VALIDATE` 类型 → `OperationNotSupported`** 否则 **`InvalidInput`**，勿 **`from_bits_truncate`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-065 resolved（**`mmap`**：**`MmapProt::from_bits`** 与 **`mprotect`** 一致；**`PROT_GROWSDOWN`/`GROWSUP`** 在 **`mmap`** 拒绝；**`mprotect`** 用 **`intersects`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -49,6 +50,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-068 | syslog SYSLOG_ACTION_* 分支，勿恒 Ok(0) | resolved | 2026-04-13 |
 | issue-067 | mount flags==0 + data NULL/empty | resolved | 2026-04-13 |
 | issue-066 | mmap flags ALLOWED_MAP_FLAGS + 勿 from_bits_truncate | resolved | 2026-04-13 |
 | issue-065 | mmap prot from_bits 与 mprotect 一致 | resolved | 2026-04-13 |
@@ -169,6 +171,7 @@
 - **`mremap`**：**`AddrSpace::mremap`** 要求 **`addr` 为 VMA 起点且 `old_size` 等于该 VMA 长度**。**缩小**：`unmap` 尾部。**原地放大**：尾部虚拟区间无其它映射时 **`unmap` 全段 + `map` 新尺寸**，**`FileBackend::remap_at`** / **`CowBackend::with_virt_start`** 保持同一 **`CachedFile`/文件偏移或 COW 状态**。**`MREMAP_MAYMOVE`**：尾部冲突时 **`read`→`find_free_area`→搬迁 `map`→`write`**。**`Shared`** 变长（缺页框）与 **`Linear`**：**`OperationNotSupported`**。**`MREMAP_FIXED`/`DONTUNMAP`**：**`EINVAL`**。
 - **`capget` / `capset`**：**`ProcessData`** 存 **`cap_effective`/`cap_permitted`/`cap_inheritable`**（**`AtomicU32`**，v3 低 32 位；默认 **`u32::MAX`**）。**`sys_capget`**/**`sys_capset`** 仅允许操作**当前进程**（**`header.pid==0` 或正 pid 解析到同一 `ProcessData`**，否则 **`PermissionDenied`**）。**`capset`** 要求 **`effective`/`inheritable` ⊆ `permitted`**；仅 **`euid==0`** 或当前 **`effective`** 含 **`CAP_SETPCAP`（1<<8）** 可改，否则 **`EPERM`**。未实现 64 位第二组 **`__user_cap_data_struct`**。
 - **`sysinfo(2)`**：**`totalram`** ← **`axhal::mem::total_ram_size()`**；**`freeram`** ← **`min(available_pages * PAGE_SIZE_4K, totalram)`**（**`axalloc::global_allocator()`** 空闲页池，近似值）；**`uptime`** ← **`monotonic_time_nanos / NANOS_PER_SEC`**；**`loads`/swap/buffer/high** 仍为 **0**；**`mem_unit=1`**。与 Linux **MemAvailable** 级统计仍有差距。
+- **`syslog(2)`/`klogctl`**：**`action`** 须在 **`SYSLOG_ACTION_CLOSE`..=`SIZE_BUFFER`（0..=10）**，否则 **`InvalidInput`**。无 printk 环：**`READ`/`READ_ALL`/`READ_CLEAR`** 与 **`CLEAR`/`CONSOLE_*`** → **`Unsupported`**；**`SIZE_UNREAD`/`SIZE_BUFFER`** 返回 **0**（空环）；**`OPEN`/`CLOSE`** → **`Ok(0)`**。勿对任意参数无条件 **`Ok(0)`**。
 - **`splice(2)` / `copy_file_range(2)`**：**`flags`** 须在 Linux 已知掩码内（**`SPLICE_F_MOVE|NONBLOCK|MORE|GIFT`**；**`copy_file_range`** 为 **`COPY_FILE_RANGE_COMPRESS|DEDUPE`**），否则 **`EINVAL`**。**`SPLICE_F_*`** 语义（如非阻塞）若与底层 **`do_send`** 未完全对齐，属后续增强；非法位须先拒绝。
 - **`recvmsg`/`recvfrom`/`sendmsg`/`sendto`**：**`flags`** 须在 **`linux_raw_sys::net::MSG_*`** 定义的 **接收** 与 **发送** 掩码内（**`RECVMSG_FLAGS_MASK`** 含 **`MSG_PEEK`**；**`SENDMSG_FLAGS_MASK`** 不含 **`MSG_PEEK`**），否则 **`EINVAL`**。**`axnet::SendFlags`** 仍为占位 **`bitflags!`**，合法 **`MSG_*`** 尚未透传到 **`SendOptions.flags`**；**`MSG_DONTWAIT`** 等语义需在 **`axnet-ng`** 扩展 **`SendFlags`** 并在各 **`SocketOps::send`/`recv`** 中实现。
 - **`times(2)`**：**`tms_utime`/`tms_stime`** = 线程组用户/系统时间（已退出线程计入 **`exited_threads_*_ns`**，存活线程取 **`TimeManager::cpu_nanos`**）；**`tms_cutime`/`tms_cstime`** = 已通过 **`wait`** 回收的子进程线程组 CPU 累计（**`waitpid`** 从僵尸 **`ProcessData`** 读 **`thread_group_cpu_nanos`** 后加到父 **`child_*_ns`**）。末线程退出时 **`register_zombie_process_data`**，**`wait`** **`free`** 后 **`remove_zombie_process_data`**。

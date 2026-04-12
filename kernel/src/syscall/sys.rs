@@ -170,8 +170,38 @@ pub fn sys_sysinfo(info: *mut sysinfo) -> AxResult<isize> {
     Ok(0)
 }
 
-pub fn sys_syslog(_type: i32, _buf: *mut c_char, _len: usize) -> AxResult<isize> {
-    Ok(0)
+/// Linux `SYSLOG_ACTION_*` (`uapi/linux/sys/syslog.h`). Starry has no printk ring buffer;
+/// read/clear/console actions return **`Unsupported`**; size queries return **0**.
+const SYSLOG_ACTION_CLOSE: i32 = 0;
+const SYSLOG_ACTION_OPEN: i32 = 1;
+const SYSLOG_ACTION_READ: i32 = 2;
+const SYSLOG_ACTION_READ_ALL: i32 = 3;
+const SYSLOG_ACTION_READ_CLEAR: i32 = 4;
+const SYSLOG_ACTION_CLEAR: i32 = 5;
+const SYSLOG_ACTION_CONSOLE_OFF: i32 = 6;
+const SYSLOG_ACTION_CONSOLE_ON: i32 = 7;
+const SYSLOG_ACTION_CONSOLE_LEVEL: i32 = 8;
+const SYSLOG_ACTION_SIZE_UNREAD: i32 = 9;
+const SYSLOG_ACTION_SIZE_BUFFER: i32 = 10;
+
+pub fn sys_syslog(action: i32, _buf: *mut c_char, _len: usize) -> AxResult<isize> {
+    if !(SYSLOG_ACTION_CLOSE..=SYSLOG_ACTION_SIZE_BUFFER).contains(&action) {
+        return Err(AxError::InvalidInput);
+    }
+
+    match action {
+        SYSLOG_ACTION_READ | SYSLOG_ACTION_READ_ALL | SYSLOG_ACTION_READ_CLEAR => {
+            Err(AxError::Unsupported)
+        }
+        SYSLOG_ACTION_CLEAR
+        | SYSLOG_ACTION_CONSOLE_OFF
+        | SYSLOG_ACTION_CONSOLE_ON
+        | SYSLOG_ACTION_CONSOLE_LEVEL => Err(AxError::Unsupported),
+        SYSLOG_ACTION_SIZE_UNREAD | SYSLOG_ACTION_SIZE_BUFFER => Ok(0),
+        SYSLOG_ACTION_OPEN | SYSLOG_ACTION_CLOSE => Ok(0),
+        // `action` already restricted to `CLOSE..=SIZE_BUFFER`.
+        _ => unreachable!(),
+    }
 }
 
 bitflags::bitflags! {
