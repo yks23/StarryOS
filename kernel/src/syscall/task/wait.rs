@@ -175,8 +175,10 @@ pub fn sys_waitpid(
             return Ok(Some(child.pid() as _));
         }
 
-        let report_stop = options.contains(WaitOptions::WUNTRACED) || options.is_empty();
-        let report_continued = options.contains(WaitOptions::WCONTINUED) || options.is_empty();
+        // Linux: `options==0` waits only for terminated children (like implicit `WEXITED` for
+        // `wait`/`waitpid`); `WUNTRACED` / `WCONTINUED` must be explicit (issue-361).
+        let report_stop = options.contains(WaitOptions::WUNTRACED);
+        let report_continued = options.contains(WaitOptions::WCONTINUED);
 
         for child in &children {
             if child.is_zombie() {
