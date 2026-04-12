@@ -13,7 +13,7 @@ use linux_raw_sys::general::{
 use starry_process::{Pid, Process};
 use starry_vm::{VmMutPtr, VmPtr};
 
-use crate::task::AsThread;
+use crate::task::{AsThread, get_process_data};
 
 bitflags! {
     #[derive(Debug)]
@@ -90,15 +90,46 @@ pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isiz
     }
 
     let check_children = || {
-        if let Some(child) = children.iter().find(|child| child.is_zombie()) {
+        if let Some(child) = children.iter().find(|c| c.is_zombie()) {
             if !options.contains(WaitOptions::WNOWAIT) {
                 child.free();
             }
             if let Some(exit_code) = exit_code.nullable() {
                 exit_code.vm_write(child.exit_code())?;
             }
-            Ok(Some(child.pid() as _))
-        } else if options.contains(WaitOptions::WNOHANG) {
+            return Ok(Some(child.pid() as _));
+        }
+
+        let report_stop = options.contains(WaitOptions::WUNTRACED) || options.is_empty();
+        let report_continued = options.contains(WaitOptions::WCONTINUED) || options.is_empty();
+
+        for child in &children {
+            if child.is_zombie() {
+                continue;
+            }
+            let Ok(data) = get_process_data(child.pid()) else {
+                continue;
+            };
+            let mut jc = data.jobctl.lock();
+            if report_stop && jc.stop_wait_pending {
+                if let Some(ec) = exit_code.nullable() {
+                    let sig = jc.stop_sig.unwrap_or(0) as i32;
+                    let st = (sig << 8) | 0x7f;
+                    ec.vm_write(st)?;
+                }
+                jc.stop_wait_pending = false;
+                return Ok(Some(child.pid() as _));
+            }
+            if report_continued && jc.continued_wait_pending {
+                if let Some(ec) = exit_code.nullable() {
+                    ec.vm_write(0xffff)?;
+                }
+                jc.continued_wait_pending = false;
+                return Ok(Some(child.pid() as _));
+            }
+        }
+
+        if options.contains(WaitOptions::WNOHANG) {
             Ok(Some(0))
         } else {
             Ok(None)

@@ -30,6 +30,17 @@ use starry_signal::{
 pub use self::{futex::*, ops::*, resources::*, signal::*, stat::*, timer::*, user::*};
 use crate::mm::AddrSpace;
 
+/// Job-control state shared by all threads in a process (`SIGSTOP` / `SIGCONT`).
+#[derive(Default)]
+pub struct JobCtl {
+    /// Present while the process is job-stopped (still alive, not a zombie).
+    pub stop_sig: Option<u8>,
+    /// A `waitpid(WUNTRACED)` has not yet consumed this stop event.
+    pub stop_wait_pending: bool,
+    /// A `waitpid(WCONTINUED)` has not yet consumed this continue event.
+    pub continued_wait_pending: bool,
+}
+
 ///  A wrapper type that assumes the inner type is `Sync`.
 #[repr(transparent)]
 pub struct AssumeSync<T>(pub T);
@@ -214,6 +225,9 @@ pub struct ProcessData {
     /// The exit signal of the thread
     pub exit_signal: Option<Signo>,
 
+    /// Job control (`waitpid` stopped / continued).
+    pub jobctl: Mutex<JobCtl>,
+
     /// The process signal manager
     pub signal: Arc<ProcessSignalManager>,
 
@@ -247,6 +261,8 @@ impl ProcessData {
             child_exit_event: Arc::default(),
             exit_event: Arc::default(),
             exit_signal,
+
+            jobctl: Mutex::new(JobCtl::default()),
 
             signal: Arc::new(ProcessSignalManager::new(
                 signal_actions,

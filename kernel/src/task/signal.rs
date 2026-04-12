@@ -27,17 +27,46 @@ pub fn check_signals(
             do_exit(128 + signo as i32, true);
         }
         SignalOSAction::Stop => {
-            // TODO: implement stop
-            do_exit(1, true);
+            let signo_u8 = signo as u8;
+            {
+                let mut jc = thr.proc_data.jobctl.lock();
+                jc.stop_sig = Some(signo_u8);
+                jc.stop_wait_pending = true;
+            }
+            wake_parent_for_jobctl(thr);
+            loop {
+                {
+                    let jc = thr.proc_data.jobctl.lock();
+                    if jc.stop_sig.is_none() {
+                        break;
+                    }
+                }
+                while check_signals(thr, uctx, restore_blocked) {}
+                axtask::yield_now();
+            }
         }
         SignalOSAction::Continue => {
-            // TODO: implement continue
+            let mut jc = thr.proc_data.jobctl.lock();
+            let was_stopped = jc.stop_sig.take().is_some();
+            if was_stopped {
+                jc.continued_wait_pending = true;
+            }
+            drop(jc);
+            wake_parent_for_jobctl(thr);
         }
         SignalOSAction::Handler => {
             // do nothing
         }
     }
     true
+}
+
+fn wake_parent_for_jobctl(thr: &Thread) {
+    if let Some(p) = thr.proc_data.proc.parent() {
+        if let Ok(pdata) = get_process_data(p.pid()) {
+            pdata.child_exit_event.wake();
+        }
+    }
 }
 
 pub fn block_next_signal() {
