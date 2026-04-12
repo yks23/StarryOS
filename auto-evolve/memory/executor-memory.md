@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-376 resolved（**`clone3`**：**`args==NULL`** **→** **`BadAddress`** **先于** **`size < MIN_CLONE_ARGS_SIZE`** **→** **`EINVAL`**；**`clone3.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-375 resolved（**`get_robust_list`**：**`head`/`size` `NULL`/`check_access`** **先于** **`get_task`** **（** **`EFAULT`** **先于** **`ESRCH`/`EPERM`** **）**；**`futex.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-374 resolved（**`get_mempolicy`**：**`nodemask==NULL` 且** **`maxnode!=0`** **→** **`EINVAL`**；**`ctl.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-373 resolved（**`preadv2`/`pwritev2`**：**`File::from_fd`** **先于** **`check_rwf_flags`** **（** **`EBADF`** **先于** **`EINVAL`/`ENOTSUP`** **）**；**`fs/io.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）

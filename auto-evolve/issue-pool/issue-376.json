@@ -1,0 +1,32 @@
+{
+  "id": "issue-376",
+  "title": "`clone3(2)`：`sys_clone3` 先判断 `size < sizeof(clone_args)` 再拒绝 `args == NULL`；`size==0` 且 `args==NULL` 时先 `EINVAL` 而非 `EFAULT`，与 Linux 常先校验用户指针的分层可能不一致",
+  "status": "resolved",
+  "created_at": "2026-04-13T00:00:00Z",
+  "resolved_at": "2026-04-13T06:00:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/task/clone3.rs`** **`sys_clone3`** **（** **约** **72–84** **行** **）** **：** **若** **`size < MIN_CLONE_ARGS_SIZE`** **则** **直接** **`InvalidInput`** **（** **`EINVAL`** **语义** **）** **；** **仅在** **通过** **该** **检查** **后** **才** **判断** **`args.is_null()`** **→** **`BadAddress`** **（** **`EFAULT`** **）** **。** **当** **`size == 0`** **（** **或** **任意** **小于** **最小** **结构** **大小** **）** **且** **`args == NULL`** **时** **，** **Starry** **先** **返回** **`EINVAL`** **。** **Linux** **`clone3(2)`** **实现** **通常** **先** **检测** **`copy_from_user`/`user` 指针** **，** **`NULL`** **→** **`EFAULT`** **再** **或** **独立** **于** **`args_size`** **下限** **校验** **；** **与** **同** **文件** **注释** **所述** **「** **`NULL`** **在** **`size` 检查** **之后** **以** **使** **过小** **`size`** **仍** **优先** **`EINVAL`」** **的** **意图** **在** **`args==NULL`** **场景** **下** **与** **上游** **分层** **可能** **不一致** **。** **与** **issue-308** **（** **`NULL`** **`args`** **/`BadAddress`** **）** **及** **issue-306** **主题** **对照** **。**\n\n**建议** **：** **对照** **Linux** **`kernel/fork.c` `clone3`** **的** **确切** **分支** **顺序** **；** **若** **上游** **先** **`EFAULT`** **：** **将** **`args.is_null()`** **提前** **到** **`size < MIN`** **之前** **或** **在** **`size`** **无效** **时** **仍** **区分** **`NULL`** **指针** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["clone3"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/clone3.rs:72-84"],
+    "related_files": [],
+    "key_insight": "EINVAL from undersized size before EFAULT for NULL args"
+  },
+  "fix_summary": "**`sys_clone3`**：**`args.is_null()`** **→** **`BadAddress`** **先于** **`size < MIN_CLONE_ARGS_SIZE`** **→** **`InvalidInput`**；**注释** **更新** **（** **issue-376** **、** **issue-308** **）**。**",
+  "files_changed": [
+    "kernel/src/syscall/task/clone3.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-376.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：`clone3(NULL, 0)` 与 `clone3(NULL, sizeof(args))` 对照 Linux `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "与 Linux 在 NULL 指针与过小 size 同时出现时的 errno 分层一致，或文档化偏差。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "对齐 Linux：`args == NULL` 时优先 EFAULT，或明确文档化选择 `EINVAL` 优先的策略。",
+  "references": ["man 2 clone3", "kernel/src/syscall/task/clone3.rs"]
+}

@@ -72,15 +72,15 @@ impl TryFrom<Clone3Args> for CloneArgs {
 pub fn sys_clone3(uctx: &UserContext, args: *const u8, size: usize) -> AxResult<isize> {
     debug!("sys_clone3 <= args: {args:p}, size: {size}");
 
+    // Linux `clone3`: **EFAULT** for NULL `args` before `args_size` validation (issue-376;
+    // contrasts with prior "EINVAL first for undersized size" ordering; issue-308 `BadAddress` theme).
+    if args.is_null() {
+        return Err(AxError::BadAddress);
+    }
+
     if size < MIN_CLONE_ARGS_SIZE {
         warn!("sys_clone3: size {size} too small, minimum is {MIN_CLONE_ARGS_SIZE}");
         return Err(AxError::InvalidInput);
-    }
-
-    // NULL `args` → **EFAULT** (`BadAddress`), after `size` check so **EINVAL** still wins for
-    // undersized `size` (same theme as `capget`/`sched_getaffinity`, issue-304, issue-306).
-    if args.is_null() {
-        return Err(AxError::BadAddress);
     }
 
     let mut buffer = [0u8; core::mem::size_of::<Clone3Args>()];
