@@ -112,14 +112,17 @@ pub fn sys_nanosleep(req: *const timespec, rem: *mut timespec) -> AxResult<isize
 
     let actual = sleep_impl(axhal::time::monotonic_time, req);
 
-    if let Some(diff) = req.checked_sub(actual) {
-        debug!("sys_nanosleep => rem: {diff:?}");
-        if let Some(rem) = rem.nullable() {
-            rem.vm_write(timespec::from_time_value(diff))?;
+    // `Duration::checked_sub` yields `Some(ZERO)` when `actual == req` (incl. `req==0`); only a
+    // strictly positive remainder means we woke early / EINTR (issue-390).
+    match req.checked_sub(actual) {
+        Some(diff) if !diff.is_zero() => {
+            debug!("sys_nanosleep => rem: {diff:?}");
+            if let Some(rem) = rem.nullable() {
+                rem.vm_write(timespec::from_time_value(diff))?;
+            }
+            Err(AxError::Interrupted)
         }
-        Err(AxError::Interrupted)
-    } else {
-        Ok(0)
+        _ => Ok(0),
     }
 }
 
@@ -172,14 +175,15 @@ pub fn sys_clock_nanosleep(
 
     let actual = sleep_impl(clock, dur);
 
-    if let Some(diff) = dur.checked_sub(actual) {
-        debug!("sys_clock_nanosleep => rem: {diff:?}");
-        if let Some(rem) = rem.nullable() {
-            rem.vm_write(timespec::from_time_value(diff))?;
+    match dur.checked_sub(actual) {
+        Some(diff) if !diff.is_zero() => {
+            debug!("sys_clock_nanosleep => rem: {diff:?}");
+            if let Some(rem) = rem.nullable() {
+                rem.vm_write(timespec::from_time_value(diff))?;
+            }
+            Err(AxError::Interrupted)
         }
-        Err(AxError::Interrupted)
-    } else {
-        Ok(0)
+        _ => Ok(0),
     }
 }
 

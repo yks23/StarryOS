@@ -1,0 +1,27 @@
+{
+  "id": "issue-390",
+  "title": "`nanosleep`/`clock_nanosleep`：睡眠正常结束在 `actual == req` 时被误判为 `EINTR`（含 `req==0`）",
+  "status": "resolved",
+  "created_at": "2026-04-16T00:05:00Z",
+  "severity": "medium",
+  "description": "`kernel/src/syscall/task/schedule.rs` **`sys_nanosleep`**（约 108–124 行）与 **`sys_clock_nanosleep`** 在非 **`CLOCK_REALTIME`** 路径（约 173–183 行）在 **`sleep_impl`** 返回后使用 **`dur.checked_sub(actual)`** 判断是否提前结束。\n\n`TimeValue` 即 **`core::time::Duration`**（`axplat::time`）。**`Duration::checked_sub`** 在 **`rhs == self`** 时返回 **`Some(Duration::ZERO)`**，**并非** **`None`**。因此当 **`actual == dur`**（常见：**区间睡满**；**必然**：**`req==0`** 时 **`sleep_impl`** 早退且 **`actual`** 与 **`dur`** 均为零）时进入 **`Some(diff)`** 分支，**错误**返回 **`Err(Interrupted)`** 并可能向 **`rem`** 写入全零。\n\nLinux：**未** 被信号打断且间隔已过（含零间隔立即返回）应 **`0`**，**非** **`EINTR`**。\n\n建议：将“提前结束”判定改为 **`actual < dur`**（或与 Linux 一致仅在实际 **`EINTR`** 时返回），或对 **`Some(diff)`** 增加 **`diff.is_zero()` → `Ok(0)`**；**`sys_nanosleep`** 可对 **`time_value_is_zero(req)`** 显式 **`return Ok(0)`** 与 **`clock_nanosleep`** 对 realtime 零 **`dur`** 的处理对齐。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["nanosleep", "clock_nanosleep"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/schedule.rs:108-124", "kernel/src/syscall/task/schedule.rs:173-183"],
+    "related_files": ["kernel/src/syscall/task/schedule.rs:86-106"],
+    "key_insight": "仅 `Some(diff)` 且 `!diff.is_zero()` → `EINTR`+`rem`；睡满与 `req==0` → `Ok(0)`"
+  },
+  "fix_summary": "`sys_nanosleep`/`sys_clock_nanosleep`：`checked_sub` 得 `Some(0)`（`actual==dur`，含零间隔）视为成功 `Ok(0)`；仅剩余时间非零时 `Interrupted` 并写 `rem`（issue-390）。",
+  "files_changed": ["kernel/src/syscall/task/schedule.rs"],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：用户态 `nanosleep({0,0})` /满时长睡眠对照 `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "睡满间隔或零间隔返回 0；仅信号打断返回 EINTR 且 `rem` 为剩余时间。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（仓库既有警告）"
+  },
+  "suggested_fix": "`if actual < dur { ... EINTR } else { Ok(0) }`，或 `match req.checked_sub(actual) { None | Some(d) if d.is_zero() => Ok(0), Some(diff) => ... }`。",
+  "references": ["man 2 nanosleep", "man 2 clock_nanosleep", "kernel/src/syscall/task/schedule.rs", "issue-332", "issue-345"]
+}
