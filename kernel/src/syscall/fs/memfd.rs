@@ -54,8 +54,11 @@ fn validate_memfd_flags(flags: u32) -> AxResult<()> {
 }
 
 pub fn sys_memfd_create(name: UserConstPtr<c_char>, flags: u32) -> AxResult<isize> {
-    validate_memfd_flags(flags)?;
+    // Copy `name` from user before rejecting invalid `flags`, so **EFAULT** / `IllegalBytes` from
+    // `name` surfaces before **EINVAL** from unknown `MFD_*` bits (issue-305; same theme as
+    // `sys_mount` vs `MS_*`, issue-303).
     let name_str = name.get_as_str()?;
+    validate_memfd_flags(flags)?;
     // Backing store: unique tmpfs path; `name_str` is only for `FileLike::path` (e.g. `/proc/self/fd/N`).
     for id in 0..0xffff {
         let tmp_path = format!("/tmp/memfd-{id:04x}");
