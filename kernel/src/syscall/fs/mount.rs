@@ -108,6 +108,11 @@ pub fn sys_umount2(target: *const c_char, flags: i32) -> AxResult<isize> {
         return Err(AxError::OperationNotSupported);
     }
     let target = vm_load_string(target)?;
+    // Linux rejects empty mountpoint with EINVAL before path resolution (issue-403; issue-393 theme;
+    // `sys_mount` user-string ordering class, issue-303).
+    if target.is_empty() {
+        return Err(AxError::InvalidInput);
+    }
     debug!("sys_umount2 <= target: {target:?}, flags: {flags}");
     let fs = FS_CONTEXT.lock();
     let loc = if f & UMOUNT_NOFOLLOW != 0 {

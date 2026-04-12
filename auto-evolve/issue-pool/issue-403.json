@@ -1,0 +1,27 @@
+{
+  "id": "issue-403",
+  "title": "`umount2(2)`：空路径 `target==\"\"` 未在 `resolve` 前拒绝为 `EINVAL`",
+  "status": "resolved",
+  "created_at": "2026-04-13T02:05:00Z",
+  "severity": "low",
+  "description": "`kernel/src/syscall/fs/mount.rs` **`sys_umount2`**（约 102–119 行）：在 **`flags`** 校验后 **`vm_load_string(target)?`**，继而 **`FS_CONTEXT.resolve`/`resolve_no_follow`**，**无** **`target.is_empty()`** **`→`** **`InvalidInput`** 早退。\n\nLinux **`umount2(2)`** 对 **空挂载点路径** 通常 **`EINVAL`**（与同仓库 **`statfs`** **issue-402**、**`ctl.rs`** **issue-393** 等空路径组件主题一致）。**`sys_mount`** **的** **`target`** **同类** **可** **一并** **对照** **，** **本** **issue** **聚焦** **`umount2`** **。**\n\n建议：**`vm_load_string`** **之后**、**`debug!`** **之前** **`target.is_empty()`** **`→`** **`InvalidInput`**，注释引用 issue-403 及 **issue-303**/**issue-393**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["umount2", "umount"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/mount.rs:102-119"],
+    "related_files": ["kernel/src/syscall/fs/mount.rs:65-94"],
+    "key_insight": "`vm_load_string(target)` 后、`resolve`/`resolve_no_follow` 前 `target.is_empty()` → `InvalidInput`"
+  },
+  "fix_summary": "`sys_umount2`：在 `vm_load_string(target)` 之后、`debug!` 与 `FS_CONTEXT.resolve`/`resolve_no_follow` 之前对空挂载点返回 `InvalidInput`，与 Linux及 issue-402/issue-393 空路径主题一致。",
+  "files_changed": ["kernel/src/syscall/fs/mount.rs"],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：`umount2(\"\", 0)` 对照 Linux `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "空路径返回 EINVAL（`InvalidInput`）。",
+    "last_result": "通过：`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`（exit 0）"
+  },
+  "suggested_fix": "在 `sys_umount2` 中于 `debug!` 前增加与 `sys_mkdirat`（issue-393）相同的 `target.is_empty()` 检查。",
+  "references": ["man 2 umount2", "kernel/src/syscall/fs/mount.rs", "issue-402", "issue-303", "issue-393"]
+}
