@@ -1,0 +1,31 @@
+{
+  "id": "issue-265",
+  "title": "mremap：拒绝 `MREMAP_FIXED`/`MREMAP_DONTUNMAP`，且派发层仅四参，与 Linux 五参 `mremap` ABI 分叉",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`Sysno::mremap` 传入 `uctx.arg4()`；`sys_mremap` 增加 `new_addr`。`MREMAP_FIXED` 要求 `MREMAP_MAYMOVE` 与页对齐 `new_addr`，`AddrSpace::mremap_fixed` 实现与源区间不相交之目的区间搬迁；`new_addr==addr` 走原 `mremap`。`MREMAP_DONTUNMAP` → `OperationNotSupported`。",
+  "files_changed": [
+    "kernel/src/syscall/mm/mmap.rs",
+    "kernel/src/syscall/mod.rs",
+    "kernel/src/mm/aspace/mod.rs"
+  ],
+  "description": "**`kernel/src/syscall/mm/mmap.rs`** **`sys_mremap`**（约 **342–368** 行）在 **`flags`** 中含 **`MREMAP_FIXED`** 或 **`MREMAP_DONTUNMAP`** 时 **直接** **`InvalidInput`**，未解析 **第五参数** **新地址**。\n\n**`kernel/src/syscall/mod.rs`** **`Sysno::mremap`** 仅向 **`sys_mremap`** 传入 **`arg0`–`arg3`**（**addr、old_len、new_len、flags**），**无** **`new_addr`**（**`uctx.arg4()`**）。\n\n**Linux `mremap(2)`**：若设置 **`MREMAP_FIXED`**，须再提供 **`new_address`**（**第 5 个参数**），将映射 **移动**到该地址；**`MREMAP_DONTUNMAP`**（**Linux 4.17+**）用于 **缩小**时 **保留** **高地址** **页** **仍** **映射** **等** **语义**。在 **Linux** 上依赖 **`MREMAP_FIXED`** 的 **用户态**（**glibc** **realloc** **部分** **路径**、**jemalloc** **等**）在 **Starry** 上会 **过早** **EINVAL**，与 **Linux** **行为** **分叉**。\n\n**建议**：分阶段（1）**文档化** **不支持的** **`flags`**；（2）实现 **`MREMAP_FIXED`** 时扩展 **syscall** **派发** **与** **`sys_mremap`** **签名**，传入 **`new_address`**，并在 **`AddrSpace::mremap`** **中** **落地** **移动** **语义**；（3）**`MREMAP_DONTUNMAP`** 按 **VMA** **模型** **评估** **是否** **可** **支持**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["mremap"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/mm/mmap.rs:342-368", "kernel/src/syscall/mod.rs:352-357"],
+    "related_files": ["kernel/src/mm/aspace/mod.rs"],
+    "key_insight": "FIXED/DONTUNMAP 未实现；ABI 缺第 5 参"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 man 2 mremap、Linux arch 系统调用参数个数。",
+    "expected_output_contains": "",
+    "pass_criteria": "与 Linux 对 MREMAP_FIXED/DONTUNMAP 语义一致，或显式文档化不支持。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "扩展 mremap 入口接 arg4；实现 AddrSpace 重映射路径或返回明确 ENOSYS/文档。",
+  "references": ["man 2 mremap", "kernel/src/syscall/mm/mmap.rs"]
+}

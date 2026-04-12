@@ -339,19 +339,25 @@ pub fn sys_mprotect(addr: usize, length: usize, prot: u32) -> AxResult<isize> {
     Ok(0)
 }
 
-pub fn sys_mremap(addr: usize, old_size: usize, new_size: usize, flags: u32) -> AxResult<isize> {
+pub fn sys_mremap(
+    addr: usize,
+    old_size: usize,
+    new_size: usize,
+    flags: u32,
+    new_addr: usize,
+) -> AxResult<isize> {
     debug!(
         "sys_mremap <= addr: {addr:#x}, old_size: {old_size:x}, new_size: {new_size:x}, flags: \
-         {flags:#x}"
+         {flags:#x}, new_addr: {new_addr:#x}"
     );
 
     if flags & !(MREMAP_MAYMOVE | MREMAP_FIXED | MREMAP_DONTUNMAP) != 0 {
         return Err(AxError::InvalidInput);
     }
-    if flags & (MREMAP_FIXED | MREMAP_DONTUNMAP) != 0 {
-        return Err(AxError::InvalidInput);
+    // Linux 4.17+ shrink-with-pages-retained; VMA model not implemented yet (issue-265).
+    if flags & MREMAP_DONTUNMAP != 0 {
+        return Err(AxError::OperationNotSupported);
     }
-    let maymove = flags & MREMAP_MAYMOVE != 0;
 
     if !addr.is_multiple_of(PageSize::Size4K as usize) {
         return Err(AxError::InvalidInput);
@@ -364,6 +370,21 @@ pub fn sys_mremap(addr: usize, old_size: usize, new_size: usize, flags: u32) -> 
     let new_size = align_up_4k(new_size);
 
     let mut aspace = proc_aspace.write();
+
+    if flags & MREMAP_FIXED != 0 {
+        // Linux: MREMAP_FIXED requires MREMAP_MAYMOVE; fifth argument is the target address.
+        if flags & MREMAP_MAYMOVE == 0 {
+            return Err(AxError::InvalidInput);
+        }
+        if !new_addr.is_multiple_of(PageSize::Size4K as usize) {
+            return Err(AxError::InvalidInput);
+        }
+        let new_addr = VirtAddr::from(new_addr);
+        let out = aspace.mremap_fixed(&proc_aspace, addr, old_size, new_size, new_addr)?;
+        return Ok(out.as_usize() as isize);
+    }
+
+    let maymove = flags & MREMAP_MAYMOVE != 0;
     let out = aspace.mremap(&proc_aspace, addr, old_size, new_size, maymove)?;
     Ok(out.as_usize() as isize)
 }

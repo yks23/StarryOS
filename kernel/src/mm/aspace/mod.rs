@@ -420,6 +420,71 @@ impl AddrSpace {
         self.mremap_move(proc_aspace, addr, old_size, new_size, mmap_flags)
     }
 
+    /// `mremap` with **`MREMAP_FIXED`**: relocate `[addr, addr+old_size)` to `[new_addr, new_addr+new_size)`.
+    ///
+    /// Requires **`new_addr`** page-aligned; source and destination VA ranges must be disjoint (or
+    /// equal — then defers to [`Self::mremap`] in-place resize). Destination must be unmapped before
+    /// the move (issue-265).
+    pub fn mremap_fixed(
+        &mut self,
+        proc_aspace: &Arc<RwLock<AddrSpace>>,
+        addr: VirtAddr,
+        old_size: usize,
+        new_size: usize,
+        new_addr: VirtAddr,
+    ) -> AxResult<VirtAddr> {
+        if old_size == 0 || new_size == 0 {
+            ax_bail!(InvalidInput);
+        }
+        self.validate_region(addr, old_size)?;
+
+        let mmap_flags = {
+            let area = self.areas.find(addr).ok_or(AxError::NoMemory)?;
+            if area.start() != addr || area.size() != old_size {
+                ax_bail!(InvalidInput);
+            }
+            if matches!(area.backend(), Backend::Shared(_)) && new_size > old_size {
+                ax_bail!(OperationNotSupported);
+            }
+            if matches!(area.backend(), Backend::Linear(_)) && new_size != old_size {
+                ax_bail!(OperationNotSupported);
+            }
+            area.flags()
+        };
+
+        if new_addr == addr {
+            return self.mremap(proc_aspace, addr, old_size, new_size, true);
+        }
+
+        self.validate_region(new_addr, new_size)?;
+
+        let old_end = addr + old_size;
+        let new_end = new_addr + new_size;
+        if !(new_end <= addr || new_addr >= old_end) {
+            ax_bail!(InvalidInput);
+        }
+
+        if !self.vm_range_unmapped(new_addr, new_size)? {
+            ax_bail!(InvalidInput);
+        }
+
+        let mut buf = alloc::vec![0u8; old_size];
+        self.read(addr, &mut buf)?;
+        let new_backend = {
+            let area = self.areas.find(addr).ok_or(AxError::BadState)?;
+            Self::clone_backend_for_mremap(area.backend(), new_addr, proc_aspace)?
+        };
+        self.areas.unmap(addr, old_size, &mut self.pt)?;
+        self.areas.map(
+            MemoryArea::new(new_addr, new_size, mmap_flags, new_backend),
+            &mut self.pt,
+            false,
+        )?;
+        let write_len = old_size.min(new_size);
+        self.write(new_addr, &buf[..write_len])?;
+        Ok(new_addr)
+    }
+
     /// Removes all mappings in the address space.
     pub fn clear(&mut self) {
         self.areas.clear(&mut self.pt).unwrap();
