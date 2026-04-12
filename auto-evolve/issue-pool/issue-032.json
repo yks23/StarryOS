@@ -1,12 +1,15 @@
 {
   "id": "issue-032",
   "title": "mount/umount2 support limited filesystem types (partial)",
-  "status": "open",
+  "status": "resolved",
   "created_at": "2026-04-12T12:00:00Z",
+  "resolved_at": "2026-04-13T00:00:00Z",
   "severity": "medium",
   "description": "Question2.md 2.1：支持的文件系统类型有限；非法类型应失败而非静默成功。",
   "category": "syscall-semantic",
   "affected_syscalls": ["mount", "umount2"],
+  "fix_summary": "**`sys_mount`**：增加 **`SUPPORTED_MOUNT_FSTYPES`**（当前仅 **`tmpfs`**）与 **`validate_fs_type`**；空或未知 **`fstype`** → **`EINVAL`**（**`InvalidInput`**）。**`sys_umount2`**：校验 **`flags`** 仅含 **`MNT_FORCE|DETACH|EXPIRE|UMOUNT_NOFOLLOW`**，否则 **`EINVAL`**。",
+  "files_changed": ["kernel/src/syscall/fs/mount.rs"],
   "source_context": {
     "primary_files": ["kernel/src/syscall/fs/mount.rs"],
     "related_files": [],
@@ -18,7 +21,7 @@
     "run_method": "运行 /bin/test_mount_partial；无 CAP_SYS_ADMIN 时可能 EPERM",
     "expected_output_contains": "SUMMARY",
     "pass_criteria": "bogus fstype 失败且 errno 合理",
-    "last_result": "待运行"
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu 通过；QEMU 实跑待 rootfs"
   },
   "suggested_fix": "校验 fstype 与内核注册表；错误码与 Linux 对齐。",
   "references": ["man 2 mount"]
