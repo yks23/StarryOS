@@ -1,0 +1,27 @@
+{
+  "id": "issue-160",
+  "title": "mkdirat 在校验 dirfd 之前先 vm_load_string(path)，坏 dirfd 时 EBADF 可能晚于路径读取",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`sys_mkdirat`**：当 **`dirfd != AT_FDCWD`** 时先 **`Directory::from_fd(dirfd)?`**，再 **`vm_load_string(path)`**，使无效 **dirfd** 时 **`BadFileDescriptor`** 先于路径用户读，与 Linux **`do_mkdirat`** 及 **issue-158** **`symlinkat`** 模式一致。",
+  "files_changed": ["kernel/src/syscall/fs/ctl.rs"],
+  "description": "**`sys_mkdirat`**（`kernel/src/syscall/fs/ctl.rs`）当前顺序为：**`vm_load_string(path)?`** → **`with_fs(dirfd, |fs| fs.create_dir(…))`**。**`with_fs`** 在非 **`AT_FDCWD`** 时通过 **`Directory::from_fd(dirfd)`** 解析目录 **fd**；无效 **`dirfd`** 时 **`BadFileDescriptor`** 仅在路径已从用户空间读出之后才会返回。**Linux **`mkdirat(2)`**/**`do_mkdirat`** 通常先对 **`dfd`** 做 **`fdget`/`user_path_at`**，**`EBADF`** 应先于 **`pathname`** 的 **`copy_from_user`**。与已修复的 **issue-158**（**`symlinkat`**）属同一类 **「先 **fd** 再路径」** 顺序问题；**`sys_mkdirat`** 尚未做 **`dirfd != AT_FDCWD`** 时的前置 **`Directory::from_fd(dirfd)?`**（或等价校验）。",
+  "category": "syscall-ordering",
+  "affected_syscalls": ["mkdirat"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/ctl.rs:95-106"],
+    "related_files": ["kernel/src/file/fs.rs:26-34"],
+    "key_insight": "`vm_load_string(path)` 先于 `with_fs`；无效 dirfd 时 EBADF 晚于 pathname 用户读"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "无效 **`dirfd`** + **`path` 用户地址无效**；对比 **Linux** 与 **Starry** 的 **`errno`**（**`EBADF`** vs **`EFAULT`**）。可与 **issue-158** **`symlinkat`** 用例类比。",
+    "expected_output_contains": "",
+    "pass_criteria": "无效 **`dirfd`** 时 **`EBADF`/`BadFileDescriptor`** 先于 **`path`** 的用户读（与 **Linux **`mkdirat`** 一致）。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0）"
+  },
+  "suggested_fix": "当 **`dirfd != AT_FDCWD`** 时先 **`Directory::from_fd(dirfd)?`**（与 **`sys_symlinkat`** 相同模式），再 **`vm_load_string(path)`**；**`AT_FDCWD`** 分支保持 **`with_fs`** 行为。",
+  "references": ["man 2 mkdirat", "Linux do_mkdirat"]
+}

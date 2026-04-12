@@ -93,6 +93,10 @@ pub fn sys_chroot(path: *const c_char) -> AxResult<isize> {
 }
 
 pub fn sys_mkdirat(dirfd: i32, path: *const c_char, mode: u32) -> AxResult<isize> {
+    // Linux do_mkdirat: fdget(dfd) before copy_from_user(pathname) → EBADF first (issue-160).
+    if dirfd != AT_FDCWD {
+        let _ = Directory::from_fd(dirfd)?;
+    }
     let path = vm_load_string(path)?;
     debug!("sys_mkdirat <= dirfd: {dirfd}, path: {path}, mode: {mode}");
 
