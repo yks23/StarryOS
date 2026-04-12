@@ -1,0 +1,27 @@
+{
+  "id": "issue-213",
+  "title": "msgctl IPC_SET：用户 `msqid_ds` 整结构 `vm_read`，类型 `AnyBitPattern`，与 issue-208 同类",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "新增 **`read_msqid_ds_ipc_set_user`**：仅 **`addr_of!` + `vm_read`** 读取 **`msg_perm.uid`/`gid`/`mode`** 与 **`msg_qbytes`**（**IPC_SET** 实际使用的字段）。**`sys_msgctl` `IPC_SET`** 不再 **`ptr.vm_read()`** 整颗 **`msqid_ds`**；去掉 **`msqid_ds`** 上仅为整读服务的 **`#[derive(AnyBitPattern)]`** 及 **`bytemuck`** 导入。",
+  "files_changed": ["kernel/src/syscall/ipc/msg.rs"],
+  "description": "**`kernel/src/syscall/ipc/msg.rs`** **`sys_msgctl`** 在 **`IPC_SET`** 分支（约 **820–836** 行）将 **`buf` 转为 `*const msqid_ds` 后 **`let user_buf = ptr.vm_read()?`**，一次拷贝整颗 **`msqid_ds`**。该结构在本文件中带 **`#[derive(AnyBitPattern)]`**（约 **27–28** 行），与 **issue-208**（**`IoUringParams`**）、**issue-210**（**`SignalSet`**）同类：**`linux_raw_sys`/uapi 布局或 padding 变化**时整结构读入假设脆弱。实际仅使用 **`user_buf.msg_perm.{uid,gid,mode}`** 与 **`user_buf.msg_qbytes`**；其余字段被忽略但仍参与整块校验。**更稳妥**：对 **`IpcPerm`** 与 **`msg_qbytes`** 做标量/子结构字段读（类似 **issue-201** **`read_timespec_user`**），或仅读 **`ipc_perm` 可写子集**。\n\n**`msgsnd`/`msgrcv`** 已对 **`mtype`/`mtext`** 分字段读，与本 issue 正交。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["msgctl"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/ipc/msg.rs:812-841"],
+    "related_files": ["kernel/src/syscall/ipc/mod.rs:38-62"],
+    "key_insight": "IPC_SET 只消费 perm 与 qbytes，却读入完整 msqid_ds"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 issue-208/issue-201 字段读策略。",
+    "expected_output_contains": "",
+    "pass_criteria": "IPC_SET 路径不再依赖整颗 msqid_ds 的 Pod/AnyBitPattern 读，或证明与内核 uapi 逐字段一致。",
+    "last_result": "通过：`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`（exit 0，仅有既有 warning）。"
+  },
+  "suggested_fix": "实现 `read_msqid_ds_ipc_set_user` 或仅读 `msg_perm` 标量字段 + `msg_qbytes`。",
+  "references": ["man 2 msgctl", "issue-208", "issue-201"]
+}

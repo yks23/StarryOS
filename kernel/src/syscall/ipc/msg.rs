@@ -7,7 +7,6 @@ use axtask::{
     current,
     future::{block_on, interruptible},
 };
-use bytemuck::AnyBitPattern;
 use event_listener::Event;
 use linux_raw_sys::general::*;
 use starry_process::Pid;
@@ -24,7 +23,7 @@ use crate::{
 
 /// Data structure describing a message queue.
 #[repr(C)]
-#[derive(Clone, Copy, AnyBitPattern)]
+#[derive(Clone, Copy)]
 #[allow(non_camel_case_types)]
 pub struct msqid_ds {
     /// operation permission struct
@@ -71,6 +70,23 @@ impl msqid_ds {
             msg_lspid: pid,
             msg_lrpid: pid,
         }
+    }
+}
+
+/// Fields of user `msqid_ds` consumed by `IPC_SET` (issue-213); avoid whole-struct `vm_read`/`AnyBitPattern`.
+fn read_msqid_ds_ipc_set_user(p: *const msqid_ds) -> AxResult<(
+    __kernel_uid_t,
+    __kernel_gid_t,
+    __kernel_mode_t,
+    __kernel_size_t,
+)> {
+    unsafe {
+        Ok((
+            core::ptr::addr_of!((*p).msg_perm.uid).vm_read()?,
+            core::ptr::addr_of!((*p).msg_perm.gid).vm_read()?,
+            core::ptr::addr_of!((*p).msg_perm.mode).vm_read()?,
+            core::ptr::addr_of!((*p).msg_qbytes).vm_read()?,
+        ))
     }
 }
 
@@ -818,21 +834,20 @@ pub fn sys_msgctl(msqid: i32, cmd: i32, buf: usize) -> AxResult<isize> {
     }
 
     if cmd == IPC_SET {
-        // Read new settings from user space
         let ptr = buf as *const msqid_ds;
-        let user_buf = ptr.vm_read()?;
+        let (uid, gid, mode, msg_qbytes) = read_msqid_ds_ipc_set_user(ptr)?;
 
         // Update permission information (fields allowed by man-page)
-        msg_queue.msqid_ds.msg_perm.uid = user_buf.msg_perm.uid;
-        msg_queue.msqid_ds.msg_perm.gid = user_buf.msg_perm.gid;
-        msg_queue.msqid_ds.msg_perm.mode = user_buf.msg_perm.mode & 0o777; // Only take permission bits
+        msg_queue.msqid_ds.msg_perm.uid = uid;
+        msg_queue.msqid_ds.msg_perm.gid = gid;
+        msg_queue.msqid_ds.msg_perm.mode = mode & 0o777; // Only take permission bits
 
         // Update queue size limit (requires privilege check)
-        if user_buf.msg_qbytes != msg_queue.msqid_ds.msg_qbytes {
-            if user_buf.msg_qbytes > MSGMNB as _ && !is_privileged {
+        if msg_qbytes != msg_queue.msqid_ds.msg_qbytes {
+            if msg_qbytes > MSGMNB as _ && !is_privileged {
                 return Err(AxError::from(LinuxError::EPERM)); // EPERM - requires privilege to exceed MSGMNB
             }
-            msg_queue.msqid_ds.msg_qbytes = user_buf.msg_qbytes;
+            msg_queue.msqid_ds.msg_qbytes = msg_qbytes;
         }
 
         // Update modification time
