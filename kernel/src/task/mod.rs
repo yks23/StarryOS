@@ -252,6 +252,8 @@ pub struct ProcessData {
 
     /// The child exit wait event
     pub child_exit_event: Arc<PollSet>,
+    /// Woken when any thread in this thread group exits (`exit_thread`); e.g. `execve` waits here.
+    pub thread_group_exit_event: Arc<PollSet>,
     /// Self exit event
     pub exit_event: Arc<PollSet>,
     /// The exit signal of the thread
@@ -319,6 +321,7 @@ impl ProcessData {
             rlim: RwLock::default(),
 
             child_exit_event: Arc::default(),
+            thread_group_exit_event: Arc::default(),
             exit_event: Arc::default(),
             exit_signal,
 

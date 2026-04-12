@@ -248,7 +248,9 @@ pub fn do_exit(exit_code: i32, group_exit: bool) {
         let (u, s) = tm.cpu_nanos();
         thr.proc_data.accumulate_exited_thread_cpu_ns(u, s);
     }
-    if process.exit_thread(curr.id().as_u64() as Pid, exit_code) {
+    let last_thread = process.exit_thread(curr.id().as_u64() as Pid, exit_code);
+    thr.proc_data.thread_group_exit_event.wake();
+    if last_thread {
         register_zombie_process_data(thr.proc_data.clone());
         *thr.proc_data.jobctl.lock() = JobCtl::default();
         process.exit();

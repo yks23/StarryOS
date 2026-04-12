@@ -1,10 +1,13 @@
 use alloc::{string::ToString, sync::Arc, vec::Vec};
-use core::ffi::c_char;
+use core::{ffi::c_char, future::poll_fn, task::Poll};
 
 use axerrno::{AxError, AxResult};
 use axfs::FS_CONTEXT;
 use axhal::uspace::UserContext;
-use axtask::{current, yield_now};
+use axtask::{
+    current,
+    future::{block_on, interruptible},
+};
 use starry_process::Pid;
 use starry_signal::{SignalInfo, Signo};
 use starry_vm::vm_load_until_nul;
@@ -54,24 +57,22 @@ pub fn sys_execve(
     // Linux: execve terminates all other threads in the process before replacing the image.
     if process.threads().len() > 1 {
         let sig_kill = SignalInfo::new_kernel(Signo::SIGKILL);
-        let mut spins = 0usize;
-        const MAX_SPINS: usize = 1_000_000;
-        loop {
-            let tids = process.threads();
-            if tids.len() <= 1 {
-                break;
+        for tid in process.threads() {
+            if tid != my_tid {
+                let _ = send_signal_to_thread(None, tid, Some(sig_kill.clone()));
             }
-            for tid in tids {
-                if tid != my_tid {
-                    let _ = send_signal_to_thread(None, tid, Some(sig_kill.clone()));
-                }
+        }
+        if let Err(e) = block_on(interruptible(poll_fn(|cx| {
+            if process.threads().len() <= 1 {
+                return Poll::Ready(Ok::<(), AxError>(()));
             }
-            spins += 1;
-            if spins > MAX_SPINS {
-                error!("sys_execve: timed out waiting for sibling threads to exit");
-                return Err(AxError::WouldBlock);
+            proc_data.thread_group_exit_event.register(cx.waker());
+            if process.threads().len() <= 1 {
+                return Poll::Ready(Ok::<(), AxError>(()));
             }
-            yield_now();
+            Poll::Pending
+        }))) {
+            return Err(e.into());
         }
     }
 
