@@ -255,6 +255,11 @@ pub fn sys_prctl(
             current().set_name(s);
         }
         PR_GET_NAME => {
+            // Linux: NULL `arg2` → EFAULT. Match `PR_SET_NAME` early user-buffer handling (issue-351;
+            // same class as capget/clone3 NULL output — issue-304/308).
+            if arg2 == 0 {
+                return Err(AxError::BadAddress);
+            }
             let name = current().name();
             let len = name.len().min(15);
             let mut buf = [0; 16];

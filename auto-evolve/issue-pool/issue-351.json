@@ -1,0 +1,32 @@
+{
+  "id": "issue-351",
+  "title": "`prctl(2)`：`PR_GET_NAME` 分支在 `vm_write_slice(arg2, …)` 前未显式拒绝 `arg2==0`；与同函数 `PR_SET_NAME` 经 `UserConstPtr::get_as_slice` 对坏指针的早失败路径不对称，与 Linux `prctl` 对 `NULL` 缓冲 `EFAULT` 的可读对齐空间",
+  "status": "resolved",
+  "created_at": "2026-04-12T22:15:00Z",
+  "resolved_at": "2026-04-13T00:00:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/task/ctl.rs`** **`sys_prctl`** **`PR_GET_NAME`** **（** **约** **257–262** **行** **）** **：** **先** **`current().name()`** **再** **`vm_write_slice(arg2 as *mut u8, &buf)`** **，** **未** **像** **`PR_SET_NAME`** **那样** **先** **用** **`UserPtr`/`UserConstPtr`** **包装** **`arg2`** **。** **当** **`arg2==0`** **时** **依赖** **`vm_write_slice`** **返回** **`BadAddress`** **，** **行为** **可能** **正确** **但** **与同** **文件** **`PR_SET_NAME`** **/`issue-304`** **`capget`** **等** **「** **显式** **NULL** **→** **`EFAULT`** **」** **叙述** **不一致** **。**\n\n**建议** **：** **`PR_GET_NAME`** **在** **读** **线程** **名** **之前** **`if arg2==0 { return Err(BadAddress) }`** **或** **`UserPtr::from(arg2 as *mut u8).get_as_mut_slice(16)?`** **；** **并** **注释** **与** **`PR_SET_NAME`** **对称** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["prctl"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/ctl.rs:257-262"],
+    "related_files": ["kernel/src/syscall/task/ctl.rs:246-256"],
+    "key_insight": "prctl PR_GET_NAME arg2 NULL handling vs PR_SET_NAME"
+  },
+  "fix_summary": "`sys_prctl` `PR_GET_NAME`：`arg2==0` 在 `current().name()`/`vm_write_slice` 前显式 → `BadAddress`（EFAULT），与 `PR_SET_NAME` 的 `UserConstPtr` 早失败及 issue-304 类 NULL 输出指针叙述一致。",
+  "files_changed": [
+    "kernel/src/syscall/task/ctl.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-351.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：`prctl(PR_GET_NAME, NULL)` 对照 Linux。",
+    "expected_output_contains": "",
+    "pass_criteria": "`PR_GET_NAME` 与 `PR_SET_NAME`/Linux 对 `arg2` 指针校验一致或文档化。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "对输出缓冲使用 `UserPtr`/显式 `is_null()` 早检，与同文件其他 `prctl` 分支风格一致。",
+  "references": ["man 2 prctl", "kernel/src/syscall/task/ctl.rs", "issue-304"]
+}
