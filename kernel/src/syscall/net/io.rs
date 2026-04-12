@@ -43,6 +43,10 @@ const SENDMSG_FLAGS_MASK: u32 = MSG_OOB
     | MSG_MORE
     | MSG_CMSG_CLOEXEC;
 
+/// `sendmsg`/`sendto` 掩码内、仅适用于 `recvmsg` 的 `MSG_*`（与 `RECVMSG_FLAGS_UNSUPPORTED` 对称，
+/// 显式 **`ENOTSUP`**，勿静默忽略；issue-372）。
+const SENDMSG_FLAGS_UNSUPPORTED: u32 = MSG_CMSG_CLOEXEC;
+
 use super::addr::SocketAddrExt;
 use crate::{
     file::{FileLike, Socket, add_file_like},
@@ -93,6 +97,17 @@ fn send_on_socket(
     Ok(sent as isize)
 }
 
+#[inline]
+fn validate_sendmsg_flags(flags: u32) -> AxResult<()> {
+    if flags & !SENDMSG_FLAGS_MASK != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    if flags & SENDMSG_FLAGS_UNSUPPORTED != 0 {
+        return Err(AxError::OperationNotSupported);
+    }
+    Ok(())
+}
+
 fn send_impl(
     fd: i32,
     src: impl Read + IoBuf,
@@ -104,9 +119,7 @@ fn send_impl(
     // Linux __sys_sendto: sockfd_lookup before flag validation and copy sockaddr (EBADF before
     // EINVAL; issue-294). Matches `sys_sendmsg` order in this file.
     let socket = Socket::from_fd(fd)?;
-    if flags & !SENDMSG_FLAGS_MASK != 0 {
-        return Err(AxError::InvalidInput);
-    }
+    validate_sendmsg_flags(flags)?;
     send_on_socket(&socket, fd, src, flags, addr, addrlen, cmsg)
 }
 
@@ -124,9 +137,7 @@ pub fn sys_sendto(
 pub fn sys_sendmsg(fd: i32, msg: UserConstPtr<msghdr>, flags: u32) -> AxResult<isize> {
     // Linux __sys_sendmsg: sockfd_lookup before copy_msghdr_from_user (EBADF before EFAULT).
     let socket = Socket::from_fd(fd)?;
-    if flags & !SENDMSG_FLAGS_MASK != 0 {
-        return Err(AxError::InvalidInput);
-    }
+    validate_sendmsg_flags(flags)?;
 
     // Whole-structure snapshot (like `copy_msghdr_from_user`): `msg_control` / `msg_controllen` /
     // `msg_iov` / … come from one load sequence, not independent re-reads of user `msghdr` (issue-197).
