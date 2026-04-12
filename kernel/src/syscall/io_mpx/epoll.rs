@@ -1,8 +1,7 @@
-use core::time::Duration;
-
 use axerrno::{AxError, AxResult};
+use axhal::time::TimeValue;
 use axpoll::IoEvents;
-use axtask::future::{self, block_on, poll_io};
+use axtask::future::{self, block_on, interruptible, poll_io};
 use bitflags::bitflags;
 use linux_raw_sys::general::{
     EPOLL_CLOEXEC, EPOLL_CTL_ADD, EPOLL_CTL_DEL, EPOLL_CTL_MOD, EPOLLEXCLUSIVE, EPOLLWAKEUP,
@@ -102,7 +101,7 @@ fn do_epoll_wait(
     epfd: i32,
     events: UserPtr<epoll_event>,
     maxevents: i32,
-    timeout: Option<Duration>,
+    timeout: Option<TimeValue>,
     sigmask: UserConstPtr<SignalSet>,
     sigsetsize: usize,
 ) -> AxResult<isize> {
@@ -121,14 +120,18 @@ fn do_epoll_wait(
 
     with_blocked_signals(
         nullable!(sigmask.get_as_ref())?.copied(),
-        || match block_on(future::timeout(
-            timeout,
-            poll_io(epoll.as_ref(), IoEvents::IN, false, || {
-                epoll.poll_events(events)
-            }),
-        )) {
-            Ok(r) => r.map(|n| n as _),
-            Err(_) => Ok(0),
+        || {
+            // Align with `do_poll` / `do_select` (issue-355 / issue-364): `interruptible`(`timeout_at`(`poll_io`));
+            // `Elapsed` → timeout (0 events); `Interrupted` → `EINTR` (issue-365).
+            match block_on(interruptible(future::timeout_at(
+                timeout,
+                poll_io(epoll.as_ref(), IoEvents::IN, false, || epoll.poll_events(events)),
+            ))) {
+                Ok(Ok(Ok(n))) => Ok(n as isize),
+                Ok(Ok(Err(e))) => Err(e),
+                Ok(Err(_elapsed)) => Ok(0),
+                Err(_) => Err(AxError::Interrupted),
+            }
         },
     )
 }
@@ -143,7 +146,7 @@ pub fn sys_epoll_pwait(
 ) -> AxResult<isize> {
     let timeout = match timeout {
         -1 => None,
-        t if t >= 0 => Some(Duration::from_millis(t as u64)),
+        t if t >= 0 => Some(TimeValue::from_millis(t as u64)),
         _ => return Err(AxError::InvalidInput),
     };
     do_epoll_wait(epfd, events, maxevents, timeout, sigmask, sigsetsize)
