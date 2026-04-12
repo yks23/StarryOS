@@ -327,6 +327,11 @@ pub fn sys_unlinkat(dirfd: i32, path: *const c_char, flags: usize) -> AxResult<i
 
     debug!("sys_unlinkat <= dirfd: {dirfd}, path: {path:?}, flags: {flags}");
 
+    // Linux rejects empty pathname with EINVAL (issue-394; same theme as issue-391/392/393).
+    if path.is_empty() {
+        return Err(AxError::InvalidInput);
+    }
+
     if dirfd != AT_FDCWD && !path.starts_with('/') {
         let _ = Directory::from_fd(dirfd)?;
     }
