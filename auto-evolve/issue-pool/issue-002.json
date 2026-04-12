@@ -1,12 +1,15 @@
 {
   "id": "issue-002",
   "title": "sched_getscheduler/sched_setscheduler/sched_getparam 为 stub，策略与参数未生效",
-  "status": "open",
+  "status": "resolved",
   "created_at": "2026-04-12T12:00:00Z",
+  "resolved_at": "2026-04-13T00:00:00Z",
   "severity": "medium",
   "description": "sched_getscheduler 硬编码返回 SCHED_RR；sched_setscheduler/sched_getparam 直接 Ok(0)，不修改调度策略也不向用户缓冲区写入 sched_param。与 Linux 调度策略语义不符。",
   "category": "syscall-stub",
   "affected_syscalls": ["sched_getscheduler", "sched_setscheduler", "sched_getparam"],
+  "fix_summary": "在 **`Thread`** 上增加 **`sched_policy` / `sched_priority`**（原子量，默认 `SCHED_NORMAL`/`SCHED_OTHER`==0 与优先级 0）。**`sched_setscheduler`**：经 **`sched_resolve_task`** 与 **`try_as_thread`** 定位线程，校验 **`param` 非空**，从用户读 **`sched_param`**，按策略校验优先级（`SCHED_NORMAL`/`BATCH`/`IDLE` 须0；`FIFO`/`RR` 须 1–99），再写入线程状态。**`sched_getscheduler`** 返回已存策略。**`sched_getparam`** 向用户写出当前 **`sched_priority`**。未将策略接入 axtask 真实 RT 调度，仅持久化与查询一致。",
+  "files_changed": ["kernel/src/task/mod.rs", "kernel/src/syscall/task/schedule.rs"],
   "source_context": {
     "primary_files": ["kernel/src/syscall/task/schedule.rs:130-139"],
     "related_files": ["kernel/src/syscall/mod.rs:384-388"],
@@ -18,7 +21,7 @@
     "run_method": "QEMU rootfs 中运行 /bin/test_sched_policy_stubs",
     "expected_output_contains": "SUMMARY",
     "pass_criteria": "setscheduler(SCHED_OTHER) 后 getscheduler 为 SCHED_OTHER；getparam 写入合法 sched_priority",
-    "last_result": "待运行"
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu 通过；QEMU 实跑待 rootfs"
   },
   "suggested_fix": "在 axtask 层暴露策略/优先级或至少在 Starry 内持久化 policy/param 并在 get 系调用中返回一致值。",
   "references": ["man 2 sched_setscheduler", "Question1.md §1.2"]

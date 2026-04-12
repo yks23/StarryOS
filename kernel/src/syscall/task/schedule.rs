@@ -4,17 +4,43 @@ use axtask::{
     AxCpuMask, AxTaskRef, current,
     future::{block_on, interruptible, sleep},
 };
+use bytemuck::{Pod, Zeroable};
 use linux_raw_sys::general::{
     __kernel_clockid_t, CLOCK_MONOTONIC, CLOCK_REALTIME, PRIO_PGRP, PRIO_PROCESS, PRIO_USER,
-    SCHED_RR, TIMER_ABSTIME, timespec,
+    SCHED_BATCH, SCHED_FIFO, SCHED_IDLE, SCHED_NORMAL, SCHED_RR, TIMER_ABSTIME, timespec,
 };
 use starry_process::Pid;
 use starry_vm::{VmMutPtr, VmPtr, vm_load, vm_write_slice};
 
 use crate::{
-    task::{get_process_data, get_process_group, get_task},
+    task::{AsThread, get_process_data, get_process_group, get_task},
     time::TimeValueLike,
 };
+
+/// Linux `struct sched_param` (user ABI): single `sched_priority` field.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct SchedParam {
+    sched_priority: i32,
+}
+
+fn validate_sched_user_param(policy: i32, priority: i32) -> AxResult<()> {
+    match policy as u32 {
+        SCHED_NORMAL | SCHED_BATCH | SCHED_IDLE => {
+            if priority != 0 {
+                return Err(AxError::InvalidInput);
+            }
+            Ok(())
+        }
+        SCHED_FIFO | SCHED_RR => {
+            if !(1..=99).contains(&priority) {
+                return Err(AxError::InvalidInput);
+            }
+            Ok(())
+        }
+        _ => Err(AxError::InvalidInput),
+    }
+}
 
 /// Linux `sched_*affinity` `pid`: `0` is the calling task; otherwise a TID, or a thread-group PID
 /// (we fall back to the smallest member TID, typically the leader).
@@ -155,15 +181,36 @@ pub fn sys_sched_setaffinity(pid: i32, cpusetsize: usize, user_mask: *const u8) 
     Ok(0)
 }
 
-pub fn sys_sched_getscheduler(_pid: i32) -> AxResult<isize> {
-    Ok(SCHED_RR as _)
+pub fn sys_sched_getscheduler(pid: i32) -> AxResult<isize> {
+    let task = sched_resolve_task(pid)?;
+    let thr = task.try_as_thread().ok_or(AxError::InvalidInput)?;
+    Ok(thr.sched_policy() as isize)
 }
 
-pub fn sys_sched_setscheduler(_pid: i32, _policy: i32, _param: *const ()) -> AxResult<isize> {
+pub fn sys_sched_setscheduler(pid: i32, policy: i32, param: *const ()) -> AxResult<isize> {
+    let param = param.cast::<SchedParam>();
+    let Some(param_ptr) = param.nullable() else {
+        return Err(AxError::InvalidInput);
+    };
+    let user_param = unsafe { param_ptr.vm_read_uninit()?.assume_init() };
+    validate_sched_user_param(policy, user_param.sched_priority)?;
+
+    let task = sched_resolve_task(pid)?;
+    let thr = task.try_as_thread().ok_or(AxError::InvalidInput)?;
+    thr.set_sched_policy_param(policy, user_param.sched_priority);
     Ok(0)
 }
 
-pub fn sys_sched_getparam(_pid: i32, _param: *mut ()) -> AxResult<isize> {
+pub fn sys_sched_getparam(pid: i32, param: *mut ()) -> AxResult<isize> {
+    let param = param.cast::<SchedParam>();
+    let Some(param_ptr) = param.nullable() else {
+        return Err(AxError::InvalidInput);
+    };
+    let task = sched_resolve_task(pid)?;
+    let thr = task.try_as_thread().ok_or(AxError::InvalidInput)?;
+    param_ptr.vm_write(SchedParam {
+        sched_priority: thr.sched_priority_value(),
+    })?;
     Ok(0)
 }
 

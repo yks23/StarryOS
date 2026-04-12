@@ -2,12 +2,13 @@
 
 ## 最近更新
 - 日期：2026-04-13
-- 本轮尝试修复：issue-001（sched_*affinity 非零 pid）
-- 结果：resolved（`sched_resolve_task` + 对目标任务 cpumask 读/写；`cargo clippy --target riscv64gc-unknown-none-elf -F qemu` 通过）
+- 本轮尝试修复：issue-002（sched_get/setscheduler/getparam 桩）
+- 结果：resolved（`Thread` 持久化 policy/priority；syscall 读/写 `sched_param`；`cargo clippy --target riscv64gc-unknown-none-elf -F qemu` 通过）
 
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-002 | sched_get/setscheduler/getparam 桩 | resolved | 2026-04-13 |
 | issue-001 | sched_get/setaffinity 仅当前任务 | resolved | 2026-04-13 |
 | issue-034 | accept4 写 local非 peer | resolved | 2026-04-12 |
 | issue-028 | 多线程 execve WouldBlock | resolved | 2026-04-12 |
@@ -49,8 +50,10 @@
 - **`execve` 多线程**：在替换映像前若 **`proc.threads().len() > 1`**，对其余 tid **`SIGKILL`** 并 **`yield_now`** 直至仅剩当前线程（对齐 Linux 先杀线程组再 exec）；长时间未收敛则 **`WouldBlock`**。非 vfork/线程本地存储析构等细语义仍弱于 Linux。
 - **`accept` / `accept4`**：向用户写入的 sockaddr 必须是 **`peer_addr()`**（远端），勿用 **`local_addr()`**（本端监听地址）；与 **`getpeername(accepted_fd)`** 一致。
 - **`sched_getaffinity` / `sched_setaffinity`**：`pid==0` 为当前任务；非零先 **`get_task(pid)`**，失败再 **`get_process_data(pid)`** 取 **`proc.threads()` 最小 tid** 定位线程组代表线程。set 时当前任务走 **`set_current_affinity`**（SMP 迁移），其它任务仅 **`set_cpumask`**。未完整建模 CAP、僵尸 **`ESRCH`** 等。
+- **`sched_getscheduler` / `sched_setscheduler` / `sched_getparam`**：每线程在 **`Thread`** 上存 **`sched_policy`**（默认0，即 `SCHED_NORMAL`/`SCHED_OTHER`）与 **`sched_priority`**（默认 0）。`setscheduler` 从用户读 **`sched_param`** 并校验策略与优先级范围后写入；`getscheduler`/`getparam` 返回已存值。策略未接入 axtask 真实 RT 调度，仅保证与用户态查询一致。
 
 ## 给 Debugger 的消息
+- issue-002：请在 rootfs 跑 `/bin/test_sched_policy_stubs`（`SCHED_OTHER` 往返与 `sched_getparam` 写缓冲区）。
 - issue-001：请在 rootfs 跑 `/bin/test_sched_affinity`（对存活子进程 `sched_getaffinity`）；多线程非 leader PID 行为弱于 Linux。
 - issue-034：请在 rootfs 跑 `/bin/test_accept_peer_addr`（IPv4 accept 与 getpeername 一致性）。
 - issue-028：rootfs 需 `/bin/true`，跑 `/bin/test_execve_multithread`；若 SIGKILL 路径未调度退出可再查 `check_signals`/pthread 阻塞点。

@@ -101,6 +101,11 @@ pub struct Thread {
 
     /// Self exit event
     pub exit_event: Arc<PollSet>,
+
+    /// Linux-visible scheduling policy (`SCHED_*`, e.g. `SCHED_OTHER`/`SCHED_NORMAL` == 0).
+    sched_policy: AtomicI32,
+    /// `sched_param.sched_priority` for this thread (persisted; real-time scheduling not wired).
+    sched_priority: AtomicI32,
 }
 
 impl Thread {
@@ -117,6 +122,8 @@ impl Thread {
             oom_score_adj: AtomicI32::new(200),
             accessing_user_memory: AtomicBool::new(false),
             exit_event: Arc::default(),
+            sched_policy: AtomicI32::new(0),
+            sched_priority: AtomicI32::new(0),
         })
     }
 
@@ -171,6 +178,22 @@ impl Thread {
     pub fn set_accessing_user_memory(&self, accessing: bool) {
         self.accessing_user_memory
             .store(accessing, Ordering::Release);
+    }
+
+    /// Current `sched_getscheduler` policy (`SCHED_*`).
+    pub fn sched_policy(&self) -> i32 {
+        self.sched_policy.load(Ordering::Relaxed)
+    }
+
+    /// Current `sched_param.sched_priority`.
+    pub fn sched_priority_value(&self) -> i32 {
+        self.sched_priority.load(Ordering::Relaxed)
+    }
+
+    /// Set policy and priority from `sched_setscheduler` (stored only; axtask RR is unchanged).
+    pub fn set_sched_policy_param(&self, policy: i32, priority: i32) {
+        self.sched_policy.store(policy, Ordering::Relaxed);
+        self.sched_priority.store(priority, Ordering::Relaxed);
     }
 }
 
