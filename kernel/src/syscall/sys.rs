@@ -148,7 +148,9 @@ const UTSNAME: new_utsname = new_utsname {
     release: pad_str("10.0.0"),
     version: pad_str("10.0.0"),
     machine: pad_str(ARCH),
-    domainname: pad_str("https://github.com/Starry-OS/StarryOS"),
+    // NIS/YP domain — `(none)` matches typical Linux when unset; do not use an HTTP URL here
+    // (misread as DNS/NIS or build metadata; issue-312).
+    domainname: pad_str("(none)"),
 };
 
 pub fn sys_uname(name: *mut new_utsname) -> AxResult<isize> {
