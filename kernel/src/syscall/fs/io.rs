@@ -8,10 +8,8 @@ use axerrno::{AxError, AxResult};
 use axfs::{FS_CONTEXT, FileFlags, OpenOptions};
 use axio::{Seek, SeekFrom};
 use axpoll::{IoEvents, Pollable};
-use axtask::current;
 use linux_raw_sys::general::__kernel_off_t;
 use starry_vm::{VmMutPtr, VmPtr};
-use syscalls::Sysno;
 
 use crate::{
     file::{File, FileLike, Pipe, get_file_like},
@@ -30,16 +28,6 @@ impl Pollable for DummyFd {
     }
 
     fn register(&self, _context: &mut Context<'_>, _events: IoEvents) {}
-}
-
-pub fn sys_dummy_fd(sysno: Sysno) -> AxResult<isize> {
-    if current().name().starts_with("qemu-") {
-        // We need to be honest to qemu, since it can automatically fallback to
-        // other strategies.
-        return Err(AxError::Unsupported);
-    }
-    warn!("Dummy fd created: {sysno}");
-    DummyFd.add_to_fd_table(false).map(|fd| fd as isize)
 }
 
 /// Read data from the file indicated by `fd`.

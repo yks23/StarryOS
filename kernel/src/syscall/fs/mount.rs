@@ -3,7 +3,10 @@ use core::ffi::{c_char, c_void};
 use axerrno::{AxError, AxResult};
 use axfs::FS_CONTEXT;
 
-use crate::{mm::vm_load_string, pseudofs::MemoryFs};
+use crate::{
+    mm::{UserConstPtr, vm_load_string},
+    pseudofs::MemoryFs,
+};
 
 pub fn sys_mount(
     source: *const c_char,
@@ -35,4 +38,29 @@ pub fn sys_umount2(target: *const c_char, _flags: i32) -> AxResult<isize> {
     let target = FS_CONTEXT.lock().resolve(target)?;
     target.unmount()?;
     Ok(0)
+}
+
+/// Linux mount API (`fsopen`): no fs-context layer yet; return **ENODEV** so userland does not get a
+/// misleading `anon_inode:[dummy]` fd (tests accept EINVAL / ENODEV / ENOENT).
+pub fn sys_fsopen(fsname: UserConstPtr<c_char>, _flags: u32) -> AxResult<isize> {
+    let name = fsname.get_as_str()?;
+    if name.is_empty() {
+        return Err(AxError::InvalidInput);
+    }
+    debug!("sys_fsopen <= fsname: {name:?} (unsupported)");
+    Err(AxError::NoSuchDevice)
+}
+
+/// `fspick`: unimplemented; **ENOSYS**.
+pub fn sys_fspick(dfd: i32, pathname: UserConstPtr<c_char>, _flags: u32) -> AxResult<isize> {
+    let path = pathname.get_as_str()?;
+    debug!("sys_fspick <= dfd: {dfd}, path: {path:?} (unsupported)");
+    Err(AxError::Unsupported)
+}
+
+/// `open_tree`: unimplemented; **ENOSYS** (callers that probe the API treat any error as skip).
+pub fn sys_open_tree(dfd: i32, filename: UserConstPtr<c_char>, _flags: u32) -> AxResult<isize> {
+    let path = filename.get_as_str()?;
+    debug!("sys_open_tree <= dfd: {dfd}, path: {path:?} (unsupported)");
+    Err(AxError::Unsupported)
 }

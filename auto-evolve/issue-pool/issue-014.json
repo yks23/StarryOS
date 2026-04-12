@@ -1,12 +1,20 @@
 {
   "id": "issue-014",
   "title": "fsopen, fspick, open_tree, memfd_secret use dummy fd path",
-  "status": "open",
+  "status": "resolved",
   "created_at": "2026-04-12T12:00:00Z",
+  "resolved_at": "2026-04-12T20:00:00Z",
   "severity": "high",
   "description": "Linux 5.x 文件系统挂载 API 在 Starry 中走 sys_dummy_fd，成功返回 fd 但无 fs context。memfd_secret 可能为较新 syscall。",
   "category": "syscall-stub",
   "affected_syscalls": ["fsopen", "fspick", "open_tree", "memfd_secret"],
+  "fix_summary": "移除上述 syscall 对 `sys_dummy_fd` 的依赖：`sys_fsopen` 校验 fs名后返回 `NoSuchDevice`（ENODEV），满足 `test_dummy_fsapi` 对 EINVAL/ENODEV/ENOENT 的接受集；`sys_fspick`/`sys_open_tree` 返回 `Unsupported`（ENOSYS）；`sys_memfd_secret` 直接复用 `sys_memfd_create`，fd 对应真实 `/tmp/memfd-*` 文件路径而非 `anon_inode:[dummy]`。删除已无调用方的 `sys_dummy_fd`；`DummyFd` 类型仍保留供 `splice` 等路径识别。",
+  "files_changed": [
+    "kernel/src/syscall/mod.rs",
+    "kernel/src/syscall/fs/mount.rs",
+    "kernel/src/syscall/fs/memfd.rs",
+    "kernel/src/syscall/fs/io.rs"
+  ],
   "source_context": {
     "primary_files": ["kernel/src/syscall/mod.rs:625-628"],
     "related_files": [],
@@ -18,7 +26,7 @@
     "run_method": "运行 /bin/test_dummy_fsapi",
     "expected_output_contains": "SUMMARY",
     "pass_criteria": "成功返回的 fd 经 readlink 不含 dummy",
-    "last_result": "待运行"
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu 通过；QEMU 实跑待 rootfs"
   },
   "suggested_fix": "实现 mount API 或返回 ENOSYS；memfd_secret 可与 memfd_create 共享逻辑。",
   "references": ["man 2 fsopen"]

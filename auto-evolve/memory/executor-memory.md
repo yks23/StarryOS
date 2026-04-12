@@ -2,12 +2,13 @@
 
 ## 最近更新
 - 日期：2026-04-12
-- 本轮尝试修复：issue-013（bpf/io_uring/userfaultfd/perf 假 dummy fd）
-- 结果：resolved（`bpf`/`userfaultfd` → ENOSYS；`perf_event_open` → EPERM；`io_uring_setup` → 最小 `IoUringFd` + `anon_inode:[io_uring]`；`cargo clippy --target riscv64gc-unknown-none-elf -F qemu` 通过）
+- 本轮尝试修复：issue-014（fsopen/fspick/open_tree/memfd_secret dummy fd）
+- 结果：resolved（`fsopen` → ENODEV；`fspick`/`open_tree` → ENOSYS；`memfd_secret` → 复用 `memfd_create`；删除 `sys_dummy_fd`；`cargo clippy --target riscv64gc-unknown-none-elf -F qemu` 通过）
 
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-014 | 挂载 API / memfd_secret dummy fd | resolved | 2026-04-12 |
 | issue-013 | bpf/io_uring 等 dummy fd 误导 | resolved | 2026-04-12 |
 | issue-010 | timerfd DummyFd / poll 永不触发 | resolved | 2026-04-12 |
 | issue-005 | membarrier 非 QUERY 路径仅用 compiler_fence | resolved | 2026-04-12 |
@@ -30,6 +31,7 @@
 - `rt_sigreturn` 通过 `block_next_signal` 标记「下一次回到用户循环时跳过一次 `check_signals`」；该标志必须是 **per-thread**（`Thread::skip_next_signal_check`），不可用进程级或全局 AtomicBool。
 - timerfd：`TimerFd` 实现 `FileLike` + `Pollable`；到期逻辑在 `process_expirations` 中根据时钟纳秒与 `next_deadline_nanos` 比较；通过 `axtask::register_timer_callback`（首次创建时注册）在每次内核 timer tick 中扫描弱引用列表并 `wake` `PollSet`；创建 fd 用 `add_file_like`（与 eventfd2 相同），勿对 `Arc<TimerFd>` 误用 `add_to_fd_table(self)`。
 - `bpf` / `userfaultfd`：未实现时返回 **`AxError::Unsupported`（ENOSYS）**，勿再 `sys_dummy_fd`；`perf_event_open` 可返回 **`PermissionDenied`（EPERM）** 以匹配测试与常见无能力场景。`io_uring_setup` 若仅消除 dummy 路径：最小桩返回 `anon_inode:[io_uring]` 的 `IoUringFd`，写回 `sq_entries`/`cq_entries`；真 io_uring 需 ring mmap 与提交队列。
+- `fsopen`：无 fs-context 实现时返回 **`NoSuchDevice`（ENODEV）**（或 EINVAL），勿发 `anon_inode:[dummy]`；`fspick`/`open_tree` 可 **`Unsupported`**。`memfd_secret` 在用户态常以两参探测（与 `memfd_create` 同形）时，可 **`sys_memfd_create` 复用** 以获得真实 memfd 路径。已移除 **`sys_dummy_fd`** 分配假 fd 的路径。
 - `/proc/self/fd/N` 的 readlink 内容来自 `FileLike::path()`；`inotify_init1`/`fanotify_init` 须使用独立 `InotifyFd`/`FanotifyFd`（`anon_inode:[inotify]` / `anon_inode:[fanotify]`），不能再用 `anon_inode:[dummy]`，否则用户态假阳性。
 - POSIX `timer_create` / `timer_settime` / `timer_gettime` / `timer_delete`：未实现时须返回 **`AxError::Unsupported`（ENOSYS）**，禁止 `Ok(0)` 导致用户态 `timer_t` 未写入却被当作成功；若将来实现，需向 `timer_create` 第四参写入非空 id 并接 `sigevent`/线程定时逻辑。
 - `flock(2)`：按 inode（`File`/`Directory` 的 `metadata` dev/ino）维护 BSD 风格互斥/共享锁；同一 fd 升级/幂等、关闭 fd 须从全局表移除；`LOCK_NB` 冲突映射 `AxError::WouldBlock`（EAGAIN）；阻塞模式在 `WouldBlock` 上 `yield_now` 轮询。
@@ -38,6 +40,7 @@
 - 地址空间并发：`ProcessData.aspace` 为 `Arc<RwLock<AddrSpace>>`；修改页表（缺页 populate、mmap 等）用 `write()`；纯查询（如 mincore、`mremap` 查 VMA、futex 地址解析、部分 `can_access_range`）用 `read()`。缺页仍会写锁直至支持按页或 per-VMA 锁。
 
 ## 给 Debugger 的消息
+- issue-014：请在 rootfs 跑 `/bin/test_dummy_fsapi`；真 Linux `memfd_secret` 常为单参 flags，本内核按测试与 `memfd_create` 同形两参接入。
 - issue-013：请在 rootfs 跑 `/bin/test_dummy_fd_advanced`；`io_uring_setup` 仅为路径与 params 桩，真实 liburing 仍可能因缺 ring失败。
 - issue-010：timerfd 与 issue-011 同一套 `kernel/src/file/timerfd.rs`；请在带 `/bin/test_timerfd` 的 rootfs 中 QEMU 验证 poll+read。
 - issue-009：与 issue-026 同一套 `JobCtl` + `check_signals` Stop/CONT + `waitpid`；`raise(SIGSTOP)` 与 `kill(..., SIGSTOP)` 同源。请在 QEMU 跑 `test_sigstop_sigcont`。

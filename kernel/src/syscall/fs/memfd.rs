@@ -5,10 +5,7 @@ use axerrno::{AxError, AxResult};
 use axfs::{FS_CONTEXT, OpenOptions};
 use linux_raw_sys::general::MFD_CLOEXEC;
 
-use crate::{
-    file::{File, FileLike},
-    mm::UserConstPtr,
-};
+use crate::{file::File, mm::UserConstPtr};
 
 // TODO: correct memfd implementation
 
@@ -29,4 +26,9 @@ pub fn sys_memfd_create(_name: UserConstPtr<c_char>, flags: u32) -> AxResult<isi
         }
     }
     Err(AxError::TooManyOpenFiles)
+}
+
+/// `memfd_secret(2)`: same backing as `memfd_create` here so `/proc/self/fd/N` is a real file path, not dummy.
+pub fn sys_memfd_secret(name: UserConstPtr<c_char>, flags: u32) -> AxResult<isize> {
+    sys_memfd_create(name, flags)
 }

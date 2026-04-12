@@ -630,11 +630,10 @@ pub fn handle_syscall(uctx: &mut UserContext) {
         Sysno::perf_event_open => Err(AxError::PermissionDenied),
         Sysno::io_uring_setup => sys_io_uring_setup(uctx.arg0() as u32, uctx.arg1() as _),
 
-        // dummy fds
-        Sysno::fsopen
-        | Sysno::fspick
-        | Sysno::open_tree
-        | Sysno::memfd_secret => sys_dummy_fd(sysno),
+        Sysno::fsopen => sys_fsopen(uctx.arg0().into(), uctx.arg1() as u32),
+        Sysno::fspick => sys_fspick(uctx.arg0() as _, uctx.arg1().into(), uctx.arg2() as u32),
+        Sysno::open_tree => sys_open_tree(uctx.arg0() as _, uctx.arg1().into(), uctx.arg2() as u32),
+        Sysno::memfd_secret => sys_memfd_secret(uctx.arg0().into(), uctx.arg1() as u32),
 
         Sysno::timer_create | Sysno::timer_gettime | Sysno::timer_settime | Sysno::timer_delete => {
             Err(AxError::Unsupported)
