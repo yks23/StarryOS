@@ -1,0 +1,7 @@
+kernel-state.json
+daemon-state.json
+daemon.pid
+msg-queue/debugger/*.json
+msg-queue/executor/*.json
+logs/*.log
+__pycache__/
