@@ -153,6 +153,11 @@ pub fn sys_truncate(path: UserConstPtr<c_char>, length: __kernel_off_t) -> AxRes
     // negative `length` when both apply (Linux `do_truncate`/`user_path_at_empty` order; issue-318).
     // `ftruncate` is different: **fd** before `length` (issue-316).
     let path = path.get_as_str()?;
+    // Linux rejects empty pathname with EINVAL before open (issue-406; issue-393 theme; path/length
+    // order issue-318).
+    if path.is_empty() {
+        return Err(AxError::InvalidInput);
+    }
     if length < 0 {
         return Err(AxError::InvalidInput);
     }
