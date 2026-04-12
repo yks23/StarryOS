@@ -67,6 +67,13 @@ pub fn sys_capget(
     header: *mut __user_cap_header_struct,
     data: *mut __user_cap_data_struct,
 ) -> AxResult<isize> {
+    // NULL pointers → **EFAULT** (`BadAddress`), aligned with `fstatat`/`statx` (issue-283, issue-304).
+    if header.is_null() {
+        return Err(AxError::BadAddress);
+    }
+    if data.is_null() {
+        return Err(AxError::BadAddress);
+    }
     let header = read_cap_header(header)?;
     let target = resolve_cap_target(&header)?;
     ensure_same_process_for_cap(&target)?;
@@ -92,6 +99,13 @@ pub fn sys_capset(
     header: *mut __user_cap_header_struct,
     data: *mut __user_cap_data_struct,
 ) -> AxResult<isize> {
+    // Same NULL rules as `sys_capget` (issue-304).
+    if header.is_null() {
+        return Err(AxError::BadAddress);
+    }
+    if data.is_null() {
+        return Err(AxError::BadAddress);
+    }
     let header = read_cap_header(header)?;
     let target = resolve_cap_target(&header)?;
     ensure_same_process_for_cap(&target)?;

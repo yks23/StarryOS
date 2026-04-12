@@ -1,0 +1,27 @@
+{
+  "id": "issue-304",
+  "title": "`capget(2)`/`capset(2)`：`sys_capget`/`sys_capset` 未在读写 `header`/`data` 前显式拒绝 `NULL` 指针，与 `fstatat`/`statx` 输出指针早退（issue-283）及 Linux `EFAULT` 语义不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T14:00:00Z",
+  "severity": "low",
+  "fix_summary": "在 `sys_capget`/`sys_capset` 入口对 `header`、`data` 分别 `is_null()` 检查，返回 `AxError::BadAddress`（EFAULT），先于 `read_cap_header`，与 `stat.rs` issue-283 模式一致；`executor-memory` capget/capset 条补充说明。",
+  "files_changed": ["kernel/src/syscall/task/ctl.rs", "auto-evolve/memory/executor-memory.md"],
+  "description": "**`kernel/src/syscall/task/ctl.rs`** **`sys_capget`** **、** **`sys_capset`** **直接** **调用** **`read_cap_header(header)`** **、** **`read_cap_data_user(data)`** **、** **`data.vm_write(...)`** **等** **，** **未** **像** **`syscall/fs/stat.rs`** **`fstatat`/`statx`** **那样** **在** **入口** **对** **`header`/`data`** **`is_null()`** **显式** **早退** **`EFAULT`/`BadAddress`** **。** **Linux** **`capget`/`capset`** **对** **无效** **用户** **指针** **返回** **`EFAULT`** **；** **本** **实现** **虽** **可能** **在** **`vm_read`/`vm_write`** **链** **中间** **失败** **，** **但** **错误** **优先级** **/** **与** **仓库** **内** **同类** **syscall** **的** **可读性** **/** **防御** **风格** **不** **统一** **。**\n\n**建议** **：** **在** **`sys_capget`/`sys_capset`** **开头** **对** **`header.is_null()`** **、** **`data.is_null()`** **分别** **校验** **（** **顺序** **可** **对照** **上游** **`capget`/`capset`** **）** **，** **与** **issue-283** **模式** **对齐** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["capget", "capset"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/ctl.rs:66-107"],
+    "related_files": ["kernel/src/syscall/fs/stat.rs"],
+    "key_insight": "cap 指针 NULL 未显式早退；与 stat 类 issue-283 不一致"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：用户态传入 `header` 或 `data` 为 NULL，对照 Linux 返回 EFAULT。",
+    "expected_output_contains": "",
+    "pass_criteria": "`capget`/`capset` 对 NULL `header`/`data` 有显式早退且错误码与约定一致，或经评审接受当前间接失败路径。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `sys_capget`/`sys_capset` 入口增加 `header`/`data` 空指针检查，返回 `AxError::BadAddress`，并视需要调整 `read_cap_header` 调用顺序。",
+  "references": ["man 2 capget", "man 2 capset", "kernel/src/syscall/task/ctl.rs", "issue-283"]
+}
