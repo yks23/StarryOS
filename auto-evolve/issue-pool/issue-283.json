@@ -1,0 +1,27 @@
+{
+  "id": "issue-283",
+  "title": "fstatat/statx：`statbuf`/`statxbuf` 非法时仍先 resolve，错误顺序可与 Linux 分叉",
+  "status": "resolved",
+  "created_at": "2026-04-13T00:16:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_fstatat`：`vm_load_string` 后、`resolve_at` 前若 `statbuf.is_null()` 则 `BadAddress`。`sys_statx`：path 加载后、`resolve_at` 前若 `statxbuf.is_null()` 则 `BadAddress`。与 issue-281 输出缓冲早退策略一致。",
+  "files_changed": ["kernel/src/syscall/fs/stat.rs"],
+  "description": "**`kernel/src/syscall/fs/stat.rs`** **`sys_fstatat`**（约 **44–69** 行）在校验 **flags**、加载 **`path`** **后** **调用** **`resolve_at(...)?`** **与** **`loc.stat()?`** **，** **最后** **`statbuf.vm_write(...)?`** **。** **未** **在** **`resolve_at`** **之前** **对** **`statbuf`** **做** **显式** **非** **NULL** **/****可写** **探测** **（** **与** **已** **修复** **的** **issue-281** **`statfs`/`fstatfs`** **中** **`buf`** **早退** **不同** **）** **。**\n\n**`sys_statx`**（约 **72–126** 行）同理：**`resolve_at(...)?`** **与** **`stat()?`** **完成后** **再** **`statxbuf.vm_write(...)?`** **。**\n\n**Linux** **`newfstatat`/`statx`** **路径** **通常** **在** **向** **用户** **拷贝** **`struct stat`/`struct statx`** **前** **校验** **输出** **指针** **；** **当** **`statbuf`/`statxbuf`** **为** **NULL** **或** **不可写** **时** **`EFAULT`** **与** **`ENOENT`/`ENOTDIR`** **等** **的** **先后** **可能** **与** **「** **先** **完成** **路径** **解析** **再** **失败** **于** **`copy_to_user`****」** **不同** **。** **issue-281** **已** **覆盖** **`statfs`/`fstatfs`** **；** **本** **条** **跟踪** **`fstatat`/`statx`** **同类** **缺口** **。**\n\n**建议**：在 **`sys_fstatat`** **中** **于** **`resolve_at`** **之前** **（** **flags** **校验** **与** **`path`** **加载** **之后** **即可** **）** **若** **`statbuf.is_null()`** **则** **`BadAddress`** **；** **`sys_statx`** **对** **`statxbuf`** **同理** **。** **若** **与** **某** **Linux** **版本** **行为** **仍** **不一致** **，** **对照** **`vfs_fstatat`/`vfs_statx`** **与** **`copy_to_user`** **顺序** **逐条** **对齐** **或** **文档化** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["fstatat", "newfstatat", "statx"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/stat.rs:44-69", "kernel/src/syscall/fs/stat.rs:72-126"],
+    "related_files": [],
+    "key_insight": "fstatat/statx 输出指针未在 resolve 前校验，与 issue-281 statfs 修复不同路径"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 Linux newfstatat/statx 对输出缓冲区的校验顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "非法 statbuf/statxbuf 时错误码与顺序与目标 Linux 一致，或显式文档化差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `resolve_at` 之前对 `statbuf`/`statxbuf` 做 `is_null()` 早退或等价 access_ok，与 issue-281 策略一致。",
+  "references": ["man 2 fstatat", "man 2 statx", "kernel/src/syscall/fs/stat.rs", "issue-281"]
+}

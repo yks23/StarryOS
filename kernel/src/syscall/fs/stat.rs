@@ -63,6 +63,11 @@ pub fn sys_fstatat(
 
     debug!("sys_fstatat <= dirfd: {dirfd}, path: {path:?}, flags: {flags}");
 
+    // Output buffer before `resolve_at` (issue-283; same class as issue-281 `statfs`).
+    if statbuf.is_null() {
+        return Err(AxError::BadAddress);
+    }
+
     let loc = resolve_at(dirfd, path.as_deref(), flags)?;
     statbuf.vm_write(loc.stat()?.into())?;
 
@@ -119,6 +124,10 @@ pub fn sys_statx(
 
     let path = path.nullable().map(vm_load_string).transpose()?;
     debug!("sys_statx <= dirfd: {dirfd}, path: {path:?}, flags: {flags}, mask: {mask}");
+
+    if statxbuf.is_null() {
+        return Err(AxError::BadAddress);
+    }
 
     let kstat = resolve_at(dirfd, path.as_deref(), flags)?.stat()?;
     statxbuf.vm_write(kstat.into_statx_with_mask(mask))?;
