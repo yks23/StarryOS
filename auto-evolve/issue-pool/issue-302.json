@@ -1,0 +1,27 @@
+{
+  "id": "issue-302",
+  "title": "`arch_prctl(2)`/`fork(2)` 仅 `x86_64` 分发；`task ops`/`task management` 段无 ABI 旁注说明 riscv 上无 `Sysno::arch_prctl`/`fork` 与 `clone` 等关系",
+  "status": "resolved",
+  "created_at": "2026-04-13T22:05:00Z",
+  "severity": "low",
+  "fix_summary": "在 `mod.rs` 中 `Sysno::arch_prctl` 与 `Sysno::fork` 的 `#[cfg]` 前分别增加注释：arch_prctl 为 x86 专用、riscv 无对应 Sysno；fork 仅 x86 系 Sysno 有号、riscv libc 经 clone/clone3 → sys_clone/sys_clone3。`executor-memory` 在 `clone3(2)` 条末补充 fork/arch_prctl 与 issue-302。",
+  "files_changed": ["kernel/src/syscall/mod.rs", "auto-evolve/memory/executor-memory.md"],
+  "description": "**`kernel/src/syscall/mod.rs`** **`// task ops`** **段** **`Sysno::arch_prctl`** **（** **约** **436–437** **行** **）** **与** **`// task management`** **段** **`Sysno::fork`** **（** **约** **479–480** **行** **）** **均** **`#[cfg(target_arch = \"x86_64\")]`** **；** **`clone`** **/** **`clone3`** **等** **无** **此** **限制** **。** **与** **issue-301** **`fd ops`** **`open`/`dup2`** **同类** **文档** **缺口** **：** **`arch_prctl`** **为** **x86** **特有** **TLS/FS** **接口** **，** **riscv** **`syscalls::Sysno`** **通常** **无** **对应** **号** **；** **`fork(2)`** **在** **多** **架构** **上** **常** **由** **`libc`** **经** **`clone`/`clone3`** **或** **等价** **路径** **实现** **，** **而非** **独立** **`__NR_fork`** **。**\n\n**同** **文件** **中** **`poll`/`pipe`/`file ops`** **等** **已** **有** **issue-291**/**298**/**300** **风格** **旁注** **；** **`arch_prctl`** **与** **`fork`** **cfg** **前** **仅** **有** **段** **标题** **，** **无** **说明** **读者** **易** **误判** **为** **riscv** **遗漏** **实现** **。**\n\n**建议**：在 **`Sysno::arch_prctl`** **与** **`Sysno::fork`** **`#[cfg]`** **前** **各** **补** **一行** **或** **共** **一段** **概括** **注释** **（** **或** **在** **`executor-memory`** **`clone`/`task`** **相关** **条** **中** **并列** **）** **：** **`riscv64`** **上** **无** **`Sysno::arch_prctl`**/**`fork`** **时** **用户态** **如何** **路由** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["arch_prctl", "fork", "clone", "clone3"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/mod.rs:433-480"],
+    "related_files": ["auto-evolve/memory/executor-memory.md"],
+    "key_insight": "arch_prctl/fork 仅 x86_64；task 段无 poll/file_ops 式 ABI 旁注"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 musl riscv `fork` 与 `clone`、x86 `arch_prctl` 专属性。",
+    "expected_output_contains": "",
+    "pass_criteria": "`mod.rs` 或 executor 对 `arch_prctl`/`fork` 与 riscv `clone`/无 arch_prctl 的关系有明确说明，或经评审认为无需补充。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `task ops` 的 `arch_prctl` 与 `task management` 的 `fork` 前增加与 `io_mpx`/issue-300 同风格的 ABI/路由说明注释。",
+  "references": ["man 2 arch_prctl", "man 2 fork", "man 2 clone", "kernel/src/syscall/mod.rs", "issue-301"]
+}

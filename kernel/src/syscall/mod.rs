@@ -433,6 +433,8 @@ pub fn handle_syscall(uctx: &mut UserContext) {
         // task ops
         Sysno::execve => sys_execve(uctx, uctx.arg0() as _, uctx.arg1() as _, uctx.arg2() as _),
         Sysno::set_tid_address => sys_set_tid_address(uctx.arg0()),
+        // `arch_prctl(2)` is x86-specific (FS/GS base, TLS). `Sysno::arch_prctl` exists only on
+        // x86 ABIs; Linux riscv64/aarch64 have no `arch_prctl` syscall or `Sysno` variant (issue-302).
         #[cfg(target_arch = "x86_64")]
         Sysno::arch_prctl => sys_arch_prctl(uctx, uctx.arg0() as _, uctx.arg1() as _),
         Sysno::prctl => sys_prctl(
@@ -476,6 +478,10 @@ pub fn handle_syscall(uctx: &mut UserContext) {
             uctx.arg0() as _, // args_ptr
             uctx.arg1() as _, // args_size
         ),
+        // Legacy `fork(2)` syscall number exists only on ABIs where `syscalls::Sysno` defines
+        // `Sysno::fork` (x86/x86_64). Linux riscv64/aarch64 typically have no separate `__NR_fork`;
+        // libc implements `fork(2)` via `clone` / `clone3` with the traditional flags → `sys_clone` /
+        // `sys_clone3` above (issue-302; symmetric to `fd ops` `open`/`dup2`, issue-301).
         #[cfg(target_arch = "x86_64")]
         Sysno::fork => sys_fork(uctx),
         Sysno::exit => sys_exit(uctx.arg0() as _),
