@@ -1,0 +1,50 @@
+{
+  "id": "issue-004",
+  "title": "ProcessData.aspace 使用全局 Mutex，多线程 page fault/mmap 路径严重串行化",
+  "status": "resolved",
+  "created_at": "2026-04-12T12:00:00Z",
+  "resolved_at": "2026-04-12T23:30:00Z",
+  "severity": "high",
+  "description": "同一进程所有线程共享 Arc<Mutex<AddrSpace>>。page fault、mmap、fork try_clone 等均需持锁，多核上多线程并发缺页时全部串行等待，构成性能瓶颈。短期可评估 RwLock；中期 per-VMA 锁或 RCU。",
+  "category": "concurrency",
+  "fix_summary": "ProcessData.aspace 改为 Arc<RwLock<AddrSpace>>（spin）。缺页与用户态 fault、populate、mmap/munmap/mprotect/brk/execve/shm、fork try_clone 等修改页表/VMA 的路径用 write()；mincore、mremap find_area、用户串 can_access_range、futex 查 VMA、CLONE_THREAD 读 page_table_root 等用 read() 以并行只读；try_clone 产物与 file eviction 监听改为 RwLock/try_write。",
+  "files_changed": [
+    "kernel/src/task/mod.rs",
+    "kernel/src/entry.rs",
+    "kernel/src/task/user.rs",
+    "kernel/src/mm/access.rs",
+    "kernel/src/syscall/mm/brk.rs",
+    "kernel/src/syscall/mm/mmap.rs",
+    "kernel/src/syscall/mm/mincore.rs",
+    "kernel/src/syscall/task/execve.rs",
+    "kernel/src/task/futex.rs",
+    "kernel/src/syscall/ipc/shm.rs",
+    "kernel/src/syscall/task/clone.rs",
+    "kernel/src/mm/aspace/mod.rs",
+    "kernel/src/mm/aspace/backend/mod.rs",
+    "kernel/src/mm/aspace/backend/file.rs",
+    "kernel/src/mm/aspace/backend/shared.rs",
+    "kernel/src/mm/aspace/backend/linear.rs",
+    "kernel/src/mm/aspace/backend/cow.rs",
+    "auto-evolve/issue-pool/issue-004.json"
+  ],
+  "affected_syscalls": ["mmap", "munmap", "mprotect", "brk", "clone", "fork"],
+  "source_context": {
+    "primary_files": [
+      "kernel/src/task/mod.rs:195-197",
+      "kernel/src/task/user.rs:33-36"
+    ],
+    "related_files": ["kernel/src/mm/aspace/"],
+    "key_insight": "handle_page_fault 在 aspace.lock() 内执行"
+  },
+  "test": {
+    "source_file": "auto-evolve/tests/test_aspace_concurrent_mmap.c",
+    "build_command": "riscv64-linux-musl-gcc -static -o test_aspace_concurrent_mmap test_aspace_concurrent_mmap.c -lpthread",
+    "run_method": "QEMU 中运行；观察多线程 mmap/munmap 是否死锁或失败",
+    "expected_output_contains": "SUMMARY",
+    "pass_criteria": "并发 mmap/munmap 全部成功（功能基线）；性能问题需 profiling 另行验证",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu 通过；性能需 profiling / QEMU 跑 test_aspace_concurrent_mmap"
+  },
+  "suggested_fix": "将 Mutex 换为 RwLock 并在 page fault 读路径用读锁；长期引入 per-VMA 锁。",
+  "references": ["Question1.md §1.4 问题1", "Question1.md 改进2"]
+}

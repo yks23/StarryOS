@@ -1,0 +1,25 @@
+{
+  "id": "issue-018",
+  "title": "sched_getscheduler hardcoded SCHED_RR; sched_setscheduler/getparam are no-op",
+  "status": "open",
+  "created_at": "2026-04-12T12:00:00Z",
+  "severity": "medium",
+  "description": "sched_getscheduler 恒返回 SCHED_RR；sched_setscheduler/sched_getparam 直接 Ok(0)，与 Linux 普通进程 SCHED_OTHER 不一致。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["sched_getscheduler", "sched_setscheduler", "sched_getparam"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/schedule.rs:130-140"],
+    "related_files": [],
+    "key_insight": "无真实调度策略状态"
+  },
+  "test": {
+    "source_file": "auto-evolve/tests/test_sched_stubs.c",
+    "build_command": "riscv64-linux-musl-gcc -static -o test_sched_stubs test_sched_stubs.c",
+    "run_method": "运行 /bin/test_sched_stubs",
+    "expected_output_contains": "SUMMARY",
+    "pass_criteria": "sched_getscheduler(0)==SCHED_OTHER",
+    "last_result": "待运行；Starry 上预期为 RR"
+  },
+  "suggested_fix": "在进程/线程元数据中记录 policy/priority；默认 OTHER。",
+  "references": ["man 2 sched_getscheduler"]
+}

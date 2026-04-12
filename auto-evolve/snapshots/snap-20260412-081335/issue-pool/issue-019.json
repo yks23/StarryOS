@@ -1,0 +1,25 @@
+{
+  "id": "issue-019",
+  "title": "madvise, msync, mlock/mlock2 are no-ops (Ok(0) without effect)",
+  "status": "open",
+  "created_at": "2026-04-12T12:00:00Z",
+  "severity": "medium",
+  "description": "sys_madvise/sys_msync/sys_mlock2 直接返回 Ok(0)，MADV_DONTNEED 不丢弃页，msync 不刷盘，mlock 不钉页。",
+  "category": "syscall-stub",
+  "affected_syscalls": ["madvise", "msync", "mlock", "mlock2"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/mm/mmap.rs:320-337"],
+    "related_files": [],
+    "key_insight": "与 Question2.md 2.2 表一致"
+  },
+  "test": {
+    "source_file": "auto-evolve/tests/test_mm_noop.c",
+    "build_command": "riscv64-linux-musl-gcc -static -o test_mm_noop test_mm_noop.c",
+    "run_method": "运行 /bin/test_mm_noop",
+    "expected_output_contains": "SUMMARY",
+    "pass_criteria": "MADV_DONTNEED 后页内容为 0",
+    "last_result": "待运行"
+  },
+  "suggested_fix": "在地址空间层实现 DONTNEED/同步/钉页语义。",
+  "references": ["man 2 madvise"]
+}

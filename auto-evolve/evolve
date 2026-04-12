@@ -45,6 +45,18 @@ case "${1:-help}" in
         shift
         python3 "$DIR/kernel.py" send "$@"
         ;;
+    snap)
+        python3 "$DIR/monitor.py" snap
+        ;;
+    report)
+        python3 "$DIR/monitor.py" report
+        ;;
+    history)
+        python3 "$DIR/monitor.py" history
+        ;;
+    monitor)
+        python3 "$DIR/monitor.py" run
+        ;;
     help|--help|-h)
         echo "Auto-Evolve: Starry OS 自动迭代体系"
         echo ""
@@ -58,11 +70,16 @@ case "${1:-help}" in
         echo "  gui                 启动 TUI 仪表盘"
         echo "  drop <agent> <file> 拖拽文件给 agent"
         echo "  send <agent> <msg>  手动发消息给 agent"
+        echo "  snap                立即拍一次快照"
+        echo "  report              打印当前进度报告"
+        echo "  history             查看快照历史曲线"
+        echo "  monitor             启动定时监控（每小时快照）"
         echo ""
         echo "示例:"
         echo "  ./auto-evolve/evolve drop debugger Question1.md"
         echo "  ./auto-evolve/evolve send executor '请修复 timerfd'"
         echo "  ./auto-evolve/evolve gui"
+        echo "  ./auto-evolve/evolve report"
         ;;
     *)
         echo "未知命令: $1（使用 --help 查看帮助）"

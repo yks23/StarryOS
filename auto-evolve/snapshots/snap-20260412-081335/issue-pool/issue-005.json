@@ -1,0 +1,28 @@
+{
+  "id": "issue-005",
+  "title": "membarrier 非 QUERY 路径仅用 compiler_fence，无跨 CPU 内存屏障语义",
+  "status": "resolved",
+  "created_at": "2026-04-12T12:00:00Z",
+  "resolved_at": "2026-04-12T14:00:00Z",
+  "severity": "critical",
+  "description": "sys_membarrier 在 MEMBARRIER_CMD_GLOBAL 等命令上仅执行 compiler_fence，不生成 CPU 屏障指令，也未通过 IPI 让其他 CPU 执行 fence。多核下依赖 membarrier 的用户态同步（如 hazard pointer、部分 jemalloc/crossbeam 路径）可能出现极难复现的数据竞争。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["membarrier"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/sync/membarrier.rs:20-32"],
+    "related_files": [],
+    "key_insight": "非 QUERY 分支 compiler_fence(SeqCst) 后 Ok(0)，无 IPI/全核屏障"
+  },
+  "fix_summary": "非 QUERY 路径使用 atomic::fence(Ordering::SeqCst) 产生 CPU 级内存屏障；仅接受 QUERY 与已宣告支持的 barrier/register 命令，其余返回 EINVAL。当前默认单核构建下满足本地 hart 全序；若启用 SMP，全核 membarrier 仍需在 axfeat/ipi 可用时以 IPI 在各核执行 fence。",
+  "files_changed": ["kernel/src/syscall/sync/membarrier.rs"],
+  "test": {
+    "source_file": "auto-evolve/tests/test_membarrier.c",
+    "build_command": "riscv64-linux-musl-gcc -static -o test_membarrier test_membarrier.c",
+    "run_method": "QEMU 中运行 /bin/test_membarrier",
+    "expected_output_contains": "SUMMARY",
+    "pass_criteria": "QUERY/GLOBAL 调用成功（接口级）；跨核排序正确性需结合 axhal IPI 与架构屏障另行证明",
+    "last_result": "riscv64-linux-musl-gcc 交叉编译通过；cargo clippy(-F qemu) 与 make ARCH=riscv64 build 通过"
+  },
+  "suggested_fix": "在 axhal 提供 IPI 或全核屏障原语；各 CPU 在 handler 中执行对应 fence/dmb/mfence。",
+  "references": ["man 2 membarrier", "Question1.md §1.4 问题2"]
+}

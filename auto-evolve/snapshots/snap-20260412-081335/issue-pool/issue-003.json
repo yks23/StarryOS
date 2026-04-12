@@ -1,0 +1,25 @@
+{
+  "id": "issue-003",
+  "title": "getpriority 始终返回固定 nice，未反映 setpriority 设置",
+  "status": "open",
+  "created_at": "2026-04-12T12:00:00Z",
+  "severity": "medium",
+  "description": "sys_getpriority 对 PRIO_PROCESS/PRIO_PGRP 等分支始终返回 20，未读取进程实际 nice。setpriority 若后续实现后仍与 getpriority 不一致将导致用户态工具误判优先级。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["getpriority", "setpriority"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/schedule.rs:142-167"],
+    "related_files": ["kernel/src/syscall/mod.rs:389"],
+    "key_insight": "所有成功路径返回常量 20"
+  },
+  "test": {
+    "source_file": "auto-evolve/tests/test_getpriority.c",
+    "build_command": "riscv64-linux-musl-gcc -static -o test_getpriority test_getpriority.c",
+    "run_method": "QEMU 中运行 /bin/test_getpriority",
+    "expected_output_contains": "SUMMARY",
+    "pass_criteria": "setpriority(PRIO_PROCESS,0,5) 后 getpriority 返回 5",
+    "last_result": "待运行"
+  },
+  "suggested_fix": "在 Process/Thread 中存储 nice，setpriority 更新，getpriority 返回实际值（注意 Linux 返回值与内核 nice 的换算）。",
+  "references": ["man 2 getpriority", "Question1.md §1.2"]
+}

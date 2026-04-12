@@ -1,0 +1,35 @@
+{
+  "id": "issue-009",
+  "title": "SIGSTOP/SIGTSTP 等 Stop 动作为 do_exit，SIGCONT 未实现",
+  "status": "resolved",
+  "created_at": "2026-04-12T12:00:00Z",
+  "resolved_at": "2026-04-12T23:45:00Z",
+  "severity": "high",
+  "description": "SignalOSAction::Stop 分支调用 do_exit 终止进程而非进入 stopped 状态；Continue 为空。导致 Ctrl+Z、job control 与 shell 前台/后台行为完全不可用。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["kill", "tgkill", "sigaction", "waitpid", "rt_sigreturn"],
+  "fix_summary": "与 issue-026 同源修复已合入：Stop 写入 ProcessData::jobctl（stop_sig/stop_wait_pending）、唤醒父进程 wait、内核循环 yield+递归 check_signals 直至 SIGCONT；Continue 清除停止并置 continued_wait_pending；waitpid 支持 WUNTRACED/WCONTINUED（及 options==0 时同类上报）。子进程 raise(SIGSTOP) 经 kill/tgkill 投递后与 kill(SIGSTOP) 走同一 check_signals 路径。",
+  "files_changed": [
+    "kernel/src/task/mod.rs",
+    "kernel/src/task/signal.rs",
+    "kernel/src/task/ops.rs",
+    "kernel/src/syscall/task/wait.rs",
+    "auto-evolve/issue-pool/issue-009.json",
+    "auto-evolve/memory/executor-memory.md"
+  ],
+  "source_context": {
+    "primary_files": ["kernel/src/task/signal.rs:21-35"],
+    "related_files": [],
+    "key_insight": "Stop => do_exit(1); Continue => TODO"
+  },
+  "test": {
+    "source_file": "auto-evolve/tests/test_sigstop_sigcont.c",
+    "build_command": "riscv64-linux-musl-gcc -static -o test_sigstop_sigcont test_sigstop_sigcont.c",
+    "run_method": "QEMU 中运行 /bin/test_sigstop_sigcont",
+    "expected_output_contains": "SUMMARY",
+    "pass_criteria": "子进程 raise(SIGSTOP) 后 waitpid(WUNTRACED) 得到 WIFSTOPPED 且 WSTOPSIG==SIGSTOP",
+    "last_result": "逻辑与 issue-026 一致；cargo clippy -F qemu 已通过；请在 QEMU 跑 test_sigstop_sigcont 实机确认"
+  },
+  "suggested_fix": "在 axtask/Thread 中实现 stopped 状态与等待队列；SIGCONT 唤醒；waitpid 支持 WUNTRACED/WCONTINUED。",
+  "references": ["Question1.md 改进1"]
+}
