@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-370 resolved（**`msgctl` `MSG_STAT`**：**`msg_queue_order` `VecDeque`** **按** **创建顺序** **枚举** **活动** **队列**（**idr** **槽** **下标**）；**非** **`msqid` `BTreeMap`** **键序**；**`msg.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-369 resolved（**`msgrcv` `MSG_COPY`**：**`fifo_order` `VecDeque`** **对齐** **Linux** **`q_messages` FIFO**；**`get_message_by_index`/`get_total_message_count`**；**`msgtyp < 0`** **→** **`EINVAL`**；**`msg.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-14：issue-368 resolved（**`getpriority`/`setpriority`** **`PRIO_PGRP`**：**`processes()`** **无** **`pgid`** **匹配** **→** **`NoSuchProcess`（ESRCH）**；**与** **`PRIO_USER`** **对称**；**`schedule.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-14：issue-367 resolved（**`timerfd_settime`**：**`new_value==NULL`** **→** **`BadAddress`（EFAULT）**；**`flags`** **掩码** **仍** **先于** **NULL** **（** **issue-330** **）**；**`timerfd.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）

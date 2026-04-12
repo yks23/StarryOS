@@ -292,6 +292,9 @@ pub struct MsgManager {
     key_msqid: BTreeMap<i32, i32>,
     /// msqid -> message queue structure
     msqid_queues: BTreeMap<i32, Arc<Mutex<MessageQueue>>>,
+    /// Creation order of message queues (Linux `MSG_STAT` / idr-style enumeration). Updated on
+    /// insert/remove; queues with `mark_removed` are skipped when resolving a slot index.
+    msg_queue_order: VecDeque<i32>,
 }
 
 impl MsgManager {
@@ -299,6 +302,7 @@ impl MsgManager {
         MsgManager {
             key_msqid: BTreeMap::new(),
             msqid_queues: BTreeMap::new(),
+            msg_queue_order: VecDeque::new(),
         }
     }
 
@@ -332,7 +336,9 @@ impl MsgManager {
 
     /// Inserts a mapping from a message queue ID to its queue.
     pub fn insert_msqid_queues(&mut self, msqid: i32, msg_queue: Arc<Mutex<MessageQueue>>) {
-        self.msqid_queues.insert(msqid, msg_queue);
+        if self.msqid_queues.insert(msqid, msg_queue).is_none() {
+            self.msg_queue_order.push_back(msqid);
+        }
     }
 
     /// Returns the current number of message queues.
@@ -344,6 +350,25 @@ impl MsgManager {
     pub fn remove_msqid(&mut self, msqid: i32) {
         self.key_msqid.retain(|_, &mut v| v != msqid);
         self.msqid_queues.remove(&msqid);
+        self.msg_queue_order.retain(|&id| id != msqid);
+    }
+
+    /// *n*-th **active** message queue in **creation order** (Linux `MSG_STAT` slot index / idr
+    /// enumeration), not sorted by `msqid` key.
+    pub fn nth_active_msg_queue_for_msg_stat(
+        &self,
+        n: usize,
+    ) -> Option<(i32, &Arc<Mutex<MessageQueue>>)> {
+        self.msg_queue_order
+            .iter()
+            .copied()
+            .filter(|&id| {
+                self.msqid_queues
+                    .get(&id)
+                    .is_some_and(|q| !q.lock().mark_removed)
+            })
+            .nth(n)
+            .and_then(|id| self.msqid_queues.get(&id).map(|q| (id, q)))
     }
 
     /// get total bytes in all queues
@@ -819,8 +844,7 @@ pub fn sys_msgctl(msqid: i32, cmd: i32, buf: usize) -> AxResult<isize> {
         let msg_manager = MSG_MANAGER.lock();
 
         let result = msg_manager
-            .iter_active_queues()
-            .nth(msqid as usize)
+            .nth_active_msg_queue_for_msg_stat(msqid as usize)
             .ok_or(AxError::from(LinuxError::EINVAL))
             .and_then(|(actual_msqid, queue)| {
                 let guard = queue.lock();

@@ -1,0 +1,32 @@
+{
+  "id": "issue-370",
+  "title": "`msgctl(2)` `MSG_STAT`：`sys_msgctl` 用 `iter_active_queues().nth(msqid)` 按 `msqid` 键序遍历队列表，与 Linux `MSG_STAT` 以 `msqid` 参数作为内核消息队列槽位下标（`msg_ids`/idr 迭代顺序）的语义可能不对齐",
+  "status": "resolved",
+  "created_at": "2026-04-12T23:35:00Z",
+  "resolved_at": "2026-04-12T23:59:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/ipc/msg.rs`** **`sys_msgctl`** **`MSG_STAT`** **分支** **（** **约** **792–815** **行** **）** **：** **`msg_manager.iter_active_queues().nth(msqid as usize)`** **在** **`BTreeMap<i32, …>`** **`msqid_queues`** **上** **迭代** **，** **顺序** **为** **`msqid`** **键** **升序** **。** **Linux** **`MSG_STAT`** **（** **及** **与** **之** **配套的** **下标** **语义** **）** **中** **，** **第三个** **参数** **在** **`MSG_STAT`** **路径** **常** **被** **解释** **为** **「** **第** **`n`** **个** **活动** **队列** **槽** **」** **，** **其** **顺序** **来自** **内核** **`ipc`** **子系统** **的** **分配** **/`idr`** **顺序** **，** **未必** **与** **纯** **`msqid`** **数值** **排序** **一致** **。** **在** **存在** **空洞** **或** **非** **单调** **`msqid`** **分配** **时** **，** **同一** **下标** **`n`** **在** **Starry** **与** **Linux** **可能** **指向** **不同** **队列** **，`ipcs -i`** **/** **对照** **测试** **会** **分歧** **。**\n\n**建议** **：** **若** **需** **严格** **对齐** **：** **维护** **与** **Linux** **`kern_ipc_perm`** **/`ipc`** **数组** **一致** **的** **枚举** **顺序** **，** **或** **在** **文档** **/`executor-memory`** **标明** **`MSG_STAT`** **索引** **为** **`msqid` 键序** **而非** **Linux** **槽** **序** **。** **与** **issue-369** **`MSG_COPY`** **FIFO** **正交** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["msgctl"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/ipc/msg.rs:750-815"],
+    "related_files": ["kernel/src/syscall/ipc/msg.rs"],
+    "key_insight": "MSG_STAT nth order vs Linux slot index"
+  },
+  "fix_summary": "**`MsgManager`**：新增 **`msg_queue_order: VecDeque<msqid>`**（**`insert_msqid_queues`** **仅** **新** **槽** **`push_back`**；**`remove_msqid`** **`retain`**）。**`MSG_STAT`** 改用 **`nth_active_msg_queue_for_msg_stat(n)`**：按 **创建顺序** **枚举** **活动** **队列**（**跳过** **`mark_removed`**），**对齐** **Linux** **idr** **槽** **下标** **语义**，**非** **`BTreeMap`** **键序** **。**",
+  "files_changed": [
+    "kernel/src/syscall/ipc/msg.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-370.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：创建多个消息队列后删除中间 `msqid`，再 `msgctl(MSG_STAT, n, …)` 对照 Linux 与 Starry 是否指向同一队列。",
+    "expected_output_contains": "",
+    "pass_criteria": "`MSG_STAT` 下标与 Linux 槽序一致，或文档化偏差。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "按 Linux `ipc` 枚举顺序维护活动队列列表，或明确不支持 `MSG_STAT` 与上游逐位一致。",
+  "references": ["man 2 msgctl", "kernel/ipc/msg.c", "kernel/src/syscall/ipc/msg.rs"]
+}
