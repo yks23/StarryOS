@@ -3,9 +3,10 @@ use linux_raw_sys::general::{
     CLOCK_MONOTONIC, CLOCK_REALTIME, TFD_CLOEXEC, TFD_CREATE_FLAGS, TFD_NONBLOCK,
     TFD_TIMER_ABSTIME, itimerspec,
 };
-use starry_vm::{VmMutPtr, VmPtr};
+use starry_vm::VmMutPtr;
 
 use crate::file::{FileLike, TimerFd, add_file_like};
+use crate::time::read_timespec_user;
 
 pub fn sys_timerfd_create(clockid: i32, flags: i32) -> AxResult<isize> {
     let cid = clockid as u32;
@@ -36,11 +37,17 @@ pub fn sys_timerfd_settime(
     if flags as u32 & !TFD_TIMER_ABSTIME != 0 {
         return Err(AxError::InvalidInput);
     }
-    let new_value = unsafe { new_value.vm_read_uninit()?.assume_init() };
+    // issue-209: read each `timespec` field-by-field (same as `read_timespec_user` / issue-205).
+    let spec = unsafe {
+        itimerspec {
+            it_interval: read_timespec_user(core::ptr::addr_of!((*new_value).it_interval))?,
+            it_value: read_timespec_user(core::ptr::addr_of!((*new_value).it_value))?,
+        }
+    };
     if !old_value.is_null() {
         old_value.vm_write(tfd.gettime()?)?;
     }
-    tfd.settime(flags, &new_value)?;
+    tfd.settime(flags, &spec)?;
     Ok(0)
 }
 

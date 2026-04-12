@@ -1,0 +1,27 @@
+{
+  "id": "issue-209",
+  "title": "timerfd_settime：用户 `itimerspec` 整结构 `vm_read_uninit`+`assume_init`，与 issue-205同类",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_timerfd_settime` 不再对 `*const itimerspec` 使用 `vm_read_uninit`+`assume_init`。改为用 `crate::time::read_timespec_user` 分别读取 `it_interval` 与 `it_value`（`addr_of!((*new_value).it_interval/it_value)`），与 issue-205/issue-207 的 `timespec` 字段读一致；去掉未再使用的 `VmPtr` 导入。",
+  "files_changed": ["kernel/src/syscall/fs/timerfd.rs"],
+  "description": "**`kernel/src/syscall/fs/timerfd.rs`** **`sys_timerfd_settime`** 在校验 **`flags`** 后，对 `new_value` 使用 **`unsafe { new_value.vm_read_uninit()?.assume_init() }`** 读入整颗 **`linux_raw_sys::general::itimerspec`**（约 **39** 行）。**`itimerspec`** 含 **`it_interval`/`it_value` 两颗 `timespec`**，与 **issue-205** 已修复的 **`read_timespec_user`** 模式相比，此处仍为 **整结构 Pod 假设**；**`linux_raw_sys`** 布局或 padding 变化时有与 **issue-201/204** 同类的 **可审计性/UB** 风险。**更稳妥**：对 **`it_interval`/`it_value`** 各调用与 **`schedule.rs`** 同构的 **`read_timespec_user`**（或抽到公共模块），避免 **`assume_init`**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["timerfd_settime"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/timerfd.rs:25-45"],
+    "related_files": ["kernel/src/syscall/task/schedule.rs:98-106"],
+    "key_insight": "`timerfd_gettime` 写回用 `vm_write`；`settime` 读入用 `assume_init`"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；复用 **`read_timespec_user`** 或 **`fs/ctl.rs`**同类 helper 试编译。",
+    "expected_output_contains": "",
+    "pass_criteria": "消除 **`itimerspec`** 的 **`assume_init`** 或证明与 **uapi** 逐字段一致。",
+    "last_result": "通过：`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`（exit 0，仅有既有 warning）。"
+  },
+  "suggested_fix": "字段读：**`it_interval`/`it_value`** 各 **`tv_sec`/`tv_nsec`**；或与 **`schedule.rs`**共享 **`read_timespec_user`**。",
+  "references": ["man 2 timerfd_settime", "issue-011", "issue-205", "issue-204"]
+}
