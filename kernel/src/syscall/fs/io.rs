@@ -120,11 +120,11 @@ pub fn sys_lseek(fd: c_int, offset: __kernel_off_t, whence: c_int) -> AxResult<i
 }
 
 pub fn sys_truncate(path: UserConstPtr<c_char>, length: __kernel_off_t) -> AxResult<isize> {
-    let path = path.get_as_str()?;
-    debug!("sys_truncate <= {path:?} {length}");
     if length < 0 {
         return Err(AxError::InvalidInput);
     }
+    let path = path.get_as_str()?;
+    debug!("sys_truncate <= {path:?} {length}");
     let file = OpenOptions::new()
         .write(true)
         .open(&FS_CONTEXT.lock(), path)?
