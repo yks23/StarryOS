@@ -188,6 +188,11 @@ pub fn sys_sched_getaffinity(pid: i32, cpusetsize: usize, user_mask: *mut u8) ->
     let mask = task.cpumask();
     let mask_bytes = mask.as_bytes();
 
+    // NULL output buffer → **EFAULT** (`BadAddress`), same as `fstatat`/`capget` (issue-283, issue-304,
+    // issue-306); after `sched_resolve_task` so **ESRCH** still wins for bad `pid`.
+    if user_mask.is_null() {
+        return Err(AxError::BadAddress);
+    }
     vm_write_slice(user_mask, mask_bytes)?;
 
     // Linux `sched_getaffinity(2)`: success returns 0; the mask is only in user memory.
