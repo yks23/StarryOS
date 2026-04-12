@@ -54,6 +54,11 @@ pub fn sys_epoll_ctl(
     let epoll = Epoll::from_fd(epfd)?;
     debug!("sys_epoll_ctl <= epfd: {epfd}, op: {op}, fd: {fd}");
 
+    // Linux `epoll_ctl(2)` / `ep_insert`: `fd` must not be the epoll instance itself → EINVAL.
+    if fd == epfd {
+        return Err(AxError::InvalidInput);
+    }
+
     let parse_event = || -> AxResult<(EpollEvent, EpollFlags)> {
         let event = event.get_as_ref()?;
         let raw = event.events;

@@ -1,0 +1,27 @@
+{
+  "id": "issue-240",
+  "title": "epoll_ctl：`fd` 与 `epfd` 相同未拒绝，Linux 返回 EINVAL",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`sys_epoll_ctl`**：在 **`Epoll::from_fd(epfd)?` 之后 **`fd == epfd` → `AxError::InvalidInput`**（**EINVAL**），与 Linux **`ep_insert`** 禁止 epoll 自监视一致；**`ADD`/`MOD`/`DEL`** 均适用。",
+  "files_changed": ["kernel/src/syscall/io_mpx/epoll.rs"],
+  "description": "**`kernel/src/syscall/io_mpx/epoll.rs`** **`sys_epoll_ctl`**（约 **48–93** 行）在 **`EPOLL_CTL_ADD`/`MOD`/`DEL`** 路径上**未** 校验 **`fd == epfd`**。\n\n**Linux `epoll_ctl(2)`** / **`ep_insert`**：**不能** 把 **epoll 实例自身** 的文件描述符加入同一实例（**`fd == epfd` → EINVAL**），否则会产生自引用/循环监视。当前 **`EPOLL_CTL_ADD`** 仅 **`get_file_like(fd)`** 与 **`epoll.add`**，**`fd` 与 `epfd` 同号**时仍可能插入兴趣表，与 **Linux** 不一致。\n\n**建议**：在 **`match op`** 分支内（**`Epoll::from_fd(epfd)?` 之后**）**`if fd == epfd { return Err(AxError::InvalidInput); }`**（或对 **`ADD`/`MOD`/`DEL`** 统一拒绝，与内核 **`epfd == fd`** 检查一致）。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["epoll_ctl"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/io_mpx/epoll.rs:48-93"],
+    "related_files": ["kernel/src/file/epoll.rs:318-356"],
+    "key_insight": "未禁止 epoll 监视自身 fd"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；`epoll_ctl(epfd, EPOLL_CTL_ADD, epfd, &ev)`。",
+    "expected_output_contains": "",
+    "pass_criteria": "`fd == epfd` → EINVAL/InvalidInput。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos：通过（exit 0）"
+  },
+  "suggested_fix": "`if fd == epfd { return Err(AxError::InvalidInput); }` 于 `sys_epoll_ctl` 内 `epoll` 解析后。",
+  "references": ["man 2 epoll_ctl", "Linux ep_insert"]
+}
