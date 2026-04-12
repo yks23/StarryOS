@@ -55,11 +55,13 @@ pub fn sys_pidfd_open(pid: u32, flags: u32) -> AxResult<isize> {
 pub fn sys_pidfd_getfd(pidfd: i32, target_fd: i32, flags: u32) -> AxResult<isize> {
     debug!("sys_pidfd_getfd <= pidfd: {pidfd}, target_fd: {target_fd}, flags: {flags}");
 
+    // Resolve `pidfd` before `flags` so **EBADF** precedes **EINVAL** for bad `pidfd` + non-zero
+    // `flags` (Linux `pidfd_getfd`/`fget` order; issue-320, issue-315 theme).
+    let pidfd = PidFd::from_fd(pidfd)?;
     if flags != 0 {
         return Err(AxError::InvalidInput);
     }
 
-    let pidfd = PidFd::from_fd(pidfd)?;
     let proc_data = pidfd.process_data()?;
     FD_TABLE
         .scope(&proc_data.scope.read())
@@ -78,11 +80,12 @@ pub fn sys_pidfd_send_signal(
     sig: *mut SignalInfo,
     flags: u32,
 ) -> AxResult<isize> {
+    // Same **EBADF**/**EINVAL** order as `sys_pidfd_getfd` (issue-320).
+    let pidfd = PidFd::from_fd(pidfd)?;
     if flags != 0 {
         return Err(AxError::InvalidInput);
     }
 
-    let pidfd = PidFd::from_fd(pidfd)?;
     let pid = pidfd.process_data()?.proc.pid();
 
     let sig = make_queue_signal_info(pid, signo, sig)?;
