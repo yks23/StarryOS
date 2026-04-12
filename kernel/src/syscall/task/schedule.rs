@@ -73,19 +73,29 @@ pub fn sys_sched_yield() -> AxResult<isize> {
     Ok(0)
 }
 
+#[inline]
+fn time_value_is_zero(tv: TimeValue) -> bool {
+    tv.as_secs() == 0 && tv.subsec_nanos() == 0
+}
+
+/// Waits for `dur` using [`axtask::future::sleep`], which advances on the **monotonic** timeline.
+/// `clock` must be [`axhal::time::monotonic_time`] so elapsed/remainder match that sleep (see
+/// [`sys_clock_nanosleep`] for `CLOCK_REALTIME`, which is not driven by this primitive).
 fn sleep_impl(clock: impl Fn() -> TimeValue, dur: TimeValue) -> TimeValue {
     debug!("sleep_impl <= {dur:?}");
 
-    let start = clock();
+    if time_value_is_zero(dur) {
+        return TimeValue::new(0, 0);
+    }
 
-    // TODO: currently ignoring concrete clock type
-    // We detect EINTR manually if the slept time is not enough.
+    let start = clock();
+    // EINTR is detected below if slept time falls short of `dur`.
     let _ = block_on(interruptible(sleep(dur)));
 
     clock() - start
 }
 
-/// Sleep some nanoseconds
+/// Sleep some nanoseconds (POSIX/Linux: interval on the monotonic clock).
 pub fn sys_nanosleep(req: *const timespec, rem: *mut timespec) -> AxResult<isize> {
     // FIXME: AnyBitPattern
     let req = unsafe { req.vm_read_uninit()?.assume_init() }.try_into_time_value()?;
@@ -110,7 +120,11 @@ pub fn sys_clock_nanosleep(
     req: *const timespec,
     rem: *mut timespec,
 ) -> AxResult<isize> {
-    let clock = match clock_id as u32 {
+    let req = unsafe { req.vm_read_uninit()?.assume_init() }.try_into_time_value()?;
+    debug!("sys_clock_nanosleep <= clock_id: {clock_id}, flags: {flags}, req: {req:?}");
+
+    let id = clock_id as u32;
+    let clock = match id {
         CLOCK_REALTIME => axhal::time::wall_time,
         CLOCK_MONOTONIC => axhal::time::monotonic_time,
         _ => {
@@ -119,14 +133,20 @@ pub fn sys_clock_nanosleep(
         }
     };
 
-    let req = unsafe { req.vm_read_uninit()?.assume_init() }.try_into_time_value()?;
-    debug!("sys_clock_nanosleep <= clock_id: {clock_id}, flags: {flags}, req: {req:?}");
-
     let dur = if flags & TIMER_ABSTIME != 0 {
         req.saturating_sub(clock())
     } else {
         req
     };
+
+    // Wall-clock sleeps are not implemented: `sleep(dur)` is monotonic-based. Reject non-trivial
+    // `CLOCK_REALTIME` waits (issue-071); zero-duration / already-expired absolute waits return Ok(0).
+    if id == CLOCK_REALTIME {
+        if time_value_is_zero(dur) {
+            return Ok(0);
+        }
+        return Err(AxError::Unsupported);
+    }
 
     let actual = sleep_impl(clock, dur);
 

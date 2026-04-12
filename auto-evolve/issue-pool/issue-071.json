@@ -1,0 +1,28 @@
+{
+  "id": "issue-071",
+  "title": "nanosleep/clock_nanosleep 的 sleep_impl 仅用 clock 测 elapsed，sleep 原语未绑定所选时钟类型",
+  "status": "resolved",
+  "created_at": "2026-04-13T05:00:00Z",
+  "resolved_at": "2026-04-13T17:00:00Z",
+  "severity": "low",
+  "description": "**`sleep_impl`**（`kernel/src/syscall/task/schedule.rs`）接收 **`clock: impl Fn() -> TimeValue`**，用 **`clock()`** 计算 **`start`** 与 **`elapsed`**，但实际阻塞调用 **`block_on(interruptible(sleep(dur)))`**。源码注释 **`TODO: currently ignoring concrete clock type`**：底层 **`axtask::future::sleep(dur)`** 与 **`CLOCK_REALTIME`/`CLOCK_MONOTONIC`** 无显式关联。**`sys_nanosleep`** 固定传入 **`axhal::time::monotonic_time`**；**`sys_clock_nanosleep`** 虽按 **`clock_id`** 选择 **`wall_time` 或 `monotonic_time`** 用于 **`TIMER_ABSTIME`** 的 **`dur`** 计算与 **`elapsed`** 测量，但**睡眠推进**仍依赖同一 **`sleep(dur)`**，若调度器/计时器仅按单调时钟推进，则 **`CLOCK_REALTIME`** 相对睡眠在 **墙钟与单调时钟漂移**（NTP、闰秒等）场景下与 Linux **`clock_nanosleep(2)`** 基于所选 **`clock_id`** 的语义**可能不一致**。",
+  "fix_summary": "**`sleep_impl`**：文档说明 **`sleep(dur)`** 为单调时间线；**`clock`** 须为 **`monotonic_time`** 以使 **`elapsed`** 与睡眠一致；**`dur==0`** 快速返回零 **`TimeValue`**。**`sys_clock_nanosleep`**：非零 **`CLOCK_REALTIME`** 等待 → **`Unsupported`**（无墙钟驱动睡眠）；**`dur==0`**（含 **`TIMER_ABSTIME`** 已到期）→ **`Ok(0)`**。**`sys_nanosleep`** 注释为单调间隔。**`TODO`** 移除。",
+  "files_changed": ["kernel/src/syscall/task/schedule.rs"],
+  "category": "syscall-semantic",
+  "affected_syscalls": ["nanosleep", "clock_nanosleep"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/schedule.rs:76-141"],
+    "related_files": [],
+    "key_insight": "`sleep(dur)` 与 `clock` 解耦；TODO 已标明"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "在可调墙钟/单调漂移的测试夹具中对比 **`clock_nanosleep(CLOCK_REALTIME, …)`** 与 Linux 的剩余时间与唤醒时刻；当前以代码审阅为主。",
+    "expected_output_contains": "",
+    "pass_criteria": "`sleep` 等待与所选 `clock_id` 一致，或文档化仅支持单调语义子集。",
+    "last_result": "2026-04-13：**`CLOCK_REALTIME` 非零 → `Unsupported`**；**`MONOTONIC`** 走 **`sleep_impl`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** PASS"
+  },
+  "suggested_fix": "为 **`CLOCK_REALTIME`** 提供与墙钟一致的 **`sleep`**（或 **`timerfd`/hrtimer** 风格唤醒）；在完成前可对 **`clock_nanosleep(..., CLOCK_REALTIME, …)`** 返回 **`Unsupported`** 或 README 声明限制。",
+  "references": ["man 2 clock_nanosleep", "man 2 nanosleep"]
+}
