@@ -49,8 +49,10 @@ pub fn sys_ioctl(fd: i32, cmd: u32, arg: usize) -> AxResult<isize> {
         .map(|result| result as isize)
         .inspect_err(|err| {
             if *err == AxError::NotATty {
-                // glibc likes to call TIOCGWINSZ on non-terminal files, just
-                // ignore it
+                // glibc probes TIOCGWINSZ on many fds; on a non-tty this still
+                // fails with ENOTTY (we surface `NotATty`) — same as Linux.
+                // Here we only skip the warn below to avoid log spam; `inspect_err`
+                // does not alter the `Result`, so the syscall still returns failure.
                 if cmd == TIOCGWINSZ {
                     return;
                 }
