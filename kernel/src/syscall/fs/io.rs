@@ -544,6 +544,20 @@ pub fn sys_splice(
         flags
     );
 
+    // Linux `splice(2)` / `do_splice`: input and output must not be the same file descriptor → EINVAL.
+    if fd_in == fd_out {
+        return Err(AxError::InvalidInput);
+    }
+
+    // Resolve fds before `flags` so **EBADF** precedes **EINVAL**/**EOPNOTSUPP** when both bad fds and
+    // bad `flags` apply (Linux `do_splice`/`fdget`; issue-317, issue-315 theme).
+    let _ = get_file_like(fd_in)?;
+    let _ = get_file_like(fd_out)?;
+
+    if DummyFd::from_fd(fd_in).is_ok() || DummyFd::from_fd(fd_out).is_ok() {
+        return Err(AxError::BadFileDescriptor);
+    }
+
     if flags & !SPLICE_F_MASK != 0 {
         return Err(AxError::InvalidInput);
     }
@@ -554,16 +568,7 @@ pub fn sys_splice(
         return Err(AxError::OperationNotSupported);
     }
 
-    // Linux `splice(2)` / `do_splice`: input and output must not be the same file descriptor → EINVAL.
-    if fd_in == fd_out {
-        return Err(AxError::InvalidInput);
-    }
-
     let mut has_pipe = false;
-
-    if DummyFd::from_fd(fd_in).is_ok() || DummyFd::from_fd(fd_out).is_ok() {
-        return Err(AxError::BadFileDescriptor);
-    }
 
     let src = if !off_in.is_null() {
         let file = File::from_fd(fd_in)?;
