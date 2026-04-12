@@ -300,6 +300,9 @@ pub fn sys_mmap(
 
 pub fn sys_munmap(addr: usize, length: usize) -> AxResult<isize> {
     debug!("sys_munmap <= addr: {addr:#x}, length: {length:x}");
+    if length == 0 {
+        return Err(AxError::InvalidInput);
+    }
     let curr = current();
     let mut aspace = curr.as_thread().proc_data.aspace.write();
     let length = align_up_4k(length);
