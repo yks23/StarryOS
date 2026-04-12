@@ -58,6 +58,8 @@ pub fn handle_syscall(uctx: &mut UserContext) {
         Sysno::symlinkat => sys_symlinkat(uctx.arg0() as _, uctx.arg1() as _, uctx.arg2() as _),
         #[cfg(target_arch = "x86_64")]
         Sysno::rename => sys_rename(uctx.arg0() as _, uctx.arg1() as _),
+        // `syscalls::Sysno` has no `renameat` variant on `riscv64` (Linux riscv64 ABI / musl only
+        // define `renameat2`; libc `renameat(2)` uses `renameat2` with flags=0 → `sys_renameat2`).
         #[cfg(not(target_arch = "riscv64"))]
         Sysno::renameat => sys_renameat(
             uctx.arg0() as _,

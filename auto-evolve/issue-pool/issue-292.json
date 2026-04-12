@@ -1,0 +1,27 @@
+{
+  "id": "issue-292",
+  "title": "`renameat(2)` 在 `riscv64` 未注册：`Sysno::renameat` 被 `cfg(not(target_arch = \"riscv64\"))` 排除，落入 `_` → `ENOSYS`",
+  "status": "resolved",
+  "created_at": "2026-04-13T07:00:00Z",
+  "severity": "medium",
+  "fix_summary": "查证 `syscalls` 0.8 与 musl：`riscv64` 的 `Sysno` 无 `renameat` 变体（仅 `renameat2`）；Linux riscv64 ABI 上 `renameat(2)` 由 libc 通过 `renameat2(..., flags=0)` 实现，对应已接线的 `sys_renameat2`。无法在 riscv 上去掉 `cfg` 并写 `Sysno::renameat => ...`（无法编译）。在 `mod.rs` 补充注释；`executor-memory` 记录 ABI。",
+  "files_changed": ["kernel/src/syscall/mod.rs", "auto-evolve/memory/executor-memory.md"],
+  "description": "**`kernel/src/syscall/mod.rs`** **（** **约** **61–67** **行** **）** **将** **`Sysno::renameat`** **置于** **`#[cfg(not(target_arch = \"riscv64\"))]`** **下** **；** **`Sysno::renameat2`** **无** **此** **限制** **。** **在** **`riscv64`** **目标** **上** **，`renameat`** **系统** **调用** **号** **不会** **匹配** **上述** **分支** **，** **落入** **文件** **末尾** **`_ =>`** **→** **`Unsupported`** **（** **表现为** **`ENOSYS`** **）** **。**\n\n**Linux** **`riscv64`** **ABI** **提供** **`renameat`** **（** **与** **其它** **架构** **同类** **）** **；** **glibc** **/****musl** **在** **实现** **`rename`/`renameat`** **时** **可能** **发出** **`renameat`** **或** **`renameat2`** **。** **仅** **依赖** **`renameat`** **号** **的** **程序** **在** **Starry** **riscv** **上会** **失败** **。** **`kernel/src/syscall/fs/ctl.rs`** **中** **`sys_renameat`** **（** **约** **652–659** **行** **）** **已实现** **并** **委托** **`sys_renameat2(..., 0)`** **，** **但** **入口** **未** **对** **riscv** **暴露** **。**\n\n**建议**：去掉 **`Sysno::renameat`** **上的** **`not(riscv64)`** **`cfg`** **（** **或** **改为** **与** **`renameat2`** **一致** **的** **全** **目标** **分发** **）** **；** **或** **在** **ABI** **文档** **中** **明确** **「** **riscv** **请** **使用** **`renameat2`** **」** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["renameat"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/mod.rs:61-67", "kernel/src/syscall/fs/ctl.rs:652-659"],
+    "related_files": [],
+    "key_insight": "renameat 分发 cfg 排除 riscv；实现存在但未接线"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；riscv 用户态对 `renameat` 号发 syscall 对照 Linux。",
+    "expected_output_contains": "",
+    "pass_criteria": "riscv64 上 `renameat` 与 Linux 一致或为文档化不支持。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "为 riscv64 注册 `Sysno::renameat => sys_renameat(...)`，与 `renameat2` 同列。",
+  "references": ["man 2 renameat", "kernel/src/syscall/mod.rs", "kernel/src/syscall/fs/ctl.rs"]
+}
