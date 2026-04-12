@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
-use core::{future::poll_fn, task::Poll};
+use core::{future::poll_fn, mem::size_of, slice, task::Poll};
 
 use axerrno::{AxError, AxResult, LinuxError};
 use axtask::{
@@ -9,11 +9,15 @@ use axtask::{
 use bitflags::bitflags;
 use linux_raw_sys::general::{
     __WALL, __WCLONE, __WNOTHREAD, WCONTINUED, WEXITED, WNOHANG, WNOWAIT, WUNTRACED,
+    __kernel_old_timeval, rusage,
 };
 use starry_process::{Pid, Process};
-use starry_vm::{VmMutPtr, VmPtr};
+use starry_vm::{VmMutPtr, VmPtr, vm_write_slice};
 
-use crate::task::{AsThread, get_process_data, remove_zombie_process_data};
+use crate::{
+    task::{AsThread, get_process_data, remove_zombie_process_data, time_value_from_nanos},
+    time::TimeValueLike,
+};
 
 bitflags! {
     #[derive(Debug, Clone, Copy)]
@@ -67,6 +71,42 @@ impl WaitPid {
 /// - **Neither**: only traditional children (`SIGCHLD` delivery), i.e. not `is_clone_child`.
 ///
 /// **`__WNOTHREAD`** is handled in [`sys_waitpid`] (issue-219): not implemented here.
+/// Linux `wait4(2)`: resource usage of the waited-for child (thread-group CPU at wait time;
+/// other `rusage` fields not modeled yet, same as `getrusage` stubs in `resources.rs`).
+fn rusage_from_child_cpu(utime_ns: usize, stime_ns: usize) -> rusage {
+    let utime = time_value_from_nanos(utime_ns);
+    let stime = time_value_from_nanos(stime_ns);
+    rusage {
+        ru_utime: __kernel_old_timeval::from_time_value(utime),
+        ru_stime: __kernel_old_timeval::from_time_value(stime),
+        ru_maxrss: 0,
+        ru_ixrss: 0,
+        ru_idrss: 0,
+        ru_isrss: 0,
+        ru_minflt: 0,
+        ru_majflt: 0,
+        ru_nswap: 0,
+        ru_inblock: 0,
+        ru_oublock: 0,
+        ru_msgsnd: 0,
+        ru_msgrcv: 0,
+        ru_nsignals: 0,
+        ru_nvcsw: 0,
+        ru_nivcsw: 0,
+    }
+}
+
+#[inline]
+fn write_wait4_rusage(ru: *mut rusage, utime_ns: usize, stime_ns: usize) -> AxResult<()> {
+    if ru.is_null() {
+        return Ok(());
+    }
+    let k = rusage_from_child_cpu(utime_ns, stime_ns);
+    let bytes = unsafe { slice::from_raw_parts((&k as *const rusage).cast::<u8>(), size_of::<rusage>()) };
+    vm_write_slice(ru.cast::<u8>(), bytes)?;
+    Ok(())
+}
+
 fn wait_child_matches_kind(child: &Process, options: &WaitOptions) -> bool {
     let is_clone = get_process_data(child.pid())
         .map(|pd| pd.is_clone_child())
@@ -81,7 +121,12 @@ fn wait_child_matches_kind(child: &Process, options: &WaitOptions) -> bool {
     }
 }
 
-pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isize> {
+pub fn sys_waitpid(
+    pid: i32,
+    exit_code: *mut i32,
+    options: u32,
+    ru: *mut rusage,
+) -> AxResult<isize> {
     let options = WaitOptions::from_bits(options).ok_or(AxError::InvalidInput)?;
     if options.contains(WaitOptions::WNOTHREAD) {
         // issue-219: Linux excludes children not created by the calling thread's clones;
@@ -115,17 +160,18 @@ pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isiz
 
     let check_children = || {
         if let Some(child) = children.iter().find(|c| c.is_zombie()) {
+            let cpu = get_process_data(child.pid())
+                .map(|pd| pd.thread_group_cpu_nanos())
+                .unwrap_or((0, 0));
             if !options.contains(WaitOptions::WNOWAIT) {
-                if let Ok(child_pd) = get_process_data(child.pid()) {
-                    let (cu, cs) = child_pd.thread_group_cpu_nanos();
-                    proc_data.accumulate_waited_child_cpu_ns(cu, cs);
-                }
+                proc_data.accumulate_waited_child_cpu_ns(cpu.0, cpu.1);
                 child.free();
                 remove_zombie_process_data(child.pid());
             }
             if let Some(exit_code) = exit_code.nullable() {
                 exit_code.vm_write(child.exit_code())?;
             }
+            write_wait4_rusage(ru, cpu.0, cpu.1)?;
             return Ok(Some(child.pid() as _));
         }
 
@@ -141,19 +187,23 @@ pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isiz
             };
             let mut jc = data.jobctl.lock();
             if report_stop && jc.stop_wait_pending {
+                let (cu, cs) = data.thread_group_cpu_nanos();
                 if let Some(ec) = exit_code.nullable() {
                     let sig = jc.stop_sig.unwrap_or(0) as i32;
                     let st = (sig << 8) | 0x7f;
                     ec.vm_write(st)?;
                 }
                 jc.stop_wait_pending = false;
+                write_wait4_rusage(ru, cu, cs)?;
                 return Ok(Some(child.pid() as _));
             }
             if report_continued && jc.continued_wait_pending {
+                let (cu, cs) = data.thread_group_cpu_nanos();
                 if let Some(ec) = exit_code.nullable() {
                     ec.vm_write(0xffff)?;
                 }
                 jc.continued_wait_pending = false;
+                write_wait4_rusage(ru, cu, cs)?;
                 return Ok(Some(child.pid() as _));
             }
         }

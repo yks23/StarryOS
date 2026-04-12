@@ -1,0 +1,33 @@
+{
+  "id": "issue-340",
+  "title": "`wait4(2)`：`Sysno::wait4` 仅将 `pid`/`wstatus`/`options` 传给 `sys_waitpid`，未传入或使用第四参数 `struct rusage *ru`；与 Linux `wait4` 可在回收子进程时向用户 `rusage` 写入 `getrusage` 风格统计（至少 `ru_utime`/`ru_stime` 等）的语义不同，且用户态若依赖 `wait4` 四参 ABI 会得到未定义行为",
+  "status": "resolved",
+  "created_at": "2026-04-15T12:00:00Z",
+  "resolved_at": "2026-05-19T00:00:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/mod.rs`** **`Sysno::wait4`** **（** **约** **489** **行** **）** **：** **`sys_waitpid(uctx.arg0(), uctx.arg1(), uctx.arg2())`** **，** **缺少** **`uctx.arg3()`** **对应的** **`rusage`** **输出** **指针** **。** **`sys_waitpid`** **（** **`task/wait.rs`** **）** **签名** **亦** **无** **`rusage`** **。** **Linux** **`wait4(2)`** **在** **`ru != NULL`** **时** **填充** **被** **等待** **子** **进程** **的** **资源** **使用** **（** **与** **`getrusage(RUSAGE_CHILDREN)`** **相关** **语义** **）** **。** **当前** **实现** **等价** **于** **静默** **忽略** **第四** **参** **，** **与** **glibc** **`wait4`** **包装** **及** **直接** **`syscall(__NR_wait4, ..., &ru)`** **的** **期望** **不符** **。** **与** **`issue-219`** **`WNOTHREAD`** **/** **`waitpid`** **行为** **正交** **。**\n\n**建议** **：** **在** **`mod.rs`** **增加** **`sys_wait4`** **包装** **（** **或** **扩展** **`sys_waitpid`** **）** **，** **接受** **`rusage`** **并在** **成功** **回收** **路径** **上** **写入** **与** **`getrusage`/`wait4`** **一致** **的** **字段** **（** **或** **显式** **返回** **`Unsupported`/`EINVAL`** **当** **`ru != NULL`** **并** **注释** **）** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["wait4"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/mod.rs:489", "kernel/src/syscall/task/wait.rs:84-177"],
+    "related_files": ["kernel/src/syscall/resources.rs"],
+    "key_insight": "wait4 dispatch drops rusage fourth argument"
+  },
+  "fix_summary": "`Sysno::wait4` 将 `uctx.arg3()` 作为 `*mut rusage` 传入 `sys_waitpid`；在成功返回子 PID（僵尸回收/停止/继续）路径上 `vm_write_slice` 写入 `ru_utime`/`ru_stime`（子 `ProcessData::thread_group_cpu_nanos` + `time_value_from_nanos`），其余 `rusage` 字段与 `getrusage` 桩一致为 0；`ru==NULL` 或 `WNOHANG` 返回 0 不写。",
+  "files_changed": [
+    "kernel/src/syscall/mod.rs",
+    "kernel/src/syscall/task/wait.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-340.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：用户态 `wait4(..., &ru)` 对照 Linux 是否写入 `ru`。",
+    "expected_output_contains": "",
+    "pass_criteria": "实现 `rusage` 输出或与 Linux `wait4` 文档化一致的不支持策略。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "新增 `sys_wait4(pid, wstatus, options, rusage)`：在成功 `wait`/`reap` 时按 `struct rusage` 填 `ru_utime`/`ru_stime` 等（可复用 `RUSAGE_CHILDREN` 路径数据），或 `rusage != NULL` 时返回明确错误并文档化。",
+  "references": ["man 2 wait4", "kernel/src/syscall/mod.rs", "issue-219"]
+}
