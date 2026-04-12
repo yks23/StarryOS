@@ -301,12 +301,14 @@ bitflags::bitflags! {
 }
 
 pub fn sys_dup3(old_fd: c_int, new_fd: c_int, flags: c_int) -> AxResult<isize> {
-    let flags = Dup3Flags::from_bits(flags).ok_or(AxError::InvalidInput)?;
-    debug!("sys_dup3 <= old_fd: {old_fd}, new_fd: {new_fd}, flags: {flags:?}");
-
+    // Linux `do_dup3`: `oldfd == newfd` → EINVAL before rejecting unknown `flags` bits (issue-341;
+    // same theme as close_range issue-324 / openat issue-323).
     if old_fd == new_fd {
         return Err(AxError::InvalidInput);
     }
+
+    let flags = Dup3Flags::from_bits(flags).ok_or(AxError::InvalidInput)?;
+    debug!("sys_dup3 <= old_fd: {old_fd}, new_fd: {new_fd}, flags: {flags:?}");
 
     let mut fd_table = FD_TABLE.write();
     let mut f = fd_table

@@ -1,0 +1,32 @@
+{
+  "id": "issue-341",
+  "title": "`dup3(2)`：`sys_dup3` 先 `Dup3Flags::from_bits(flags)`（非法 `O_*` 位 → `EINVAL`）再判断 `old_fd == new_fd`（`EINVAL`）；与 Linux `do_dup3`/`dup3` 常见先拒绝 `oldfd == newfd` 再解析 `flags` 时，两路 `EINVAL` 的优先级可能不完全一致",
+  "status": "resolved",
+  "created_at": "2026-04-15T14:00:00Z",
+  "resolved_at": "2026-05-20T00:00:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/fs/fd_ops.rs`** **`sys_dup3`** **（** **约** **303–324** **行** **）** **顺序** **：** **`Dup3Flags::from_bits(flags).ok_or(InvalidInput)?`** **→** **`if old_fd == new_fd { return Err(InvalidInput) }`** **→** **`fd_table`** **查找** **等** **。** **当** **`flags`** **含** **未** **定义** **位** **且** **`old_fd`** **`==`** **`new_fd`** **时** **，** **本** **路径** **固定** **先** **因** **`flags`** **失败** **；** **Linux** **内核** **常** **先** **`oldfd`** **`==`** **`newfd`** **→** **`EINVAL`** **（** **见** **`man 2 dup3`** **）** **，** **再** **处理** **`flags`** **。** **与** **`issue-324`** **`close_range`** **/** **`issue-323`** **`openat`** **等** **「** **标志** **/** **掩** **码** **与** **区间** **/** **fd** **对** **」** **顺序** **类** **问题** **同** **主题** **，** **但** **`dup3`** **尚未** **单独** **成** **条** **。**\n\n**建议** **：** **对照** **Linux** **`fs/file.c`** **`do_dup3`** **，** **将** **`old_fd == new_fd`** **（** **及** **必要** **的** **`EBADF`** **前置** **语义** **）** **提前** **到** **`from_bits`** **之前** **，** **或** **注释** **说明** **与** **上游** **`EINVAL`** **顺序** **差异** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["dup3"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/fd_ops.rs:303-324"],
+    "related_files": [],
+    "key_insight": "dup3 from_bits before old==new EINVAL order"
+  },
+  "fix_summary": "`sys_dup3`：`old_fd == new_fd` → `InvalidInput`（EINVAL）先于 `Dup3Flags::from_bits(flags)`（非法 flags 位），与 Linux `do_dup3` 及 issue-324 主题一致；注释 issue-341。",
+  "files_changed": [
+    "kernel/src/syscall/fs/fd_ops.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-341.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：非法 `flags` + `old_fd==new_fd` 对照 Linux `dup3` 返回顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游 `dup3` 对 `flags`/`old==new` 的校验顺序一致，或注释说明差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "先 `if old_fd == new_fd { return Err(InvalidInput) }`（及与 Linux 一致的 `EBADF` 顺序），再 `Dup3Flags::from_bits`；或文档化差异。",
+  "references": ["man 2 dup3", "kernel/src/syscall/fs/fd_ops.rs", "issue-324"]
+}
