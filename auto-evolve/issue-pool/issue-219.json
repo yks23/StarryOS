@@ -1,0 +1,27 @@
+{
+  "id": "issue-219",
+  "title": "waitpid/wait4：`__WNOTHREAD` 已解析但未参与子进程筛选，与 Linux 按发起线程排除不符",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "sys_waitpid（wait4 同路径）：options 含 __WNOTHREAD 时在解析 WaitOptions 后立即返回 AxError::Unsupported（未记录 fork/clone 父线程，避免静默忽略）；更新 wait_child_matches_kind 注释。",
+  "files_changed": ["kernel/src/syscall/task/wait.rs"],
+  "description": "**`kernel/src/syscall/task/wait.rs`** 在 **`WaitOptions`**（约 **18–40** 行）中包含 **`__WNOTHREAD`**（**`WNOTHREAD`**），注释写明（约 **69–71** 行）：**「`__WNOTHREAD` is accepted in `WaitOptions` but not used: we do not track which thread created each child」**。**`wait_child_matches_kind`**（约 **71–83** 行）仅处理 **`__WALL`** / **`__WCLONE`** / 默认非 clone 子进程，**从未读取 `options.contains(WaitOptions::WNOTHREAD)`**。\n\nLinux **`waitpid(2)`**：带 **`__WNOTHREAD`** 时，仅报告**非**由**同线程**通过 **`clone`** 创建的子进程（与 **`__WCLONE`** 等组合语义见手册）。当前实现等价于**忽略**该位，多线程程序可能收到与 Linux 不同的可等待子集。\n\n**建议**：在进程/线程模型中记录 **`fork`/`clone` 发起线程**，或在未实现前对含 **`__WNOTHREAD`** 的路径返回 **`EINVAL`/`ENOSYS`** 并文档化，避免静默偏差。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["waitpid", "wait4"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/wait.rs:18-107"],
+    "related_files": [],
+    "key_insight": "标志位被接受但不影响 `children` 过滤逻辑"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 **`man 2 waitpid`** **`__WNOTHREAD`**。",
+    "expected_output_contains": "",
+    "pass_criteria": "实现按线程过滤，或明确拒绝/文档化 stub 行为。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos：通过（exit 0）"
+  },
+  "suggested_fix": "扩展 **`ProcessData`** 记录 **`clone`/fork 父线程**；或 **`WNOTHREAD` 置位时 `Unsupported`/`InvalidInput`**。",
+  "references": ["man 2 waitpid", "Linux kernel `kernel/exit.c` wait4"]
+}

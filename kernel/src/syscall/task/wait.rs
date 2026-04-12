@@ -31,7 +31,7 @@ bitflags! {
         /// Don't reap, just poll status.
         const WNOWAIT = WNOWAIT;
 
-        /// Don't wait on children of other threads in this group
+        /// Don't wait on children of other threads in this group (rejected at syscall entry until we track parent tid).
         const WNOTHREAD = __WNOTHREAD;
         /// Wait on all children, regardless of type
         const WALL = __WALL;
@@ -66,8 +66,7 @@ impl WaitPid {
 /// - **`__WCLONE` only**: only "clone" children (`ProcessData::is_clone_child`).
 /// - **Neither**: only traditional children (`SIGCHLD` delivery), i.e. not `is_clone_child`.
 ///
-/// **`__WNOTHREAD`** is accepted in [`WaitOptions`] but not used: we do not track which
-/// thread created each child, so per-thread exclusion is not implemented.
+/// **`__WNOTHREAD`** is handled in [`sys_waitpid`] (issue-219): not implemented here.
 fn wait_child_matches_kind(child: &Process, options: &WaitOptions) -> bool {
     let is_clone = get_process_data(child.pid())
         .map(|pd| pd.is_clone_child())
@@ -84,6 +83,11 @@ fn wait_child_matches_kind(child: &Process, options: &WaitOptions) -> bool {
 
 pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isize> {
     let options = WaitOptions::from_bits(options).ok_or(AxError::InvalidInput)?;
+    if options.contains(WaitOptions::WNOTHREAD) {
+        // issue-219: Linux excludes children not created by the calling thread's clones;
+        // we do not record fork/clone parent thread id — fail explicitly instead of ignoring the bit.
+        return Err(AxError::Unsupported);
+    }
     info!("sys_waitpid <= pid: {pid:?}, options: {options:?}");
 
     let curr = current();

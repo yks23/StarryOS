@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-219 resolved（**`waitpid`/`wait4`**：**`__WNOTHREAD`** → **`Unsupported`**，勿静默忽略；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-225 resolved（**`fallocate`**：**`FALLOC_FL_*`** 掩码未知位 **`EINVAL`**；**`mode==0`** 仍为 **`set_len(max…)`**；其它已知 **`FALLOC_FL_*`** → **`EOPNOTSUPP`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-227 resolved（**`shmat`**：无效 **`shmid`** **`get_inner_by_shmid` → `InvalidInput`**，替代 **`unwrap()`**，对齐 **`sys_shmdt`/`sys_shmctl`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-224 resolved（**`times(2)`**：**`struct tms`** 四字段与返回值均为 **`USER_HZ`（100）jiffies**，**`cpu_nanos * USER_HZ / 1e9`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -204,6 +205,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-219 | waitpid __WNOTHREAD → Unsupported | resolved | 2026-04-12 |
 | issue-225 | fallocate FALLOC_FL 掩码 + 非零 EOPNOTSUPP | resolved | 2026-04-12 |
 | issue-227 | shmat 无效 shmid 不 unwrap（EINVAL） | resolved | 2026-04-12 |
 | issue-224 | times tms/返回值 jiffies（USER_HZ=100） | resolved | 2026-04-12 |
@@ -403,7 +405,7 @@
 - `flock(2)`：按 inode（`File`/`Directory` 的 `metadata` dev/ino）维护 BSD 风格互斥/共享锁；同一 fd 升级/幂等、关闭 fd 须从全局表移除；`LOCK_NB` 冲突映射 `AxError::WouldBlock`（EAGAIN）；阻塞模式在 `WouldBlock` 上 `yield_now` 轮询。
 - `fcntl` 记录锁（`F_SETLK`/`F_SETLKW`/`F_GETLK` 及 `F_OFD_*` 同路径）：**`sys_fcntl`** 须先 **`get_file_like(fd)`** 再读/写用户 **`flock64`**（**`EBADF`** 先于 **EFAULT**，issue-136）；**`record_lock`** 内仍会 **`inode_key`/`get_file_like`**。仅对普通 **`File`** fd；**`flock64`** 区间经 SEEK_SET/CUR/END 解析；写锁与读/写冲突、读锁仅与写冲突；同进程占位前先对重叠区间解锁再插入；**`F_SETLK`** 冲突返回 **`WouldBlock`**；**`close_file_like`** 调用 **`record_lock::release_fd`** 清除该 fd 登记锁。
 - 作业控制：`ProcessData::jobctl` 记录 `stop_sig` / `stop_wait_pending` / `continued_wait_pending`；`SignalOSAction::Stop` 不再 `do_exit`，而是唤醒父 `child_exit_event` 并在内核循环中等待 `SIGCONT`（循环内调用 `check_signals` 以处理入队信号）；`Continue` 清除停止并在曾停止时置 `continued_wait_pending`；`waitpid` 对 `WUNTRACED` 或 **options==0** 写 `(sig<<8)|0x7f`，对 `WCONTINUED` 或 **options==0** 写 `0xffff`。
-- **`waitpid(2)`/`wait4(2)`**：**`options`** 须为 **`WaitOptions::from_bits`** 可解析的 **`WNOHANG|WUNTRACED|WEXITED|WCONTINUED|WNOWAIT|__WNOTHREAD|__WALL|__WCLONE`** 子集（与 **`linux_raw_sys::general`** 一致），否则 **`InvalidInput`（EINVAL）**；勿 **`from_bits_truncate`**。**`WALL`/`WCLONE`** 过滤仍有 **FIXME**。
+- **`waitpid(2)`/`wait4(2)`**：**`options`** 须为 **`WaitOptions::from_bits`** 可解析的 **`WNOHANG|WUNTRACED|WEXITED|WCONTINUED|WNOWAIT|__WNOTHREAD|__WALL|__WCLONE`** 子集（与 **`linux_raw_sys::general`** 一致），否则 **`InvalidInput`（EINVAL）**；勿 **`from_bits_truncate`**。**`__WNOTHREAD`** 置位 → **`Unsupported`（ENOSYS）**，因未记录 fork/clone 父线程（issue-219）。**`WALL`/`WCLONE`** 与 **`ProcessData::is_clone_child`** 过滤（issue-087）。
 - 地址空间并发：`ProcessData.aspace` 为 `Arc<RwLock<AddrSpace>>`；修改页表（缺页 populate、mmap 等）用 `write()`；纯查询（如 mincore、`mremap` 查 VMA、futex 地址解析、部分 `can_access_range`）用 `read()`。缺页仍会写锁直至支持按页或 per-VMA 锁。
 - 进程凭证：`ProcessData` 中 **`ruid/euid/suid`** 与 **`rgid/egid/sgid`**（`AtomicU32`）；`getuid`→`ruid`，`geteuid`→`euid`，gid 同理；**`get_resuid`/`get_resgid`** 供 **`getresuid(2)`/`getresgid(2)`** 一次读三组；`setuid`/`setgid` 为三 ID 同步设置；`setresuid`/`setresgid` 中 **`CRED_NO_CHANGE`=`u32::MAX`** 表示不改；**`euid==0`（或 `egid==0`）** 视为特权可任意改，否则新值须属于当前 `{r,e,s}` 之一否则 **`PermissionDenied`**。`clone` 新建进程在 `ProcessData::new` 后 **`copy_credentials_from`** 父 `ProcessData`。完整 Linux 能力集与 setfsuid 等仍未建模。
 - 补充组：**`supplementary_gids`**（`Mutex<Vec<u32>>`，上限 **`SUPP_GROUPS_MAX`**）；`getgroups` 仅列补充组不含主 `rgid`；`setgroups` 需 **`euid==0`**；`getgroups(0,…)` 返回个数。**`seccomp(2)`** 未实现时 **`Unsupported`（ENOSYS）**。**`prctl(PR_SET_SECCOMP)`**：**`arg2`>2**（非 **`SECCOMP_MODE_*`**）→ **`EINVAL`**；mode **0/1/2** 未实现 → **`Unsupported`**。**`prctl(PR_MCE_KILL)`**：**`arg2`** 须 **`CLEAR`/`SET`**；**`SET`** 时 **`arg3`**≤**`DEFAULT`**，否则 **`EINVAL`**；合法组合未实现 → **`Unsupported`**。
