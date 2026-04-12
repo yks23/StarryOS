@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-180 resolved（**`clock_nanosleep`**：**`flags & !TIMER_ABSTIME`** → **`EINVAL`**，读 **`req`** 前校验；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-176 resolved（**`prctl` `PR_SET_MM`**：已知 **`PR_SET_MM_*`** → **`EPERM`**，否则 **`EINVAL`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-183 resolved（**`recvmsg` `SCM_RIGHTS`**：按缓冲区容量安装 fd，溢出部分显式 **`drop`**，**`MSG_CTRUNC`** 当 **`fds` 未全写入**；**`CMsgBuilder::remaining`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-182 resolved（**`fcntl` `F_DUPFD`/`F_DUPFD_CLOEXEC`**：**`add_file_like_at_least`** 尊重 **`arg`** 为最小 fd；负/`>= AX_FILE_LIMIT` **`EINVAL`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）

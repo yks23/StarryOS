@@ -120,6 +120,10 @@ pub fn sys_clock_nanosleep(
     req: *const timespec,
     rem: *mut timespec,
 ) -> AxResult<isize> {
+    // Linux `clock_nanosleep(2)`：仅允许 0 或 `TIMER_ABSTIME`（与 `timerfd_settime` 策略一致，issue-180）。
+    if flags & !TIMER_ABSTIME != 0 {
+        return Err(AxError::InvalidInput);
+    }
     let req = unsafe { req.vm_read_uninit()?.assume_init() }.try_into_time_value()?;
     debug!("sys_clock_nanosleep <= clock_id: {clock_id}, flags: {flags}, req: {req:?}");
 

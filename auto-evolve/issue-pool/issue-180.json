@@ -1,0 +1,27 @@
+{
+  "id": "issue-180",
+  "title": "clock_nanosleep：未校验 flags 仅含 TIMER_ABSTIME/0，未知位被静默忽略（Linux EINVAL）",
+  "status": "resolved",
+  "created_at": "2026-04-13T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`sys_clock_nanosleep`**：在读 **`req`** 之前 **`if flags & !TIMER_ABSTIME != 0 { InvalidInput }`**，与 **`timerfd_settime`** 对 **`TFD_TIMER_ABSTIME`** 的掩码策略一致。",
+  "files_changed": ["kernel/src/syscall/task/schedule.rs"],
+  "description": "**`sys_clock_nanosleep`**（`kernel/src/syscall/task/schedule.rs`）读取 **`req`** 后仅用 **`flags & TIMER_ABSTIME != 0`** 区分绝对/相对睡眠，**未**在 **`flags & !TIMER_ABSTIME != 0`** 时返回 **`EINVAL`**。**Linux `clock_nanosleep(2)`** 的 **`flags`** 只能为 **0** 或 **`TIMER_ABSTIME`**；任何其他位置位均为 **`EINVAL`**（须在 **`copy_from_user(request)`** 等步骤前/后按内核版本校验）。**Starry** 对 **`flags == 2`** 等非法组合会当作**相对睡眠**继续执行，与 **Linux** 严格校验不一致；依赖 **`errno == EINVAL`** 探测能力或做参数防御的库可能误判。**同仓库** **`timerfd_settime`** 路径已写「未知位 → **`EINVAL`**」（`timerfd.rs`），**`clock_nanosleep`** 应对齐。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["clock_nanosleep"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/schedule.rs:117-161"],
+    "related_files": ["kernel/src/syscall/fs/timerfd.rs:35-36"],
+    "key_insight": "仅分支使用 `TIMER_ABSTIME`，未 `flags & !TIMER_ABSTIME` 拒绝"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "调用 **`clock_nanosleep(CLOCK_MONOTONIC, 2, &req, NULL)`**（**`flags` 仅非法位**）对比 **Linux** 与 **Starry** 的 **`errno`**。",
+    "expected_output_contains": "",
+    "pass_criteria": "非法 **`flags`** → **`EINVAL`**，与 **Linux** 一致。",
+    "last_result": "`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` 通过（未跑对照测试）。"
+  },
+  "suggested_fix": "在计算 **`dur`** 之前：`if flags as u32 & !TIMER_ABSTIME != 0 { return Err(InvalidInput); }`（**`TIMER_ABSTIME`** 来自 **`linux_raw_sys`**，与 **`timerfd`** 模式一致）。",
+  "references": ["man 2 clock_nanosleep", "Linux posix-timers.c"]
+}
