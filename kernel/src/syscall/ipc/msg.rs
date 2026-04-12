@@ -1,4 +1,8 @@
-use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
+use alloc::{
+    collections::{BTreeMap, VecDeque},
+    sync::Arc,
+    vec::Vec,
+};
 
 use axerrno::{AxError, AxResult, LinuxError};
 use axhal::time::monotonic_time_nanos;
@@ -111,6 +115,8 @@ pub struct MessageQueue {
     pub msqid_ds: msqid_ds,
     /// Queue of messages
     pub messages: BTreeMap<i64, Vec<Message>>, // mtype -> messages of that type
+    /// Global FIFO order (Linux `q_messages`): `(mtype, index)` into `messages[mtype][index]`.
+    fifo_order: VecDeque<(i64, usize)>,
     /// Total bytes in queue
     pub total_bytes: usize,
     /// Marked for removal
@@ -127,6 +133,7 @@ impl MessageQueue {
         MessageQueue {
             msqid_ds: msqid_ds::new(key, mode, pid as __kernel_pid_t, uid, gid),
             messages: BTreeMap::new(),
+            fifo_order: VecDeque::new(),
             total_bytes: 0,
             mark_removed: false,
             recv_notify: Event::new(),
@@ -152,7 +159,10 @@ impl MessageQueue {
 
         let message = Message { mtype, data };
 
-        self.messages.entry(mtype).or_default().push(message);
+        let v = self.messages.entry(mtype).or_default();
+        v.push(message);
+        let idx = v.len() - 1;
+        self.fifo_order.push_back((mtype, idx));
         self.total_bytes += data_len;
         self.msqid_ds.msg_cbytes += data_len as __kernel_size_t;
         self.msqid_ds.msg_qnum += 1;
@@ -219,21 +229,28 @@ impl MessageQueue {
 
     /// Get total number of messages in the queue (for MSG_COPY)
     pub fn get_total_message_count(&self) -> usize {
-        self.messages.values().map(|msgs| msgs.len()).sum()
+        self.fifo_order.len()
     }
 
     /// Get message by index (for MSG_COPY)
     pub fn get_message_by_index(&self, index: usize) -> Option<&Message> {
-        let mut current_index = 0;
+        let &(mtype, vec_idx) = self.fifo_order.get(index)?;
+        self.messages.get(&mtype)?.get(vec_idx)
+    }
 
-        // Iterate over all messages in order of message type
-        for messages in self.messages.values() {
-            if index < current_index + messages.len() {
-                return messages.get(index - current_index);
-            }
-            current_index += messages.len();
+    fn update_fifo_after_remove(&mut self, mtype: i64, removed_vec_index: usize) {
+        if let Some(pos) = self
+            .fifo_order
+            .iter()
+            .position(|&(t, i)| t == mtype && i == removed_vec_index)
+        {
+            self.fifo_order.remove(pos);
         }
-        None
+        for e in self.fifo_order.iter_mut() {
+            if e.0 == mtype && e.1 > removed_vec_index {
+                e.1 -= 1;
+            }
+        }
     }
 
     /// Remove the message by specified type and index
@@ -242,25 +259,30 @@ impl MessageQueue {
         mtype: i64,
         index: usize,
     ) -> AxResult<Message> {
-        if let Some(messages) = self.messages.get_mut(&mtype)
-            && index < messages.len()
+        let removed_msg = {
+            let msgs = match self.messages.get_mut(&mtype) {
+                Some(m) if index < m.len() => m,
+                _ => return Err(AxError::from(LinuxError::ENOMSG)), // ENOMSG
+            };
+            msgs.remove(index)
+        };
+        self.update_fifo_after_remove(mtype, index);
+
+        // Update core queue statistics in the removal method
+        self.total_bytes -= removed_msg.data.len();
+        self.msqid_ds.msg_cbytes -= removed_msg.data.len() as __kernel_size_t;
+        self.msqid_ds.msg_qnum -= 1;
+
+        // If the message list of this type is empty, remove the entire type entry
+        if self
+            .messages
+            .get(&mtype)
+            .is_some_and(|msgs| msgs.is_empty())
         {
-            let removed_msg = messages.remove(index);
-
-            // Update core queue statistics in the removal method
-            self.total_bytes -= removed_msg.data.len();
-            self.msqid_ds.msg_cbytes -= removed_msg.data.len() as __kernel_size_t;
-            self.msqid_ds.msg_qnum -= 1;
-
-            // If the message list of this type is empty, remove the entire type entry
-            if messages.is_empty() {
-                self.messages.remove(&mtype);
-            }
-
-            return Ok(removed_msg);
+            self.messages.remove(&mtype);
         }
 
-        Err(AxError::from(LinuxError::ENOMSG)) // ENOMSG
+        Ok(removed_msg)
     }
 }
 
@@ -622,7 +644,10 @@ pub fn sys_msgrcv(
 
     // Message matching logic (distinguish between MSG_COPY and normal mode)
     let (mtype, data_slice, index, should_remove) = if flags.contains(MsgRcvFlags::MSG_COPY) {
-        // MSG_COPY mode: msgtyp is the message index
+        // MSG_COPY mode: msgtyp is the message index (non-negative; Linux returns EINVAL otherwise).
+        if msgtyp < 0 {
+            return Err(AxError::from(LinuxError::EINVAL)); // EINVAL
+        }
         let index = msgtyp as usize;
 
         // Check if the index is valid
