@@ -5,7 +5,10 @@ use bitflags::bitflags;
 use linux_raw_sys::general::{O_CLOEXEC, O_NONBLOCK};
 use starry_vm::VmMutPtr;
 
-use crate::file::{FileLike, Pipe, close_file_like};
+use crate::{
+    file::{FileLike, Pipe, close_file_like},
+    mm::UserPtr,
+};
 
 bitflags! {
     /// Flags for the `pipe2` syscall.
@@ -20,6 +23,10 @@ bitflags! {
 
 pub fn sys_pipe2(fds: *mut [c_int; 2], flags: u32) -> AxResult<isize> {
     let flags = PipeFlags::from_bits(flags).ok_or(AxError::InvalidInput)?;
+
+    // Validate user `fds` before allocating the pipe or fd slots (issue-289; same class as
+    // issue-286 socketpair output ordering).
+    let _ = UserPtr::from(fds).get_as_mut()?;
 
     let cloexec = flags.contains(PipeFlags::CLOEXEC);
     let (read_end, write_end) = Pipe::new();

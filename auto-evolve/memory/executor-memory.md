@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-289 resolved（**`pipe2`**：**`UserPtr::from(fds).get_as_mut()`** 先于 **`Pipe::new`**/**`add_to_fd_table`**（与 **issue-286** **`socketpair`** 同类）；**`fs/pipe.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-288 resolved（**`gettimeofday(2)`** **`struct timezone *tz`**：**`tz != NULL`** 时 **`vm_write`** 全零 **`timezone`**；**`mod.rs`** 转发 **`uctx.arg1()`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-287 resolved（**`times(2)` `struct Tms`**：四字段为 **`linux_raw_sys::general::__kernel_clock_t`**（uapi **`clock_t`**），**`cpu_nanos_to_clock_t`** 饱和到有符号范围；**`time.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-286 resolved（**`socketpair`**：**`fds.get_as_mut()`** 先于 **`StreamTransport`/`DgramTransport::new_pair`** 与 **`Socket::new`**；**`net/socket.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -312,6 +313,7 @@
 | issue-271 | mlock/mlock2 addr 须页对齐 EINVAL | resolved | 2026-04-12 |
 | issue-272 | lseek SEEK_SET 负 offset EINVAL | resolved | 2026-04-12 |
 | issue-273 | prlimit64 跨 pid 权限 EPERM | resolved | 2026-04-12 |
+| issue-289 | pipe2 fds get_as_mut 先于 Pipe::new | resolved | 2026-04-13 |
 | issue-288 | gettimeofday tz 非 NULL 写全零 timezone | resolved | 2026-04-13 |
 | issue-287 | times Tms 字段 __kernel_clock_t | resolved | 2026-04-13 |
 | issue-286 | socketpair fds 校验先于 new_pair | resolved | 2026-04-13 |
@@ -496,7 +498,7 @@
 - **`mprotect(2)`**：**`length == 0`** 在 **`prot` 可解析**、**无** **`PROT_GROWSDOWN`/`GROWSUP`**、**`addr` 页对齐**后 **`Ok(0)`** **no-op**（Linux **`do_mprotect_pkey`**，issue-280）；**非零** **`length`** 仍 **`align_up_4k`** 后 **`protect`**。**`addr`** 非页对齐 **`EINVAL`**（issue-270）。**`munmap(2)`**：**`length == 0`** → **`InvalidInput`**（**EINVAL**）（issue-234）；**`addr`** 须 **4K 页对齐**，否则 **`EINVAL`**（issue-268）。
 - **`brk(2)`**：非零 **`addr`** 须 **4K 页对齐**（**`VirtAddr::is_aligned(PAGE_SIZE_4K)`**），否则 **`InvalidInput`（EINVAL）**；成功路径 **`set_heap_top`/`return`** 均为对齐地址（issue-253；**`USER_HEAP_BASE`/`heap_limit`** 等仍见 issue-089）。
 - **`openat(2)`/`open(2)`**（**`fs/fd_ops.rs`**）：**`validate_open_flags`** 先于 **`flags_to_options`**；若 **`O_PATH`**，**`flags`** 须为 Linux **`O_PATH_FLAGS`**（**`O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC|O_PATH`**）子集，否则 **`InvalidInput`（EINVAL）**（**`fs/open.c` `build_open_flags`**，issue-259；含 **`O_PATH|O_CREAT`** 等）。
-- **`pipe2`**：**`flags`** 仅允许 **`O_CLOEXEC`/`O_NONBLOCK`**（**`PipeFlags`**）；用 **`from_bits(...).ok_or(InvalidInput)`**，勿 **`from_bits_truncate`**（与 **`eventfd2`/`epoll_create1`** 一致）。**`add_to_fd_table`** 成功后若 **`fds.vm_write`** 失败（**EFAULT** 等），须 **`close_file_like`** 已安装的读/写 **fd**，勿留孤儿表项（issue-148）；第二端分配失败时仍应关闭已装读端，勿对 **`close_file_like`** **`unwrap`**。
+- **`pipe2`**：**`flags`** 仅允许 **`O_CLOEXEC`/`O_NONBLOCK`**（**`PipeFlags`**）；用 **`from_bits(...).ok_or(InvalidInput)`**，勿 **`from_bits_truncate`**（与 **`eventfd2`/`epoll_create1`** 一致）。**`UserPtr::from(fds).get_as_mut()`** 先于 **`Pipe::new`**/**`add_to_fd_table`**（issue-289，与 issue-286 **`socketpair`** 输出顺序同类）。**`add_to_fd_table`** 成功后若 **`fds.vm_write`** 失败（**EFAULT** 等），须 **`close_file_like`** 已安装的读/写 **fd**，勿留孤儿表项（issue-148）；第二端分配失败时仍应关闭已装读端，勿对 **`close_file_like`** **`unwrap`**。
 - **`poll(2)`/`ppoll(2)`**：**`pollfd.fd < 0`** 的条目被忽略，**`revents`** 须置 **0**（勿保留陈旧位）。
 - **`epoll_ctl(2)`**：**`fd == epfd` → `InvalidInput`**（**EINVAL**），勿将 epoll 实例加入自身（issue-240）。**`EPOLL_CTL_ADD`/`MOD`** 须先 **`get_file_like(fd)`**（无效目标 fd → **EBADF**），再 **`event.get_as_ref`**/**`parse_event`**（**EFAULT**/**EINVAL** 类），与 Linux 顺序一致（issue-144）；**`events`** 未知位等仍按 issue-078 **`KNOWN_EPOLL_EVENTS_MASK`**。**`EPOLL_CTL_DEL`** 不读 **`event`**。
 - **`readlink(2)`/`readlinkat(2)`**：**`bufsiz`**（**`size`**）须 **> 0**，否则 **`InvalidInput`**（**EINVAL**），须在 **`vm_load_string(path)`** 与 **`resolve_no_follow`/`read_link`** 之前校验（issue-140）；勿对 **`size==0`** 返回成功 **0**。**`size>0`** 时 **`buf == NULL`** → **`BadAddress`（EFAULT）**，先于 **`vm_load_string`**（issue-282；与 issue-281 同类）。
