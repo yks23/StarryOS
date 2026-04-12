@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-281 resolved（**`statfs`/`fstatfs`**：**`buf == NULL`** → **`BadAddress`（EFAULT）**，先于 **`resolve`**/**`location_from_fd`**；**`fs/stat.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-280 resolved（**`mprotect`**：**`length == 0`** 在 **`addr` 页对齐**且 **`prot` 合法**时 **`Ok(0)`** **no-op**（Linux **`do_mprotect_pkey`**）；**`munmap`** 仍 **`length==0` → EINVAL**（issue-234）；**`mmap.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-279 resolved（**`setitimer`**：**`new_value == NULL`** → **`set_itimer(ty, 0, 0)`** **disarm**（Linux VERSIONS；与全零 **`itimerval`** 等价）；**`time.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-278 resolved（**`pidfd_getfd`**：**`flags` 须为 0**，否则 **`InvalidInput`（EINVAL）**；**`pidfd.rs`**（与 **`pidfd_send_signal`** 同）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -304,6 +305,7 @@
 | issue-271 | mlock/mlock2 addr 须页对齐 EINVAL | resolved | 2026-04-12 |
 | issue-272 | lseek SEEK_SET 负 offset EINVAL | resolved | 2026-04-12 |
 | issue-273 | prlimit64 跨 pid 权限 EPERM | resolved | 2026-04-12 |
+| issue-281 | statfs/fstatfs NULL buf 先 EFAULT | resolved | 2026-04-12 |
 | issue-280 | mprotect length==0 no-op Ok(0) | resolved | 2026-04-12 |
 | issue-279 | setitimer NULL new_value disarm | resolved | 2026-04-12 |
 | issue-278 | pidfd_getfd flags 非零 EINVAL | resolved | 2026-04-12 |
@@ -493,6 +495,7 @@
 - **`faccessat2(2)`**：**`flags`** 须为 **`AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH | AT_EACCESS`** 的子集（**`VALID_FACCESSAT_FLAGS`**），否则 **`EINVAL`**；**`mode`** 须为 **`F_OK|R_OK|W_OK|X_OK`** 子集（**`linux_raw_sys`** 上 **`F_OK==0`**，与 Linux **`~(F_OK|R_OK|W_OK|X_OK)`** 掩码一致），否则 **`EINVAL`**（issue-128）。上述 **`flags`/`mode`** 须在 **`vm_load_string(path)`** 与 **`resolve_at`** 之前完成（issue-129，非法参数先 **EINVAL** 于 **EFAULT**）；**`AT_EACCESS`** 与 **`resolve_at`** 语义可仍简化，但须先拒绝未知位。
 - **`fstatat(2)`/`newfstatat(2)`**（**`sys_fstatat`**）：**`flags`** 须为 **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT | AT_STATX_SYNC_TYPE`** 的子集（Linux **`VALID_NEWFSTATAT_FLAGS`**）；**`AT_STATX_FORCE_SYNC`** 与 **`AT_STATX_DONT_SYNC`** 不能同时置位；须在 **`vm_load_string(path)`** 之前校验（issue-131）。**`AT_NO_AUTOMOUNT`** 等可仍为 no-op，但未知位须 **`EINVAL`**。**`resolve_at`** 仍只消费 **`AT_EMPTY_PATH`**/**`AT_SYMLINK_NOFOLLOW`**。
 - **`statx(2)`**：**`flags`** 须为 **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW | AT_STATX_SYNC_TYPE`** 的子集；**`AT_STATX_FORCE_SYNC`** 与 **`AT_STATX_DONT_SYNC`** 不能同时置位（**`(flags & AT_STATX_SYNC_TYPE) == AT_STATX_SYNC_TYPE`** → **`EINVAL`**）；**`mask`** 含 **`STATX__RESERVED`** → **`EINVAL`**（Linux **`vfs_statx`**，issue-260）；上述须在 **`vm_load_string(path)`** 之前完成（issue-127，非法 flags 先 **EINVAL**）；再 **`resolve_at`**。
+- **`statfs(2)`/`fstatfs(2)`**：**`buf == NULL`** → **`BadAddress`（EFAULT）**，先于 **`vm_load_string`/`resolve`** 与 **`location_from_fd`**（issue-281；对齐 Linux 在 **`copy_to_user`** 前探测输出缓冲的常见顺序）。
 - **SysV `msgsnd`/`msgrcv`**：**`MessageQueue`** 含 **`recv_notify`/`send_notify`**（**`event_listener::Event`**）；满且非 **`IPC_NOWAIT`** 时 **`msgsnd`** 在 **`send_notify`** 上阻塞，空且非 **`IPC_NOWAIT`** 时 **`msgrcv`** 在 **`recv_notify`** 上阻塞（**`block_on(interruptible(listener))`**）；入队后 **`recv_notify.notify`**，出队后 **`send_notify.notify`**；**`msgctl(IPC_RMID)`** 置 **`mark_removed`** 后 **`wake_waiters`**。信号 **`EINTR`** 依赖 **`interruptible`**。
 - **SysV `msgctl(2)`**：**`IPC_INFO`/`MSG_INFO`/`MSG_STAT`/`IPC_STAT`/`IPC_SET`** 在 **`vm_write`**/**`read_msqid_ds_ipc_set_user`** 前 **`buf==0` → `BadAddress`**（**`IPC_STAT`/`MSG_STAT`** 在 **`EACCES`** 之后、`vm_write` 之前，issue-233）；**`IPC_RMID`** 忽略 **`buf`**。
 - **SysV `shmctl(IPC_STAT)`**：**`buf`** 须为可写 **`shmid_ds`**（**`UserPtr::get_as_mut`**），**`NULL`** → **`BadAddress`**（**EFAULT**），勿 **`nullable!`** 跳过拷贝仍 **`Ok(0)`** 并更新 **`shm_ctime`**（issue-152）；与 **`IPC_SET`** 对 **`buf`** 一致。

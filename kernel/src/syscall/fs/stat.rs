@@ -201,6 +201,11 @@ fn statfs(loc: &Location) -> AxResult<statfs> {
 }
 
 pub fn sys_statfs(path: *const c_char, buf: *mut statfs) -> AxResult<isize> {
+    // Linux: validate user `buf` before `path` resolution so EFAULT does not follow a successful
+    // lookup (issue-281).
+    if buf.is_null() {
+        return Err(AxError::BadAddress);
+    }
     let path = vm_load_string(path)?;
     debug!("sys_statfs <= path: {path:?}");
 
@@ -217,6 +222,9 @@ pub fn sys_statfs(path: *const c_char, buf: *mut statfs) -> AxResult<isize> {
 pub fn sys_fstatfs(fd: i32, buf: *mut statfs) -> AxResult<isize> {
     debug!("sys_fstatfs <= fd: {fd}");
 
+    if buf.is_null() {
+        return Err(AxError::BadAddress);
+    }
     let loc = location_from_fd(fd)?;
     buf.vm_write(statfs(&loc)?)?;
     Ok(0)
