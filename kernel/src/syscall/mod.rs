@@ -626,12 +626,12 @@ pub fn handle_syscall(uctx: &mut UserContext) {
         Sysno::inotify_init1 => sys_inotify_init1(uctx.arg0() as _),
         Sysno::fanotify_init => sys_fanotify_init(uctx.arg0() as _, uctx.arg1() as _),
 
+        Sysno::bpf | Sysno::userfaultfd => Err(AxError::Unsupported),
+        Sysno::perf_event_open => Err(AxError::PermissionDenied),
+        Sysno::io_uring_setup => sys_io_uring_setup(uctx.arg0() as u32, uctx.arg1() as _),
+
         // dummy fds
-        Sysno::userfaultfd
-        | Sysno::perf_event_open
-        | Sysno::io_uring_setup
-        | Sysno::bpf
-        | Sysno::fsopen
+        Sysno::fsopen
         | Sysno::fspick
         | Sysno::open_tree
         | Sysno::memfd_secret => sys_dummy_fd(sysno),

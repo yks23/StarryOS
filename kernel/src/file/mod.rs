@@ -9,6 +9,7 @@ mod pipe;
 pub(crate) mod record_lock;
 pub mod signalfd;
 pub mod timerfd;
+pub mod io_uring;
 
 use alloc::{borrow::Cow, sync::Arc};
 use core::{ffi::c_int, time::Duration};
@@ -31,6 +32,7 @@ pub use self::{
     pidfd::PidFd,
     pipe::Pipe,
     timerfd::TimerFd,
+    io_uring::IoUringFd,
 };
 use crate::task::{AX_FILE_LIMIT, AsThread};
 
