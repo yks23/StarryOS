@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-137 resolved（**`linkat`**：**`VALID_LINKAT_FLAGS`** + **`resolve_flags`** 先于 **`vm_load_string`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-136 resolved（**`fcntl`** 记录锁 **`F_SETLK`/`F_GETLK`** 与 **`F_OFD_*`**：**`get_file_like(fd)`** 先于用户 **`flock64`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-135 resolved（**`recvmsg`**：**`validate_recvmsg_flags`** + **`Socket::from_fd`** 先于 **`msghdr`** 与 **`IoVectorBuf`**；**`recv_on_socket`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-134 resolved（**`sendmsg`**：**`Socket::from_fd`** 与 **`SENDMSG_FLAGS_MASK`** 先于 **`msghdr`**/cmsg/iovec；**`send_on_socket`** 复用；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -117,6 +118,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-137 | linkat flags 先于 vm_load_string | resolved | 2026-04-12 |
 | issue-136 | fcntl 记录锁 get_file_like 先于 flock 用户访问 | resolved | 2026-04-12 |
 | issue-135 | recvmsg flags/from_fd 先于 msghdr/iov | resolved | 2026-04-12 |
 | issue-134 | sendmsg from_fd 先于 copy msghdr/iov | resolved | 2026-04-12 |
@@ -259,7 +261,7 @@
 - **`mmap(2)` `flags`**：先 **`flags & !ALLOWED_MAP_FLAGS`**（**`MAP_TYPE|MAP_FIXED|MAP_ANONYMOUS|…|MAP_DROPPABLE|(MAP_HUGE_MASK<<MAP_HUGE_SHIFT)`** 等 uapi 位），非零 → **`InvalidInput`**；**`MmapFlags::from_bits(flags)`**，**`None`** 时 **`MAP_SHARED_VALIDATE` 类型 → `OperationNotSupported`**，否则 **`InvalidInput`**；勿在未知/非法组合上 **`from_bits_truncate`**。合法 **`MAP_HUGE_*`** 等须在 **`MmapFlags`** 中声明以便 **`from_bits`** 成功。
 - **`pipe2`**：**`flags`** 仅允许 **`O_CLOEXEC`/`O_NONBLOCK`**（**`PipeFlags`**）；用 **`from_bits(...).ok_or(InvalidInput)`**，勿 **`from_bits_truncate`**（与 **`eventfd2`/`epoll_create1`** 一致）。
 - **`poll(2)`/`ppoll(2)`**：**`pollfd.fd < 0`** 的条目被忽略，**`revents`** 须置 **0**（勿保留陈旧位）。
-- **`linkat(2)`**：**`flags`** 仅允许 **`AT_EMPTY_PATH | AT_SYMLINK_FOLLOW`**（与 Linux **`VALID_LINKAT_FLAGS`**），否则 **`EINVAL`**；**`resolve_at`** 仍用 **`AT_SYMLINK_NOFOLLOW`** 表示「不 follow」，故在 **`sys_linkat`** 内将 **`AT_SYMLINK_FOLLOW` 未置位** 时并入 **`AT_SYMLINK_NOFOLLOW`** 再调用 **`resolve_at`**。
+- **`linkat(2)`**：**`flags`** 仅允许 **`AT_EMPTY_PATH | AT_SYMLINK_FOLLOW`**（与 Linux **`VALID_LINKAT_FLAGS`**），否则 **`EINVAL`**；上述与 **`resolve_flags`**（**`FOLLOW` ↔ `NOFOLLOW`** 映射）须在 **`vm_load_string(old_path/new_path)`** 之前完成（issue-137，非法 flags 先 **EINVAL**）。**`resolve_at`** 仍用 **`AT_SYMLINK_NOFOLLOW`** 表示「不 follow」。
 - **`unlinkat(2)`**：**`flags`** 仅 **`0`** 或 **`AT_REMOVEDIR`**，否则 **`EINVAL`**；勿将未知位当作「删文件」分支。
 - **`fchmodat(2)`** / **`fchmod`**： **`flags`** 须为 Linux **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW`** 的子集（**`sys_fchmod`** 用 **`AT_EMPTY_PATH`**），否则 **`EINVAL`**；勿未校验即传入 **`resolve_at`**。
 - **`utimensat(2)`**：**`path==NULL`** 时逻辑上含 **`AT_EMPTY_PATH`**；**`flags`** 须为 **`AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH`** 的子集（与 Linux **`VALID_UTIMENSAT_FLAGS`**），在 **`update_times`/`resolve_at`** 前校验，非法位 **`EINVAL`**（含双 **`UTIME_OMIT`** 时亦应先拒绝非法 **`flags`**）。
@@ -338,6 +340,7 @@
 - issue-134：**`sendmsg`** 无效 **`fd`** + 坏 **`msghdr`/`iov`**：首错应 **`EBADF`**（先于 **EFAULT**）。
 - issue-135：**`recvmsg`** 非法 **`flags`** 先于 **`msghdr`**；无效 **`fd`** + 坏 **`msghdr`/`iov`**：首错 **`EBADF`** 或 **`EINVAL`**（**flags**）先于 **EFAULT**。
 - issue-136：**`fcntl`** **`F_SETLK`/`F_GETLK`**（含 **`F_OFD_*`**）：无效 **`fd`** + 坏 **`flock64 *`**，首错 **`EBADF`**。
+- issue-137：**`linkat`** 非法 **`flags`** + 坏 path指针，首错 **`EINVAL`**（先于 **EFAULT**）。
 - issue-053：请跑 **`/bin/test_memfd_create_invalid_flags`**（**`memfd_create(..., 0x80000000)`** → **`EINVAL`**）。
 - issue-052：请跑 **`/bin/test_fchownat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`uid`/`gid`** 不变）。
 - issue-051：请跑 **`/bin/test_utimensat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`mtime`** 不变）。

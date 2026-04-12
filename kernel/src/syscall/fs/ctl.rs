@@ -195,13 +195,7 @@ pub fn sys_linkat(
     new_path: *const c_char,
     flags: u32,
 ) -> AxResult<isize> {
-    let old_path = old_path.nullable().map(vm_load_string).transpose()?;
-    let new_path = vm_load_string(new_path)?;
-    debug!(
-        "sys_linkat <= old_dirfd: {old_dirfd}, old_path: {old_path:?}, new_dirfd: {new_dirfd}, \
-         new_path: {new_path}, flags: {flags}"
-    );
-
+    // Linux linkat: reject unknown flags before copy_from_user paths (EINVAL before EFAULT).
     // Linux VALID_LINKAT_FLAGS: AT_EMPTY_PATH | AT_SYMLINK_FOLLOW (see namei.c).
     const VALID_LINKAT_FLAGS: u32 = AT_EMPTY_PATH | AT_SYMLINK_FOLLOW;
     if flags & !VALID_LINKAT_FLAGS != 0 {
@@ -212,6 +206,13 @@ pub fn sys_linkat(
     if flags & AT_SYMLINK_FOLLOW == 0 {
         resolve_flags |= AT_SYMLINK_NOFOLLOW;
     }
+
+    let old_path = old_path.nullable().map(vm_load_string).transpose()?;
+    let new_path = vm_load_string(new_path)?;
+    debug!(
+        "sys_linkat <= old_dirfd: {old_dirfd}, old_path: {old_path:?}, new_dirfd: {new_dirfd}, \
+         new_path: {new_path}, flags: {flags}"
+    );
 
     let old = resolve_at(old_dirfd, old_path.as_deref(), resolve_flags)?
         .into_file()
