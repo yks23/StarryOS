@@ -475,14 +475,12 @@ pub fn handle_syscall(uctx: &mut UserContext) {
             uctx.arg0() as _,
             uctx.arg1() as _,
             uctx.arg2() as _,
-            uctx.arg3() as _,
         ),
         Sysno::rt_tgsigqueueinfo => sys_rt_tgsigqueueinfo(
             uctx.arg0() as _,
             uctx.arg1() as _,
             uctx.arg2() as _,
             uctx.arg3() as _,
-            uctx.arg4() as _,
         ),
         Sysno::sigaltstack => sys_sigaltstack(uctx.arg0() as _, uctx.arg1() as _),
         Sysno::futex => sys_futex(

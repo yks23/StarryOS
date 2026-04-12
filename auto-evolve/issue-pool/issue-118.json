@@ -1,0 +1,31 @@
+{
+  "id": "issue-118",
+  "title": "rt_sigqueueinfo/rt_tgsigqueueinfo 对 Linux 未定义的 sigsetsize 做 check_sigset_size，易与三/四参用户 ABI 不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "resolved_at": "2026-04-12T00:00:00Z",
+  "severity": "medium",
+  "fix_summary": "移除 **`sys_rt_sigqueueinfo`/`sys_rt_tgsigqueueinfo`** 的 **`sigsetsize`** 形参与 **`check_sigset_size`**；**`mod.rs`** 按 Linux **3/4 参**分发（queueinfo：`arg0`–`arg2`；tgsigqueueinfo：`arg0`–`arg3`）。**`SignalInfo`** 仍由 **`make_queue_signal_info`** **`vm_read`**。",
+  "files_changed": ["kernel/src/syscall/signal.rs", "kernel/src/syscall/mod.rs"],
+  "description": "**`sys_rt_sigqueueinfo`** / **`sys_rt_tgsigqueueinfo`**（`kernel/src/syscall/signal.rs`）在入口调用 **`check_sigset_size(sigsetsize)`**，对应形参来自 **`kernel/src/syscall/mod.rs`** 中 **`uctx.arg3()`** / **`uctx.arg4()`**。**Linux** 侧 **`rt_sigqueueinfo`** 为 **`SYSCALL_DEFINE3(pid, sig, uinfo)`**，**`rt_tgsigqueueinfo`** 为 **`SYSCALL_DEFINE4(tgid, tid, sig, uinfo)`**，**均无** **`sigsetsize`** 参数。按常规 **`syscall(SYS_rt_sigqueueinfo, pid, sig, uinfo)`** 或四参 **`rt_tgsigqueueinfo`** 调用时，**未传递的** ABI 槽位（如 RISC-V **`a3`/`a4`**）在进内核时可为**未定义/残留寄存器值**，**`check_sigset_size`** 可能误返回 **`InvalidInput`**（类 **EINVAL**）或偶发通过，与 **Linux** 可观测行为偏离，并影响直接 **`syscall`** 的便携程序。若 Starry 有意扩展 ABI，须在接口与文档中固定第四/五参语义；否则应移除对 **`sigset_t` 长度**的校验，或与 **`siginfo`** 拷贝路径对齐 **Linux** 参数个数。",
+  "category": "syscall-abi",
+  "affected_syscalls": ["rt_sigqueueinfo", "rt_tgsigqueueinfo"],
+  "source_context": {
+    "primary_files": [
+      "kernel/src/syscall/signal.rs:186-210",
+      "kernel/src/syscall/mod.rs:474-486"
+    ],
+    "related_files": [],
+    "key_insight": "mod.rs 传入 arg3/arg4 作 sigsetsize；Linux 无此参"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "仅用 **三参** **`syscall(SYS_rt_sigqueueinfo, pid, SIGUSR1, &info)`**（不显式置第四参数寄存器为 **`sizeof(sigset_t)`**）；对比 **Linux** 成功/失败与 **Starry** 是否因 **`check_sigset_size`** 误拒。",
+    "expected_output_contains": "",
+    "pass_criteria": "与 **Linux**参数个数一致：**去掉** **`check_sigset_size`** 或改为 **Starry 扩展**并强制用户态传 **`sizeof(sigset_t)`**；勿依赖未初始化 ABI槽位。",
+    "last_result": "2026-04-12：已去掉多余 **`sigsetsize`** 与 **`check_sigset_size`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** PASS；QEMU 未测"
+  },
+  "suggested_fix": "删除两 syscall 的 **`check_sigset_size`**（若 **`SignalInfo`** 读路径已自洽）；或若需与 **`rt_sigprocmask`** 族统一，改为文档化 **第五参** 且 **`mod.rs`** 仅在明确扩展 ABI 时传入。",
+  "references": ["Linux kernel rt_sigqueueinfo", "man 2 rt_sigqueueinfo", "man 2 rt_tgsigqueueinfo"]
+}

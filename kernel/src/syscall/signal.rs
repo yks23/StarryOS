@@ -183,28 +183,24 @@ pub(crate) fn make_queue_signal_info(
     Ok(Some(sig))
 }
 
+/// Linux `rt_sigqueueinfo` is 3-arg (`pid`, `sig`, `uinfo`); there is no `sigsetsize` slot.
 pub fn sys_rt_sigqueueinfo(
     tgid: Pid,
     signo: u32,
     sig: *const SignalInfo,
-    sigsetsize: usize,
 ) -> AxResult<isize> {
-    check_sigset_size(sigsetsize)?;
-
     let sig = make_queue_signal_info(tgid, signo, sig)?;
     send_signal_to_process(tgid, sig)?;
     Ok(0)
 }
 
+/// Linux `rt_tgsigqueueinfo` is 4-arg (`tgid`, `tid`, `sig`, `uinfo`); there is no `sigsetsize` slot.
 pub fn sys_rt_tgsigqueueinfo(
     tgid: Pid,
     tid: Pid,
     signo: u32,
     sig: *const SignalInfo,
-    sigsetsize: usize,
 ) -> AxResult<isize> {
-    check_sigset_size(sigsetsize)?;
-
     let sig = make_queue_signal_info(tgid, signo, sig)?;
     send_signal_to_thread(Some(tgid), tid, sig)?;
     Ok(0)
