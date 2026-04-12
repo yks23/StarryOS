@@ -1,0 +1,32 @@
+{
+  "id": "issue-345",
+  "title": "`clock_nanosleep(2)`：`sys_clock_nanosleep` 先 `flags & !TIMER_ABSTIME` → `EINVAL`，再 `match clock_id` → `EINVAL`；与 Linux `clock_nanosleep`/`hrtimer_nanosleep` 路径上「非法 `clock_id`」与「非法 `flags`」的 `EINVAL` 优先级可能不完全一致（与 issue-332 的 `clock_id`/`req` 顺序正交）",
+  "status": "resolved",
+  "created_at": "2026-04-16T14:00:00Z",
+  "resolved_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/task/schedule.rs`** **`sys_clock_nanosleep`** **（** **约** **126–152** **行** **）** **顺序** **：** **`if flags & !TIMER_ABSTIME != 0`** **→** **`InvalidInput`** **→** **`match clock_id`** **（** **`wall_time`** **/** **`monotonic_time`** **/** **`_`** **`Unsupported`** **`InvalidInput`** **）** **→** **`read_timespec_user(req)`** **等** **。** **当** **`flags`** **含** **非法** **位** **且** **`clock_id`** **不受** **支持** **时** **，** **本** **路径** **固定** **先** **因** **`flags`** **失败** **；** **Linux** **内核** **常** **在** **解析** **`which_clock`/`clock_id`** **与** **校验** **`TIMER_ABSTIME`** **的** **组合** **时** **顺序** **可能** **不同** **。** **与** **issue-332** **已** **验证** **的** **`clock_id`** **先于** **`read_timespec_user(req)`** **（** **`EINVAL`** **/** **`EFAULT`** **）** **正交** **；** **与** **`issue-180`** **`timerfd_settime`** **`flags`** **策略** **注释** **同** **段** **。**\n\n**建议** **：** **对照** **Linux** **`kernel/time/posix-timers.c`** **`clock_nanosleep`** **，** **将** **`clock_id`** **可** **支持性** **检查** **提前** **到** **非法** **`flags`** **拒绝** **之前** **（** **或** **注释** **说明** **`EINVAL`** **顺序** **与** **上游** **差异** **）** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["clock_nanosleep"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/schedule.rs:126-152"],
+    "related_files": ["kernel/src/syscall/time.rs"],
+    "key_insight": "clock_nanosleep flags EINVAL before clock_id EINVAL order"
+  },
+  "fix_summary": "`sys_clock_nanosleep`：先 `match clock_id`（不支持 → `EINVAL`），再 `flags & !TIMER_ABSTIME`（issue-180）；与 Linux `posix-timers.c` `clock_nanosleep` 常见「clock_id 先于非法 flags」顺序一致；保留 `clock_id` 先于 `read_timespec_user(req)`（issue-332）。",
+  "files_changed": [
+    "kernel/src/syscall/task/schedule.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-345.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：非法 `flags` + 非法 `clock_id` 对照 Linux 返回顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游 `clock_nanosleep` 对 `flags`/`clock_id` 的校验顺序一致，或注释说明差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "先 `match clock_id`/可睡眠时钟解析，再拒绝 `flags` 未知位；或文档化与 `hrtimer_nanosleep` 的差异。",
+  "references": ["man 2 clock_nanosleep", "kernel/src/syscall/task/schedule.rs", "issue-332", "issue-180"]
+}
