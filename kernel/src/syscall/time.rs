@@ -84,6 +84,14 @@ fn clock_get_resolution(clock_id: u32) -> TimeValue {
 }
 
 pub fn sys_clock_gettime(clock_id: __kernel_clockid_t, ts: *mut timespec) -> AxResult<isize> {
+    // Linux `common_clock_get` / `put_user`: reject NULL `tp` → EFAULT before `clock_id` rejection
+    // (EINVAL) and before reading the clock (issue-342). Same `clock_id` vs user-buffer ordering
+    // theme as `sys_clock_nanosleep` (issue-332: `clock_id` before `read_timespec_user(req)` there
+    // is the inverse shape — gettime outputs `tp`, so validate output pointer first).
+    if ts.is_null() {
+        return Err(AxError::BadAddress);
+    }
+
     let cid = clock_id as u32;
     let now = match cid {
         CLOCK_REALTIME | CLOCK_REALTIME_COARSE => wall_time(),
@@ -103,10 +111,6 @@ pub fn sys_clock_gettime(clock_id: __kernel_clockid_t, ts: *mut timespec) -> AxR
             return Err(AxError::InvalidInput);
         }
     };
-    // Linux `clock_gettime(2)`: `tp` must be writable; NULL → EFAULT.
-    if ts.is_null() {
-        return Err(AxError::BadAddress);
-    }
     ts.vm_write(timespec::from_time_value(now))?;
     Ok(0)
 }
