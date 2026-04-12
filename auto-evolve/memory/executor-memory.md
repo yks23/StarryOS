@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-412 resolved（**`fcntl` `F_SETFL`**：**`get_file_like(fd)`** **先于** **`arg & !F_SETFL_MASK`** **（** **`EBADF`** **先于** **`EINVAL`** **）** **对齐** **Linux** **`do_fcntl`**；**`fd_ops.rs`**；**issue-252** **`F_GETFL`** **对称**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-411 resolved（**`fanotify_init`**：**`FAN_ENABLE_AUDIT`** **须** **`CAP_AUDIT_WRITE`**（**`cap_effective` 位 30**）**→** **否则** **`PermissionDenied`**；**`validate_fanotify_init_combined`** **后** **`add_file_like`** **前**；**`notify.rs`**；**issue-409** **`EINVAL`** **正交**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-410 resolved（**`fcntl` `F_DUPFD`/`F_DUPFD_CLOEXEC`**：**`dup_fd`** **不再** **`min_fd as c_int`** **截断**；**`min_fd > c_int::MAX`** **→** **`InvalidInput`**；**`add_file_like_at_least`** **仍** **`AX_FILE_LIMIT`**/**`RLIMIT_NOFILE`**；**`fd_ops.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-409 resolved（**`fanotify_init`**：**`validate_fanotify_init_combined`** **对齐** **Linux** **`fanotify_user.c`** **（** **class/PIDFD+TID/MNT/FID/`O_ACCMODE`/NAME/TARGET_FID** **）**；**未知** **`flags`** **位** **仍** **最先**；**`notify.rs`**；**issue-328** **`event_f_flags`** **保存** **正交**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）

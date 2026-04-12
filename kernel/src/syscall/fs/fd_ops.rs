@@ -356,11 +356,13 @@ pub fn sys_fcntl(fd: c_int, cmd: c_int, arg: usize) -> AxResult<isize> {
             crate::file::record_lock::sys_fcntl_getlk(fd, fl)
         }
         F_SETFL => {
+            // Linux do_fcntl: fget(fd) before F_SETFL arg mask check (EBADF before EINVAL).
+            // issue-412; F_GETFL symmetry / pipe-only O_NONBLOCK: issue-252.
+            let f = get_file_like(fd)?;
             let arg = arg as u32;
             if arg & !F_SETFL_MASK != 0 {
                 return Err(AxError::InvalidInput);
             }
-            let f = get_file_like(fd)?;
             f.set_nonblocking(arg & O_NONBLOCK != 0)?;
             let rest = arg & !O_NONBLOCK;
             if rest == 0 {
