@@ -398,6 +398,10 @@ pub fn sys_readlinkat(
     if size == 0 {
         return Err(AxError::InvalidInput);
     }
+    // Validate output buffer before `vm_load_string` / VFS (issue-282; same class as issue-281).
+    if buf.is_null() {
+        return Err(AxError::BadAddress);
+    }
 
     let path = vm_load_string(path)?;
 
