@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-19：issue-310 resolved（**`msgget`**：**`MSGMNI`**/**`ENOSPC`** **仅** **在** **`IPC_PRIVATE`**/**`IPC_CREAT`** **新建** **队列** **前**；**`msg.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-18：issue-309 resolved（**`arch_prctl`** **x86** **`ARCH_GET_FS`/`ARCH_GET_GS`**：**`addr==0`** → **`BadAddress`**，**`vm_write`** **前**；**`thread.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-17：issue-308 resolved（**`clone3`**：**`args == NULL`** → **`BadAddress`**，**`vm_read_slice`** **前**、**`size >= MIN_CLONE_ARGS_SIZE`** **后**；**`clone3.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-16：issue-307 resolved（**`shmat`**：**`get_inner_by_shmid`** **先于** **`shmflg`** **掩码**；**`shm.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -333,6 +334,7 @@
 | issue-271 | mlock/mlock2 addr 须页对齐 EINVAL | resolved | 2026-04-12 |
 | issue-272 | lseek SEEK_SET 负 offset EINVAL | resolved | 2026-04-12 |
 | issue-273 | prlimit64 跨 pid 权限 EPERM | resolved | 2026-04-12 |
+| issue-310 | msgget MSGMNI/ENOSPC 仅新建队列前 | resolved | 2026-04-19 |
 | issue-309 | arch_prctl ARCH_GET_FS/GS addr NULL → BadAddress | resolved | 2026-04-18 |
 | issue-308 | clone3 args NULL → BadAddress（vm_read 前） | resolved | 2026-04-17 |
 | issue-307 | shmat shmid 解析先于 shmflg 校验 | resolved | 2026-04-16 |
@@ -555,6 +557,7 @@
 - **`fstatat(2)`/`newfstatat(2)`**（**`sys_fstatat`**）：**`flags`** 须为 **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT | AT_STATX_SYNC_TYPE`** 的子集（Linux **`VALID_NEWFSTATAT_FLAGS`**）；**`AT_STATX_FORCE_SYNC`** 与 **`AT_STATX_DONT_SYNC`** 不能同时置位；须在 **`vm_load_string(path)`** 之前校验（issue-131）。**`AT_NO_AUTOMOUNT`** 等可仍为 no-op，但未知位须 **`EINVAL`**。**`resolve_at`** 仍只消费 **`AT_EMPTY_PATH`**/**`AT_SYMLINK_NOFOLLOW`**。**`statbuf == NULL`** → **`BadAddress`（EFAULT）**，先于 **`resolve_at`**（issue-283）。**`stat(2)`/`lstat(2)`**：**riscv64**/**aarch64** 等 **常** **无** **`Sysno::stat`**/**`Sysno::lstat`**；**`glibc`/`musl`** **通常** **`stat(2)`** 走 **`newfstatat`/`fstatat`（`AT_FDCWD`）** 且 **path** **flags** 为 **0**，**`lstat(2)`** 另置 **`AT_SYMLINK_NOFOLLOW`** → **`sys_fstatat`**；**`mod.rs`** **`Sysno::stat`/`lstat`** 仅 **x86_64**（**`fs stat`** 段旁注，issue-299；与 **`access`/`faccessat*`**，issue-296 同类）。
 - **`statx(2)`**：**`flags`** 须为 **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW | AT_STATX_SYNC_TYPE`** 的子集；**`AT_STATX_FORCE_SYNC`** 与 **`AT_STATX_DONT_SYNC`** 不能同时置位（**`(flags & AT_STATX_SYNC_TYPE) == AT_STATX_SYNC_TYPE`** → **`EINVAL`**）；**`mask`** 含 **`STATX__RESERVED`** → **`EINVAL`**（Linux **`vfs_statx`**，issue-260）；上述须在 **`vm_load_string(path)`** 之前完成（issue-127，非法 flags 先 **EINVAL**）；再 **`resolve_at`**。**`statxbuf == NULL`** → **`BadAddress`（EFAULT）**，先于 **`resolve_at`**（issue-283）。
 - **`statfs(2)`/`fstatfs(2)`**：**`buf == NULL`** → **`BadAddress`（EFAULT）**，先于 **`vm_load_string`/`resolve`** 与 **`location_from_fd`**（issue-281；对齐 Linux 在 **`copy_to_user`** 前探测输出缓冲的常见顺序）。
+- **SysV `msgget(2)`**：**`MSGMNI`** **（`queue_count`）** **仅** **在** **分配** **新** **消息** **队列** **前** **检查**（**`IPC_PRIVATE`** **或** **无** **既有** **`key`** **且** **`IPC_CREAT`**），**勿** **在** **`key`/`msgflg`** **解析** **完毕** **前** **因** **全局** **队列** **数** **已满** **一律** **`ENOSPC`**（**issue-310**；**Linux** **`ipcget`** **在** **新建** **对象** **时** **再** **失败** **资源** **耗尽**；与 **issue-307** **资源**/**标量** **顺序** **主题** **同类**）。
 - **SysV `msgsnd`/`msgrcv`**：**`MessageQueue`** 含 **`recv_notify`/`send_notify`**（**`event_listener::Event`**）；满且非 **`IPC_NOWAIT`** 时 **`msgsnd`** 在 **`send_notify`** 上阻塞，空且非 **`IPC_NOWAIT`** 时 **`msgrcv`** 在 **`recv_notify`** 上阻塞（**`block_on(interruptible(listener))`**）；入队后 **`recv_notify.notify`**，出队后 **`send_notify.notify`**；**`msgctl(IPC_RMID)`** 置 **`mark_removed`** 后 **`wake_waiters`**。信号 **`EINTR`** 依赖 **`interruptible`**。
 - **SysV `msgctl(2)`**：**`IPC_INFO`/`MSG_INFO`/`MSG_STAT`/`IPC_STAT`/`IPC_SET`** 在 **`vm_write`**/**`read_msqid_ds_ipc_set_user`** 前 **`buf==0` → `BadAddress`**（**`IPC_STAT`/`MSG_STAT`** 在 **`EACCES`** 之后、`vm_write` 之前，issue-233）；**`IPC_RMID`** 忽略 **`buf`**。
 - **SysV `shmctl(IPC_STAT)`**：**`buf`** 须为可写 **`shmid_ds`**（**`UserPtr::get_as_mut`**），**`NULL`** → **`BadAddress`**（**EFAULT**），勿 **`nullable!`** 跳过拷贝仍 **`Ok(0)`** 并更新 **`shm_ctime`**（issue-152）；与 **`IPC_SET`** 对 **`buf`** 一致。

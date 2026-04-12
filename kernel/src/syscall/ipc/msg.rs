@@ -402,13 +402,13 @@ pub fn sys_msgget(key: i32, msgflg: i32) -> AxResult<isize> {
 
     let mut msg_manager = MSG_MANAGER.lock();
 
-    // Check system limit
-    if msg_manager.queue_count() >= MSGMNI {
-        return Err(AxError::from(LinuxError::ENOSPC)); // ENOSPC
-    }
-
     // Handle IPC_PRIVATE (always create new queue)
     if key == IPC_PRIVATE {
+        // `MSGMNI` applies only when allocating a new queue (Linux `ipcget` / newseg path;
+        // do not return ENOSPC before key/msgflg resolution for open-by-key, issue-310).
+        if msg_manager.queue_count() >= MSGMNI {
+            return Err(AxError::from(LinuxError::ENOSPC)); // ENOSPC
+        }
         let msqid = next_ipc_id();
         let msg_queue = Arc::new(Mutex::new(MessageQueue::new(
             key,
@@ -456,6 +456,10 @@ pub fn sys_msgget(key: i32, msgflg: i32) -> AxResult<isize> {
     // Create new message queue
     if (msgflg & IPC_CREAT) == 0 {
         return Err(AxError::from(LinuxError::ENOENT)); // ENOENT
+    }
+
+    if msg_manager.queue_count() >= MSGMNI {
+        return Err(AxError::from(LinuxError::ENOSPC)); // ENOSPC
     }
 
     let msqid = next_ipc_id();
