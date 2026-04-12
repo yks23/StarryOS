@@ -80,11 +80,57 @@ bitflags::bitflags! {
         const HUGE_1GB = MAP_HUGETLB | MAP_HUGE_1GB;
         /// Deprecated flag
         const DENYWRITE = MAP_DENYWRITE;
+        /// Nonblocking map (best-effort populate).
+        const NONBLOCK = MAP_NONBLOCK;
+        /// Synchronous page faults.
+        const SYNC = MAP_SYNC;
+        /// Uninitialized mapping (MIPS etc.).
+        const UNINITIALIZED = MAP_UNINITIALIZED;
+        /// Grows down (stack-like).
+        const GROWSDOWN = MAP_GROWSDOWN;
+        /// Legacy executable mapping.
+        const EXECUTABLE = MAP_EXECUTABLE;
+        /// Lock mapped pages.
+        const LOCKED = MAP_LOCKED;
+        /// Droppable mapping (Linux 6+).
+        const DROPPABLE = MAP_DROPPABLE;
+        /// Huge page size encodings (`MAP_HUGE_*` from `linux/mman.h`).
+        const HUGE_16KB = MAP_HUGE_16KB;
+        const HUGE_64KB = MAP_HUGE_64KB;
+        const HUGE_512KB = MAP_HUGE_512KB;
+        const HUGE_1MB = MAP_HUGE_1MB;
+        const HUGE_2MB = MAP_HUGE_2MB;
+        const HUGE_8MB = MAP_HUGE_8MB;
+        const HUGE_16MB = MAP_HUGE_16MB;
+        const HUGE_32MB = MAP_HUGE_32MB;
+        const HUGE_256MB = MAP_HUGE_256MB;
+        const HUGE_512MB = MAP_HUGE_512MB;
+        const HUGE_2GB = MAP_HUGE_2GB;
+        const HUGE_16GB = MAP_HUGE_16GB;
 
         /// Mask for type of mapping
         const TYPE = MAP_TYPE;
     }
 }
+
+/// All `MAP_*` bits that may appear in `mmap(2)` `flags` (see `linux/mman.h` / uapi).
+const ALLOWED_MAP_FLAGS: u32 = MAP_TYPE
+    | MAP_FIXED
+    | MAP_ANONYMOUS
+    | MAP_GROWSDOWN
+    | MAP_DENYWRITE
+    | MAP_EXECUTABLE
+    | MAP_LOCKED
+    | MAP_NORESERVE
+    | MAP_POPULATE
+    | MAP_NONBLOCK
+    | MAP_STACK
+    | MAP_HUGETLB
+    | MAP_SYNC
+    | MAP_FIXED_NOREPLACE
+    | MAP_UNINITIALIZED
+    | MAP_DROPPABLE
+    | (MAP_HUGE_MASK << MAP_HUGE_SHIFT);
 
 pub fn sys_mmap(
     addr: usize,
@@ -104,15 +150,16 @@ pub fn sys_mmap(
     if permission_flags.intersects(MmapProt::GROWDOWN | MmapProt::GROWSUP) {
         return Err(AxError::InvalidInput);
     }
-    // TODO: check illegal flags for mmap
+    if flags & !ALLOWED_MAP_FLAGS != 0 {
+        return Err(AxError::InvalidInput);
+    }
     let map_flags = match MmapFlags::from_bits(flags) {
         Some(flags) => flags,
         None => {
-            warn!("unknown mmap flags: {flags}");
             if (flags & MmapFlags::TYPE.bits()) == MmapFlags::SHARED_VALIDATE.bits() {
                 return Err(AxError::OperationNotSupported);
             }
-            MmapFlags::from_bits_truncate(flags)
+            return Err(AxError::InvalidInput);
         }
     };
     let map_type = map_flags & MmapFlags::TYPE;

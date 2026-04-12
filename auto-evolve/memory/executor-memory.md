@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-066 resolved（**`mmap`** **`flags`**：**`ALLOWED_MAP_FLAGS`**（uapi **`MAP_*`** + **`MAP_HUGE_*`** 域）未知位 **`InvalidInput`**；扩展 **`MmapFlags`** 使合法组合走 **`from_bits`**；**`from_bits` 失败** 时 **`SHARED_VALIDATE` 类型 → `OperationNotSupported`** 否则 **`InvalidInput`**，勿 **`from_bits_truncate`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-065 resolved（**`mmap`**：**`MmapProt::from_bits`** 与 **`mprotect`** 一致；**`PROT_GROWSDOWN`/`GROWSUP`** 在 **`mmap`** 拒绝；**`mprotect`** 用 **`intersects`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-064 resolved（**`copy_file_range`**：常规文件 + 同 inode 区间重叠 **`EINVAL`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-063 resolved（**`clone3`**：**`set_tid`**/**`set_tid_size`**/**`cgroup`** 非零 → **`InvalidInput`**，勿仅 **`warn`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -47,6 +48,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-066 | mmap flags ALLOWED_MAP_FLAGS + 勿 from_bits_truncate | resolved | 2026-04-13 |
 | issue-065 | mmap prot from_bits 与 mprotect 一致 | resolved | 2026-04-13 |
 | issue-064 | copy_file_range 重叠/常规文件 EINVAL | resolved | 2026-04-13 |
 | issue-063 | clone3 set_tid/cgroup 非零 EINVAL | resolved | 2026-04-13 |
@@ -122,6 +124,7 @@
 - 全核 membarrier（多 hart）在 Linux 上依赖 IPI；若未来启用 `axfeat/smp` + `axfeat/ipi`，可在各核 IPI handler 中执行与 `sys_membarrier` 相同的 fence，并用同步原语等待全部完成。
 - `rt_sigreturn` 通过 `block_next_signal` 标记「下一次回到用户循环时跳过一次 `check_signals`」；该标志必须是 **per-thread**（`Thread::skip_next_signal_check`），不可用进程级或全局 AtomicBool。
 - timerfd：`TimerFd` 实现 `FileLike` + `Pollable`；到期逻辑在 `process_expirations` 中根据时钟纳秒与 `next_deadline_nanos` 比较；通过 `axtask::register_timer_callback`（首次创建时注册）在每次内核 timer tick 中扫描弱引用列表并 `wake` `PollSet`；创建 fd 用 `add_file_like`（与 eventfd2 相同），勿对 `Arc<TimerFd>` 误用 `add_to_fd_table(self)`。
+- **`mmap(2)` `flags`**：先 **`flags & !ALLOWED_MAP_FLAGS`**（**`MAP_TYPE|MAP_FIXED|MAP_ANONYMOUS|…|MAP_DROPPABLE|(MAP_HUGE_MASK<<MAP_HUGE_SHIFT)`** 等 uapi 位），非零 → **`InvalidInput`**；**`MmapFlags::from_bits(flags)`**，**`None`** 时 **`MAP_SHARED_VALIDATE` 类型 → `OperationNotSupported`**，否则 **`InvalidInput`**；勿在未知/非法组合上 **`from_bits_truncate`**。合法 **`MAP_HUGE_*`** 等须在 **`MmapFlags`** 中声明以便 **`from_bits`** 成功。
 - **`pipe2`**：**`flags`** 仅允许 **`O_CLOEXEC`/`O_NONBLOCK`**（**`PipeFlags`**）；用 **`from_bits(...).ok_or(InvalidInput)`**，勿 **`from_bits_truncate`**（与 **`eventfd2`/`epoll_create1`** 一致）。
 - **`linkat(2)`**：**`flags`** 仅允许 **`AT_EMPTY_PATH | AT_SYMLINK_FOLLOW`**（与 Linux **`VALID_LINKAT_FLAGS`**），否则 **`EINVAL`**；**`resolve_at`** 仍用 **`AT_SYMLINK_NOFOLLOW`** 表示「不 follow」，故在 **`sys_linkat`** 内将 **`AT_SYMLINK_FOLLOW` 未置位** 时并入 **`AT_SYMLINK_NOFOLLOW`** 再调用 **`resolve_at`**。
 - **`unlinkat(2)`**：**`flags`** 仅 **`0`** 或 **`AT_REMOVEDIR`**，否则 **`EINVAL`**；勿将未知位当作「删文件」分支。
