@@ -602,7 +602,15 @@ pub fn sys_renameat2(
         return Err(AxError::InvalidInput);
     }
 
+    // Linux do_renameat2: fdget(olddfd) before copy_from_user(oldname), then newdfd before newname.
+    if old_dirfd != AT_FDCWD {
+        let _ = Directory::from_fd(old_dirfd)?;
+    }
     let old_path = vm_load_string(old_path)?;
+
+    if new_dirfd != AT_FDCWD {
+        let _ = Directory::from_fd(new_dirfd)?;
+    }
     let new_path = vm_load_string(new_path)?;
     debug!(
         "sys_renameat2 <= old_dirfd: {old_dirfd}, old_path: {old_path:?}, new_dirfd: {new_dirfd}, \
