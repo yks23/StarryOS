@@ -85,6 +85,12 @@ pub fn handle_syscall(uctx: &mut UserContext) {
         Sysno::syncfs => sys_syncfs(uctx.arg0() as _),
 
         // file ops
+        // Legacy path-only syscalls (`chown`, `lchown`, `chmod`, `readlink`, `utime`, `utimes`)
+        // exist only on ABIs where `syscalls::Sysno` defines them (e.g. x86/x86_64). Linux riscv64 /
+        // aarch64 often omit separate `__NR_*` for these; glibc/musl usually route them via
+        // `fchownat` / `fchmodat` / `readlinkat` / `utimensat` with `AT_FDCWD` (and
+        // `AT_SYMLINK_NOFOLLOW` for `lchown`, `utimensat` for `utime`/`utimes`) → the `sys_*`
+        // handlers below (issue-300; symmetric to `fs ctl` legacy `*at`, issue-297).
         #[cfg(target_arch = "x86_64")]
         Sysno::chown => sys_chown(uctx.arg0() as _, uctx.arg1() as _, uctx.arg2() as _),
         #[cfg(target_arch = "x86_64")]
@@ -319,6 +325,11 @@ pub fn handle_syscall(uctx: &mut UserContext) {
         Sysno::memfd_create => sys_memfd_create(uctx.arg0().into(), uctx.arg1() as _),
 
         // fs stat
+        // Legacy `stat(2)` / `lstat(2)` syscall numbers exist only on ABIs where `syscalls::Sysno`
+        // defines `Sysno::stat` / `Sysno::lstat` (x86/x86_64). Linux riscv64/aarch64 typically omit
+        // separate `__NR_stat` / `__NR_lstat`; libc implements them via `newfstatat` / `fstatat`
+        // with `AT_FDCWD` and flags `0` vs `AT_SYMLINK_NOFOLLOW` for `lstat` semantics →
+        // `sys_fstatat` below (issue-299; symmetric to `access`/`faccessat*`, issue-296).
         #[cfg(target_arch = "x86_64")]
         Sysno::stat => sys_stat(uctx.arg0() as _, uctx.arg1() as _),
         Sysno::fstat => sys_fstat(uctx.arg0() as _, uctx.arg1() as _),
