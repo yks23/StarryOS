@@ -203,8 +203,12 @@ pub fn sys_get_mempolicy(
         }
     }
 
-    // Linux EINVAL: non-NULL nodemask requires a positive maxnode (valid bit length).
+    // Linux EINVAL: non-NULL nodemask requires a positive maxnode (valid bit length); NULL
+    // nodemask requires maxnode==0 (issue-374).
     if !nodemask.is_null() && maxnode == 0 {
+        return Err(AxError::InvalidInput);
+    }
+    if nodemask.is_null() && maxnode != 0 {
         return Err(AxError::InvalidInput);
     }
 
