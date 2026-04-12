@@ -1,6 +1,7 @@
 use axerrno::{AxError, AxResult};
 use linux_raw_sys::general::{
-    CLOCK_MONOTONIC, CLOCK_REALTIME, TFD_CLOEXEC, TFD_CREATE_FLAGS, TFD_NONBLOCK, itimerspec,
+    CLOCK_MONOTONIC, CLOCK_REALTIME, TFD_CLOEXEC, TFD_CREATE_FLAGS, TFD_NONBLOCK,
+    TFD_TIMER_ABSTIME, itimerspec,
 };
 use starry_vm::{VmMutPtr, VmPtr};
 
@@ -29,6 +30,10 @@ pub fn sys_timerfd_settime(
 ) -> AxResult<isize> {
     let tfd = TimerFd::from_fd(fd)?;
     if new_value.is_null() {
+        return Err(AxError::InvalidInput);
+    }
+    // Linux `timerfd_settime(2)`：仅允许 `TFD_TIMER_ABSTIME`，未知位 → EINVAL。
+    if flags as u32 & !TFD_TIMER_ABSTIME != 0 {
         return Err(AxError::InvalidInput);
     }
     let new_value = unsafe { new_value.vm_read_uninit()?.assume_init() };

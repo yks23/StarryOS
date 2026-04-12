@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-110 resolved（**`timerfd_settime`**：**`flags` 仅允许 `TFD_TIMER_ABSTIME`**，未知位 **`InvalidInput`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-109 resolved（**`pidfd_open`**：**`pid==0` → `InvalidInput`**，对齐 Linux **EINVAL**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-108 resolved（**`sys_pwrite64`**：**`offset < 0` → `InvalidInput`**，对齐 **`pread64`** / **`pwritev2`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-107 resolved（**`sys_fallocate`**：**`offset`/`len` 非负** + **`checked_add`** 算 **`end`**，溢出 **`InvalidInput`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
