@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-359 resolved（**`eventfd(2)` `EFD_SEMAPHORE`**：**`read`** **成功** **写** **用户** `8` **字节** `1`（**非** **信号量** **仍** **写** **旧** **计数**）；**`event.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-358 resolved（**`mprotect(2)`**：**`PROT_GROWSDOWN`/`GROWSUP`** **同时** **→** **`EINVAL`**；**否则** **剥离** **`GROW*`** **后** **`protect`**（**无** **缺页** **栈** **扩展**；**issue-358**）；**`mmap.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-352 resolved（**`seccomp(2)`**：**`op`/`flags`/`args`** **校验** **后** **`Unsupported`**；**`sys.rs`**/**`mod.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-351 resolved（**`prctl` `PR_GET_NAME`**：**`arg2==0`** **→** **`BadAddress`** **先于** **`vm_write_slice`**；**`ctl.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -379,6 +380,7 @@
 | issue-271 | mlock/mlock2 addr 须页对齐 EINVAL | resolved | 2026-04-12 |
 | issue-272 | lseek SEEK_SET 负 offset EINVAL | resolved | 2026-04-12 |
 | issue-273 | prlimit64 跨 pid 权限 EPERM | resolved | 2026-04-12 |
+| issue-359 | eventfd EFD_SEMAPHORE read 写 8 字节 1（非 semaphore 写旧计数） | resolved | 2026-04-13 |
 | issue-358 | mprotect PROT_GROW* 剥离后 protect；双 GROW EINVAL；无栈缺页扩展 | resolved | 2026-04-13 |
 | issue-352 | seccomp(2) op/flags/args 校验后再 Unsupported | resolved | 2026-04-13 |
 | issue-351 | prctl PR_GET_NAME arg2 NULL → BadAddress 显式早退 | resolved | 2026-04-13 |
@@ -626,6 +628,7 @@
 - **`rt_sigqueueinfo`/`rt_tgsigqueueinfo`**：Linux 分别为 **3/4 个**用户参数（**`uinfo`** 为最后一参），**无** **`sigsetsize`**；勿从 **`a3`/`a4`** 读 **`sigsetsize`** 或调用 **`check_sigset_size`**（残留寄存器会误 **EINVAL**）。**`rt_sig*`** 中带 **`sigsetsize`** 的是 **`rt_sigprocmask`**、**`rt_sigaction`**、**`rt_sigpending`**、**`rt_sigtimedwait`**、**`rt_sigsuspend`** 等，勿与 queueinfo 混淆。**`make_queue_signal_info`**：**`signo==0`** → **`Ok(None)`**；否则 **`parse_signo`** 后 **`uinfo==NULL` → `BadAddress`** 再 **`vm_read`**（**`pidfd_send_signal`** 同路径）。
 - **`tkill(2)`/`tgkill(2)`**：**`tid`** 须为非零有效线程 ID；**`tid==0` → `InvalidInput`（EINVAL）**，勿走 **`get_task(0)`→`current()`**（issue-249）。**`get_task(0)`** 仍保留给其它需「当前任务」的 syscall；**`kill`/`get_process_data(0)`** 等 **PID 0** 语义与此不同。
 - timerfd：`TimerFd` 实现 `FileLike` + `Pollable`；到期逻辑在 `process_expirations` 中根据时钟纳秒与 `next_deadline_nanos` 比较；通过 `axtask::register_timer_callback`（首次创建时注册）在每次内核 timer tick 中扫描弱引用列表并 `wake` `PollSet`；创建 fd 用 `add_file_like`（与 eventfd2 相同），勿对 `Arc<TimerFd>` 误用 `add_to_fd_table(self)`。**`timerfd_settime`**：**`from_fd`** **后** **`flags`** **掩码**（**`TFD_TIMER_ABSTIME`）** **先于** **`new_value.is_null()`**（**issue-330**；**issue-110**）；**`new_value.is_null()` → `InvalidInput`**。**`timerfd_gettime`**：**`curr_value.is_null()` → `BadAddress`**（Linux **EFAULT**），在 **`from_fd`** 之后、**`gettime`/`vm_write`** 之前校验，避免先算定时器再因用户指针失败。
+- **`eventfd(2)` / `EventFd`**：`sys_eventfd2` 设 **`semaphore`**（**`EFD_SEMAPHORE`**）。**`read`** **成功** **时** **信号量** **模式** **向** **用户** **缓冲** **写** **`8` 字节 `1`**（**`man 7 eventfd`**），**非** **信号量** **写** **`fetch_update`** **前** **旧** **计** **数**（**issue-359**）。**`write`** **仍** **`u64` 加值**；**`u64::MAX`** **溢出** **`EINVAL`**。
 - **`mmap(2)` `flags`**：先 **`flags & !ALLOWED_MAP_FLAGS`**（**`MAP_TYPE|MAP_FIXED|MAP_ANONYMOUS|…|MAP_DROPPABLE|(MAP_HUGE_MASK<<MAP_HUGE_SHIFT)`** 等 uapi 位），非零 → **`InvalidInput`**；**`MmapFlags::from_bits(flags)`**，**`None`** 时 **`MAP_SHARED_VALIDATE` 类型 → `OperationNotSupported`**，否则 **`InvalidInput`**；勿在未知/非法组合上 **`from_bits_truncate`**。合法 **`MAP_HUGE_*`** 等须在 **`MmapFlags`** 中声明以便 **`from_bits`** 成功。
 - **`mmap(2)` `MAP_ANONYMOUS`/`fd`**：与 Linux 2.6.12+ 一致，**`MAP_ANONYMOUS`** 时 **`fd` 被忽略**（匿名路径不 **`File::from_fd`**），**`offset` 须为 0**；无 **`MAP_ANONYMOUS`** 时 **`fd <= 0`** → **`InvalidInput`**（issue-264）。
 - **`mprotect(2)`**：**`prot`** 须 **`MmapProt::from_bits`** 成功；**`PROT_GROWSDOWN` 与 `PROT_GROWSUP` 同时** → **`InvalidInput`（EINVAL）**；**否则** **剥离** **`GROW*`** **位** **仅** **将** **`PROT_READ|WRITE|EXEC|NONE`** **写入** **页表**（**`MappingFlags`** **无** **栈** **方向** **元数据**；**缺页** **自动** **扩** **VMA** **未** **实现**，**issue-358**）。**`length == 0`** 在 **`addr` 页对齐**后 **`Ok(0)`** **no-op**（Linux **`do_mprotect_pkey`**，issue-280）；**非零** **`length`** 仍 **`align_up_4k`** 后 **`protect`**。**`addr`** 非页对齐 **`EINVAL`**（issue-270）。**`mmap(2)`** **`prot`** **仍** **拒绝** **`PROT_GROW*`**（**issue-065**；与 **`mprotect`** **分流**）。**`munmap(2)`**：**`length == 0`** → **`InvalidInput`**（**EINVAL**）（issue-234）；**`addr`** 须 **4K 页对齐**，否则 **`EINVAL`**（issue-268）。
