@@ -17,14 +17,31 @@ const CAPABILITY_VERSION_3: u32 = 0x20080522;
 const CAP_V3_DATA_SLOTS: usize = 2;
 
 fn read_cap_header(header_ptr: *mut __user_cap_header_struct) -> AxResult<__user_cap_header_struct> {
-    // FIXME: AnyBitPattern
-    let mut header = unsafe { header_ptr.vm_read_uninit()?.assume_init() };
+    // Field-wise read (issue-202): avoids bulk `assume_init` over possible future padding.
+    let header = unsafe {
+        __user_cap_header_struct {
+            version: core::ptr::addr_of!((*header_ptr).version).vm_read()?,
+            pid: core::ptr::addr_of!((*header_ptr).pid).vm_read()?,
+        }
+    };
     if header.version != CAPABILITY_VERSION_3 {
-        header.version = CAPABILITY_VERSION_3;
-        header_ptr.vm_write(header)?;
+        header_ptr.vm_write(__user_cap_header_struct {
+            version: CAPABILITY_VERSION_3,
+            pid: header.pid,
+        })?;
         return Err(AxError::InvalidInput);
     }
     Ok(header)
+}
+
+fn read_cap_data_user(p: *const __user_cap_data_struct) -> AxResult<__user_cap_data_struct> {
+    unsafe {
+        Ok(__user_cap_data_struct {
+            effective: core::ptr::addr_of!((*p).effective).vm_read()?,
+            permitted: core::ptr::addr_of!((*p).permitted).vm_read()?,
+            inheritable: core::ptr::addr_of!((*p).inheritable).vm_read()?,
+        })
+    }
 }
 
 fn resolve_cap_target(header: &__user_cap_header_struct) -> AxResult<Arc<ProcessData>> {
@@ -78,9 +95,9 @@ pub fn sys_capset(
     let header = read_cap_header(header)?;
     let target = resolve_cap_target(&header)?;
     ensure_same_process_for_cap(&target)?;
-    let cap_low = unsafe { data.vm_read_uninit()?.assume_init() };
+    let cap_low = read_cap_data_user(data)?;
     for k in 1..CAP_V3_DATA_SLOTS {
-        let cap_hi = unsafe { data.add(k).vm_read_uninit()?.assume_init() };
+        let cap_hi = read_cap_data_user(unsafe { data.add(k) })?;
         if cap_hi.effective != 0 || cap_hi.permitted != 0 || cap_hi.inheritable != 0 {
             return Err(AxError::InvalidInput);
         }
