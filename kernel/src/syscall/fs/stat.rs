@@ -10,7 +10,7 @@ use linux_raw_sys::general::{
 use starry_vm::{VmMutPtr, VmPtr};
 
 use crate::{
-    file::{File, FileLike, resolve_at},
+    file::{location_from_fd, resolve_at},
     mm::vm_load_string,
 };
 
@@ -212,6 +212,7 @@ pub fn sys_statfs(path: *const c_char, buf: *mut statfs) -> AxResult<isize> {
 pub fn sys_fstatfs(fd: i32, buf: *mut statfs) -> AxResult<isize> {
     debug!("sys_fstatfs <= fd: {fd}");
 
-    buf.vm_write(statfs(File::from_fd(fd)?.inner().location())?)?;
+    let loc = location_from_fd(fd)?;
+    buf.vm_write(statfs(&loc)?)?;
     Ok(0)
 }

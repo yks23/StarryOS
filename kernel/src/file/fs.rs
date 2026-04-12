@@ -54,6 +54,24 @@ impl ResolveAtResult {
     }
 }
 
+/// Resolve an open fd to a VFS [`Location`] for `fstatfs(2)` and similar syscalls.
+///
+/// Returns [`AxError::InvalidInput`] for fds that are not backed by a path in the VFS
+/// (e.g. sockets, pipes), matching Linux `EINVAL` for those cases.
+pub fn location_from_fd(fd: c_int) -> AxResult<Location> {
+    let file_like = get_file_like(fd)?;
+    let f = file_like.as_ref();
+    if let Some(file) = f.downcast_ref::<File>() {
+        Ok(file.inner().backend()?.location().clone())
+    } else if let Some(m) = f.downcast_ref::<MemfdCreatedFile>() {
+        Ok(m.inner_file().inner().backend()?.location().clone())
+    } else if let Some(dir) = f.downcast_ref::<Directory>() {
+        Ok(dir.inner().clone())
+    } else {
+        Err(AxError::InvalidInput)
+    }
+}
+
 pub fn resolve_at(dirfd: c_int, path: Option<&str>, flags: u32) -> AxResult<ResolveAtResult> {
     match path {
         Some("") | None => {
