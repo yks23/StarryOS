@@ -1,0 +1,27 @@
+{
+  "id": "issue-399",
+  "title": "`fchownat(2)`/`fchmodat(2)`/`utimensat(2)` 等：`path` 为 `\"\"` 且无 `AT_EMPTY_PATH` 时未在 `resolve_at` 前拒绝为 `EINVAL`",
+  "status": "resolved",
+  "created_at": "2026-04-12T23:35:00Z",
+  "severity": "low",
+  "description": "`kernel/src/syscall/fs/ctl.rs` **`sys_fchownat`**（约 478–523 行）、**`sys_fchmodat`**（约 534–560 行）及 **`update_times`**（约 562–589 行，供 **`sys_utimensat`**/**`sys_utimes`**/**`sys_utime`**）：在 **`path.nullable().map(vm_load_string)`** 得到 **`Some(\"\")`** 时，若 **`flags & AT_EMPTY_PATH == 0`**，Linux对 **空路径名** 通常 **`EINVAL`**（**`AT_EMPTY_PATH`** 下 **空串** 表示 **作用于** **`dirfd`** **本身**，与 **issue-331** **`utimensat`** **`NULL`+`AT_EMPTY_PATH`** **正交**）。当前实现直接进入 **`resolve_at`** / **`Directory::from_fd`**，**无** 该早退。\n\n**`issue-398`/`397`/…** 已覆盖 **非** **`nullable`** **的** **路径** **串**；本 issue 覆盖 **`*at`** **族** **中带** **`AT_EMPTY_PATH`** **位** **的** **`pathname`** **语义**。\n\n建议：在三处 **`path`** **`Option`** **就绪后**、**`resolve_at`** **前** 统一 **`if let Some(p) = &path { if p.is_empty() && flags & AT_EMPTY_PATH == 0 { return Err(InvalidInput); } }`**（或抽小函数），注释引用 issue-399 及 **issue-331**/**issue-393**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["fchownat", "fchmodat", "chown", "lchown", "chmod", "utimensat", "utimes", "utime"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/ctl.rs:478-523", "kernel/src/syscall/fs/ctl.rs:534-560", "kernel/src/syscall/fs/ctl.rs:562-589"],
+    "related_files": ["kernel/src/syscall/fs/ctl.rs:638-678"],
+    "key_insight": "`Some(\"\")` 且未置 `AT_EMPTY_PATH` → `InvalidInput`（`reject_empty_pathname_without_empty_path_flag`）；`None`（NULL）仍由既有逻辑处理；`sys_utimensat` 的 NULL 检查（issue-331）在 `update_times` 之前"
+  },
+  "fix_summary": "新增 `reject_empty_pathname_without_empty_path_flag`，在 `sys_fchownat`、`sys_fchmodat` 与 `update_times` 于 `resolve_at` 前调用：`Some(\"\")` 且 `flags` 未含 `AT_EMPTY_PATH` 时返回 `InvalidInput`。`sys_utime`/`sys_utimes`/`sys_utimensat` 经 `update_times` 一并覆盖。",
+  "files_changed": ["kernel/src/syscall/fs/ctl.rs"],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：`fchownat(AT_FDCWD, \"\", -1, -1, 0)` / `utimensat(AT_FDCWD, \"\", …, 0)` 对照 Linux `errno`（须非 AT_EMPTY_PATH）。",
+    "expected_output_contains": "",
+    "pass_criteria": "空字符串路径且无 AT_EMPTY_PATH 时返回 EINVAL（`InvalidInput`）。",
+    "last_result": "通过：`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`（exit 0）"
+  },
+  "suggested_fix": "在 `sys_fchownat`、`sys_fchmodat` 与 `update_times` 中于 `resolve_at` 前增加 `Some(\"\")` +无 `AT_EMPTY_PATH` 检查，与 issue-331 NULL 检查并列。",
+  "references": ["man 2 fchownat", "man 2 fchmodat", "man 2 utimensat", "kernel/src/syscall/fs/ctl.rs", "issue-331", "issue-398", "issue-393"]
+}

@@ -499,6 +499,8 @@ pub fn sys_fchownat(
         }
     }
 
+    reject_empty_pathname_without_empty_path_flag(&path, flags)?;
+
     let loc = resolve_at(dirfd, path.as_deref(), flags)?
         .into_file()
         .ok_or(AxError::BadFileDescriptor)?;
@@ -549,6 +551,8 @@ pub fn sys_fchmodat(dirfd: i32, path: *const c_char, mode: u32, flags: u32) -> A
         }
     }
 
+    reject_empty_pathname_without_empty_path_flag(&path, flags)?;
+
     resolve_at(dirfd, path.as_deref(), flags)?
         .into_file()
         .ok_or(AxError::BadFileDescriptor)?
@@ -557,6 +561,21 @@ pub fn sys_fchmodat(dirfd: i32, path: *const c_char, mode: u32, flags: u32) -> A
             ..Default::default()
         })?;
     Ok(0)
+}
+
+/// Linux *at syscalls: empty pathname requires `AT_EMPTY_PATH`; otherwise EINVAL (issue-399;
+/// orthogonality with NULL + `AT_EMPTY_PATH`, issue-331; issue-393 theme).
+fn reject_empty_pathname_without_empty_path_flag(
+    path: &Option<String>,
+    flags: u32,
+) -> AxResult<()> {
+    if let Some(p) = path
+        && p.is_empty()
+        && flags & AT_EMPTY_PATH == 0
+    {
+        return Err(AxError::InvalidInput);
+    }
+    Ok(())
 }
 
 fn update_times(
@@ -576,6 +595,8 @@ fn update_times(
             let _ = Directory::from_fd(dirfd)?;
         }
     }
+
+    reject_empty_pathname_without_empty_path_flag(&path, flags)?;
 
     resolve_at(dirfd, path.as_deref(), flags)?
         .into_file()

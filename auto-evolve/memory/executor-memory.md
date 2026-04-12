@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-399 resolved（**`fchownat`/`fchmodat`/`utimensat`/`utimes`/`utime`**：**`Some(\"\")`** **且** **无** **`AT_EMPTY_PATH`** **`resolve_at`** **前** **→** **`InvalidInput`**；**`reject_empty_pathname_without_empty_path_flag`**；**`ctl.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-398 resolved（**`linkat`/`link`**：**`new_path.is_empty()`** **`resolve_nonexistent`** **前** **→** **`InvalidInput`**；**`old_path`** **`AT_EMPTY_PATH`** **未** **改动**；**`ctl.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-23：issue-397 resolved（**`symlinkat`/`symlink`**：**`linkpath.is_empty()`** **`symlink`** **前** **→** **`InvalidInput`**；**`target`** **可** **空**；**`ctl.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-22：issue-396 resolved（**`renameat2`/`renameat`/`rename`**：**`old_path`/`new_path`** **`is_empty()`** **`resolve_parent`** **前** **→** **`InvalidInput`**；**`ctl.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
