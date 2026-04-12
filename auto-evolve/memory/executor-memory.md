@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-14：issue-099 resolved（**`prctl(PR_SET_NAME)`**：**`UserConstPtr` 读 ≤16 字节**须含 **NUL**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-14：issue-098 resolved（**`sigaltstack`**：**`ss.size < MINSIGSTKSZ` → `InvalidInput`**，非 **`NoMemory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-097 resolved（**`get_mempolicy`**：**`nodemask` 非空且 `maxnode==0` → `InvalidInput`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-096 resolved（**`clone3`**：**`size`** 上限 **`min(buffer.len())`**，避免 **`buffer[..size]`** panic；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -79,6 +80,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-099 | prctl PR_SET_NAME bounded 16-byte read + NUL | resolved | 2026-04-14 |
 | issue-098 | sigaltstack small stack: InvalidInput not NoMemory | resolved | 2026-04-14 |
 | issue-097 | get_mempolicy nodemask set requires maxnode > 0 | resolved | 2026-04-13 |
 | issue-096 | clone3 clamp vm_read to sizeof(Clone3Args) | resolved | 2026-04-13 |

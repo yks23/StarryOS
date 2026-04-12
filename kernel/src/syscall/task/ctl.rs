@@ -1,5 +1,4 @@
 use alloc::sync::Arc;
-use core::ffi::c_char;
 
 use axerrno::{AxError, AxResult};
 use axtask::current;
@@ -7,7 +6,7 @@ use linux_raw_sys::general::{__user_cap_data_struct, __user_cap_header_struct};
 use starry_vm::{VmMutPtr, VmPtr, vm_write_slice};
 
 use crate::{
-    mm::vm_load_string,
+    mm::UserConstPtr,
     task::{AsThread, CRED_NO_CHANGE, ProcessData, get_process_data},
 };
 
@@ -153,8 +152,15 @@ pub fn sys_prctl(
 
     match option {
         PR_SET_NAME => {
-            let s = vm_load_string(arg2 as *const c_char)?;
-            current().set_name(&s);
+            // Linux: up to 16 bytes including terminating NUL (≤15 printable + '\0'); no unbounded scan.
+            const PR_SET_NAME_MAX: usize = 16;
+            let bytes = UserConstPtr::from(arg2 as *const u8).get_as_slice(PR_SET_NAME_MAX)?;
+            let Some(nul_pos) = bytes.iter().position(|&b| b == 0) else {
+                return Err(AxError::InvalidInput);
+            };
+            let name_bytes = &bytes[..nul_pos];
+            let s = core::str::from_utf8(name_bytes).map_err(|_| AxError::InvalidInput)?;
+            current().set_name(s);
         }
         PR_GET_NAME => {
             let name = current().name();
