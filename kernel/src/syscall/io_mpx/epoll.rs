@@ -19,7 +19,7 @@ use crate::{
     mm::{UserConstPtr, UserPtr, nullable},
     syscall::signal::check_sigset_size,
     task::with_blocked_signals,
-    time::TimeValueLike,
+    time::{TimeValueLike, read_timespec_user},
 };
 
 bitflags! {
@@ -149,8 +149,13 @@ pub fn sys_epoll_pwait2(
     sigmask: UserConstPtr<SignalSet>,
     sigsetsize: usize,
 ) -> AxResult<isize> {
-    let timeout = nullable!(timeout.get_as_ref())?
-        .map(|ts| ts.try_into_time_value())
-        .transpose()?;
+    // issue-216: field-wise read (same as pselect6/ppoll / issue-215).
+    let timeout = if timeout.is_null() {
+        None
+    } else {
+        Some(
+            read_timespec_user(timeout.address().as_usize() as *const timespec)?.try_into_time_value()?,
+        )
+    };
     do_epoll_wait(epfd, events, maxevents, timeout, sigmask, sigsetsize)
 }

@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-216 resolved（**`epoll_pwait2` 超时**：**`read_timespec_user`** + **`try_into_time_value`**，与 **issue-215** 同源；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-215 resolved（**`pselect6`/`ppoll`/`select` 超时**：**`read_timespec_user`**/**`read_timeval_user`**（**`crate::time`** 新增 **`read_timeval_user`**）；**`UserConstPtr::address()`** 转裸指针；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-213 resolved（**`msgctl` `IPC_SET`**：**`read_msqid_ds_ipc_set_user`** 仅 **`msg_perm.uid`/`gid`/`mode`** + **`msg_qbytes`** 标量读；去整 **`msqid_ds` `vm_read`**/**`AnyBitPattern`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-212 resolved（**`rt_sigqueueinfo`/`rt_tgsigqueueinfo`**：**`read_signal_info_user`** — **`si_signo`/`si_errno`/`si_code`** 字段读 + **`vm_read_slice`** 填 **`_sifields`**；去掉整 **`SignalInfo` `assume_init`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
