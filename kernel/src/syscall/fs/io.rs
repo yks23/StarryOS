@@ -440,6 +440,11 @@ pub fn sys_copy_file_range(
     if flags & !COPY_FILE_RANGE_MASK != 0 {
         return Err(AxError::InvalidInput);
     }
+    // `COPY_FILE_RANGE_COMPRESS` / `COPY_FILE_RANGE_DEDUPE` require fs support; do not fall back to
+    // plain read/write and pretend success (issue-246).
+    if flags != 0 {
+        return Err(AxError::OperationNotSupported);
+    }
 
     let f_in = File::from_fd(fd_in)?;
     let f_out = File::from_fd(fd_out)?;
