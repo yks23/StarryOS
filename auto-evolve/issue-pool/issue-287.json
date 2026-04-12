@@ -1,0 +1,27 @@
+{
+  "id": "issue-287",
+  "title": "sys_times：`struct Tms` 四字段为 `usize`，Linux uapi 为 `clock_t`（通常为有符号 `long`），与用户态 ABI 解释可能分叉",
+  "status": "resolved",
+  "created_at": "2026-04-13T02:00:00Z",
+  "severity": "low",
+  "fix_summary": "`Tms` 四字段改为 `linux_raw_sys::general::__kernel_clock_t`（目标 ABI 的 uapi `clock_t`）。`cpu_nanos_to_clock_t` 返回该类型，jiffies 饱和到 `i64::MAX` 再转，避免无符号 `usize` 与有符号 `clock_t` 语义差异。",
+  "files_changed": ["kernel/src/syscall/time.rs"],
+  "description": "**`kernel/src/syscall/time.rs`** **`Tms`**（约 **127–138** 行）将 **`tms_utime`/`tms_stime`/`tms_cutime`/`tms_cstime`** **声明** **为** **`usize`** **，** **`sys_times`** **（** **约** **140–159** **行** **）** **经** **`cpu_nanos_to_clock_t`** **写入** **上述** **字段** **。**\n\n**Linux** **`include/uapi/linux/times.h`** **：** **`struct tms`** **四** **字段** **类型** **为** **`clock_t`** **。** **在** **`riscv64`** **等** **LP64** **ABI** **上** **，`clock_t`** **通常** **为** **有符号** **`long`** **（** **8** **字节** **）** **，** **与** **`usize`** **布局** **宽度** **相同** **但** **类型** **/****别名** **在** **C** **中** **为** **有符号** **整数** **。** **issue-224** **已** **将** ** jiffies** **刻度** **与** **返回值** **对齐** **Linux** **；** **若** **未来** ** jiffies** **或** **舍入** **产生** **落在** **有符号** **`long`** **负** **区间** **的** **位** **模式** **（** **或** **用户** **代码** **按** **有符号** **`clock_t`** **比较** **/****算术** **）** **，`usize`** **与** **`clock_t`** **解释** **可能** **不一致** **。**\n\n**建议**：与 **`linux_raw_sys`** **或** **uapi** **一致** **地** **将** **`Tms`** **字段** **改为** **`i64`** **/** **`#[repr(transparent)]`** **包装** **的** **`clock_t`** **绑定** **（** **若** **crate** **提供** **）** **；** **或** **在** **ABI** **文档** **中** **明确** **「** **按** **无符号** **jiffies** **暴露** **」** **与** **上游** **差异** **。** **（** **与** **issue-224** **描述** **末尾** **「** **`usize`** **→** **`clock_t`** **绑定** **」** **为** **同一** **方向** **的** **跟进** **。** **）**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["times"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/time.rs:127-159"],
+    "related_files": [],
+    "key_insight": "Tms 字段用 usize 而非 clock_t，有符号解释与 Linux uapi 可能不同"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 **`include/uapi/linux/times.h`**、**`man 2 times`**。",
+    "expected_output_contains": "",
+    "pass_criteria": "`struct tms` 与用户态 ABI 类型一致，或显式文档化无符号 jiffies。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "将 `Tms` 字段改为与目标 ABI 一致的 `clock_t`/`i64`，或文档化无符号语义。",
+  "references": ["man 2 times", "kernel/src/syscall/time.rs", "issue-224"]
+}

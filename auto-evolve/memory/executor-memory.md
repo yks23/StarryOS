@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-287 resolved（**`times(2)` `struct Tms`**：四字段为 **`linux_raw_sys::general::__kernel_clock_t`**（uapi **`clock_t`**），**`cpu_nanos_to_clock_t`** 饱和到有符号范围；**`time.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-286 resolved（**`socketpair`**：**`fds.get_as_mut()`** 先于 **`StreamTransport`/`DgramTransport::new_pair`** 与 **`Socket::new`**；**`net/socket.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-285 resolved（**`getrandom`**：**`len > 0`** 且 **`buf == NULL`** → **`BadAddress`（EFAULT）**，先于 **`resolve`/`read_at`**；**`sys.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-284 resolved（**`getdents64`**：**`len > 0`** 且 **`buf == NULL`** → **`BadAddress`（EFAULT）**，先于 **`Directory::from_fd`/`read_dir`**；**`fs/ctl.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -310,6 +311,7 @@
 | issue-271 | mlock/mlock2 addr 须页对齐 EINVAL | resolved | 2026-04-12 |
 | issue-272 | lseek SEEK_SET 负 offset EINVAL | resolved | 2026-04-12 |
 | issue-273 | prlimit64 跨 pid 权限 EPERM | resolved | 2026-04-12 |
+| issue-287 | times Tms 字段 __kernel_clock_t | resolved | 2026-04-13 |
 | issue-286 | socketpair fds 校验先于 new_pair | resolved | 2026-04-13 |
 | issue-285 | getrandom len>0 NULL buf 先 EFAULT | resolved | 2026-04-13 |
 | issue-284 | getdents64 len>0 NULL buf 先 EFAULT | resolved | 2026-04-13 |
@@ -576,7 +578,7 @@
 - **`preadv2(2)` / `pwritev2(2)`**：**`flags`**（**`RWF_*`**）须为 **`linux_raw_sys::general`** 中 **`RWF_HIPRI|DSYNC|SYNC|NOWAIT|APPEND`** 子集，否则 **`InvalidInput`**（**EINVAL**）；**`flags!=0`** → **`OperationNotSupported`**（**EOPNOTSUPP**），直至实现对应 **`RWF_*`** 语义（issue-248）。**`preadv`/`pwritev`** 经 **`flags=0`** 调用 **v2**。
 - **`truncate(2)`**：**`length < 0` → `InvalidInput`** 须先于 **`path.get_as_str()`**，以便坏 **`path`** 与负长度组合时优先 **EINVAL**（issue-126，与 **`ftruncate`** 及 Linux **`do_truncate`** 一致）。
 - **`recvmsg`/`recvfrom`/`sendmsg`/`sendto`**：**`flags`** 须在 **`linux_raw_sys::net::MSG_*`** 定义的 **接收** 与 **发送** 掩码内（**`RECVMSG_FLAGS_MASK`** 含 **`MSG_PEEK`**/**`MSG_WAITALL`**/**`MSG_TRUNC`**/**`MSG_ERRQUEUE`** 等；**`SENDMSG_FLAGS_MASK`** 不含 **`MSG_PEEK`**/**`MSG_WAITALL`**/**`MSG_TRUNC`**/**`MSG_ERRQUEUE`**（issue-266 / issue-269）），否则 **`EINVAL`**。**`axnet::SendFlags`** 仍为占位 **`bitflags!`**，合法 **`MSG_*`** 尚未全量透传到 **`SendOptions.flags`**；**`MSG_DONTWAIT`** 等语义需在 **`axnet-ng`** 扩展 **`SendFlags`** 并在各 **`SocketOps::send`/`recv`** 中实现。
-- **`times(2)`**：**`tms_*`** 为 **`clock_t` jiffies**（**`USER_HZ = 100`**，**`ns * USER_HZ / 1e9`**）；返回值亦为单调时钟 jiffies（issue-224）。**`tms_utime`/`tms_stime`** 来源：线程组用户/系统时间（已退出线程计入 **`exited_threads_*_ns`**，存活线程取 **`TimeManager::cpu_nanos`**）；**`tms_cutime`/`tms_cstime`** = 已通过 **`wait`** 回收的子进程线程组 CPU 累计（**`waitpid`** 从僵尸 **`ProcessData`** 读 **`thread_group_cpu_nanos`** 后加到父 **`child_*_ns`**）。末线程退出时 **`register_zombie_process_data`**，**`wait`** **`free`** 后 **`remove_zombie_process_data`**。
+- **`times(2)`**：**`tms_*`** 为 **`clock_t` jiffies**（**`USER_HZ = 100`**，**`ns * USER_HZ / 1e9`**）；**`struct Tms`** 字段类型为 **`__kernel_clock_t`**（与 **`include/uapi/linux/times.h`** 一致，issue-287；issue-224 为刻度/返回值 jiffies）。返回值亦为单调时钟 jiffies（issue-224）。**`tms_utime`/`tms_stime`** 来源：线程组用户/系统时间（已退出线程计入 **`exited_threads_*_ns`**，存活线程取 **`TimeManager::cpu_nanos`**）；**`tms_cutime`/`tms_cstime`** = 已通过 **`wait`** 回收的子进程线程组 CPU 累计（**`waitpid`** 从僵尸 **`ProcessData`** 读 **`thread_group_cpu_nanos`** 后加到父 **`child_*_ns`**）。末线程退出时 **`register_zombie_process_data`**，**`wait`** **`free`** 后 **`remove_zombie_process_data`**。
 - **`Socket`/`fstat`**：每个 **`Socket::new`** 分配单调 **`sock_ino`**（**`AtomicU64`**）与固定 **`SOCKFS_STAT_DEV`**；**`FileLike::stat`** 填 **`Kstat::dev`/`ino`**；**`path`** 为 **`socket:[ino]`**，与 **`st_ino`** 一致。
 - **`get_mempolicy(2)`**：无 NUMA 建模时 **`policy`** 写入 **`MPOL_DEFAULT`（0）**；若 **`nodemask`/`maxnode`** 有效则清零 **`maxnode`** 位对应字节（上限 8192 字节）以匹配 **默认** 策略的空节点掩码。
 

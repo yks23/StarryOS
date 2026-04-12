@@ -2,7 +2,7 @@ use axerrno::{AxError, AxResult};
 use axhal::time::{TimeValue, monotonic_time, monotonic_time_nanos, wall_time};
 use axtask::current;
 use linux_raw_sys::general::{
-    __kernel_clockid_t, CLOCK_BOOTTIME, CLOCK_MONOTONIC, CLOCK_MONOTONIC_COARSE,
+    __kernel_clock_t, __kernel_clockid_t, CLOCK_BOOTTIME, CLOCK_MONOTONIC, CLOCK_MONOTONIC_COARSE,
     CLOCK_MONOTONIC_RAW, CLOCK_PROCESS_CPUTIME_ID, CLOCK_REALTIME, CLOCK_REALTIME_COARSE,
     CLOCK_THREAD_CPUTIME_ID, itimerval, timespec, timeval,
 };
@@ -18,8 +18,14 @@ use crate::{
 const USER_HZ: u64 = 100;
 
 #[inline]
-fn cpu_nanos_to_clock_t(ns: usize) -> usize {
-    ((ns as u128).saturating_mul(USER_HZ as u128) / 1_000_000_000u128).min(usize::MAX as u128) as usize
+fn cpu_nanos_to_clock_t(ns: usize) -> __kernel_clock_t {
+    let v = (ns as u128)
+        .saturating_mul(USER_HZ as u128)
+        / 1_000_000_000u128;
+    // Linux `struct tms` uses signed `clock_t`; jiffies are non-negative. Clamp to signed range
+    // (issue-287; follow-up to issue-224 `usize` → uapi alignment).
+    let v = v.min(i64::MAX as u128) as i64;
+    v as __kernel_clock_t
 }
 
 #[inline]
@@ -124,17 +130,18 @@ pub fn sys_clock_getres(clock_id: __kernel_clockid_t, res: *mut timespec) -> AxR
     Ok(0)
 }
 
-/// Matches Linux `struct tms`: fields are `clock_t` jiffies at `USER_HZ` (not microseconds).
+/// Matches Linux `include/uapi/linux/times.h` `struct tms`: fields are `clock_t` (`__kernel_clock_t`
+/// in uapi) jiffies at `USER_HZ` (not microseconds).
 #[repr(C)]
 pub struct Tms {
     /// user CPU time (jiffies)
-    tms_utime: usize,
+    tms_utime: __kernel_clock_t,
     /// system CPU time (jiffies)
-    tms_stime: usize,
+    tms_stime: __kernel_clock_t,
     /// user CPU time of waited children (jiffies)
-    tms_cutime: usize,
+    tms_cutime: __kernel_clock_t,
     /// system CPU time of waited children (jiffies)
-    tms_cstime: usize,
+    tms_cstime: __kernel_clock_t,
 }
 
 pub fn sys_times(tms: *mut Tms) -> AxResult<isize> {
