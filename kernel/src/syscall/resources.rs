@@ -6,7 +6,7 @@ use starry_process::Pid;
 use starry_vm::{VmMutPtr, VmPtr};
 
 use crate::{
-    task::{AsThread, Thread, get_process_data, get_task},
+    task::{AsThread, Thread, get_process_data, get_task, time_value_from_nanos},
     time::TimeValueLike,
 };
 
@@ -100,19 +100,12 @@ pub fn sys_getrusage(who: i32, usage: *mut rusage) -> AxResult<isize> {
                 })
         }
         RUSAGE_CHILDREN => {
-            thr.proc_data
-                .proc
-                .threads()
-                .into_iter()
-                .fold(Rusage::default(), |acc, child| {
-                    if let Ok(task) = get_task(child)
-                        && !curr.ptr_eq(&task)
-                    {
-                        acc.collate(Rusage::from_thread(task.as_thread()))
-                    } else {
-                        acc
-                    }
-                })
+            // Linux: resources of terminated and waited-for children only — not sibling pthreads.
+            let (cu_ns, cs_ns) = thr.proc_data.waited_children_cpu_nanos();
+            Rusage {
+                utime: time_value_from_nanos(cu_ns),
+                stime: time_value_from_nanos(cs_ns),
+            }
         }
         RUSAGE_THREAD => Rusage::from_thread(thr),
         _ => return Err(AxError::InvalidInput),
