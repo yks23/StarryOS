@@ -7,9 +7,19 @@ use axtask::{
     future::{self, block_on},
 };
 use linux_raw_sys::general::{
-    MINSIGSTKSZ, SI_TKILL, SI_USER, SIG_BLOCK, SIG_SETMASK, SIG_UNBLOCK, kernel_sigaction, siginfo,
-    timespec,
+    MINSIGSTKSZ, SI_TKILL, SI_USER, SIG_BLOCK, SIG_SETMASK, SIG_UNBLOCK, __kernel_sighandler_t,
+    kernel_sigaction, kernel_sigset_t, siginfo, timespec,
 };
+#[cfg(any(
+    target_arch = "x86_64",
+    target_arch = "x86",
+    target_arch = "powerpc",
+    target_arch = "powerpc64",
+    target_arch = "s390x",
+    target_arch = "arm",
+    target_arch = "aarch64",
+))]
+use linux_raw_sys::general::__sigrestore_t;
 use starry_process::Pid;
 use starry_signal::{SignalInfo, SignalSet, SignalStack, Signo};
 use starry_vm::{VmMutPtr, VmPtr};
@@ -21,6 +31,98 @@ use crate::{
     },
     time::TimeValueLike,
 };
+
+/// Matches `starry-signal` `build.rs` / `cfg(sa_restorer)` for `kernel_sigaction` layout.
+#[cfg(any(
+    target_arch = "x86_64",
+    target_arch = "x86",
+    target_arch = "powerpc",
+    target_arch = "powerpc64",
+    target_arch = "s390x",
+    target_arch = "arm",
+    target_arch = "aarch64",
+))]
+fn read_kernel_sigaction_user(p: *const kernel_sigaction) -> AxResult<kernel_sigaction> {
+    // `sa_handler` / `sa_restorer` are `Option<fn>` (not `AnyBitPattern`); Linux stores them as
+    // pointer-sized words — read `usize` and preserve bit pattern (issue-206).
+    let sa_handler_kernel = {
+        let bits = unsafe {
+            core::ptr::addr_of!((*p).sa_handler_kernel)
+                .cast::<usize>()
+                .vm_read()?
+        };
+        unsafe { core::mem::transmute::<usize, __kernel_sighandler_t>(bits) }
+    };
+    unsafe {
+        Ok(kernel_sigaction {
+            sa_handler_kernel,
+            sa_flags: core::ptr::addr_of!((*p).sa_flags).vm_read()?,
+            sa_restorer: {
+                let bits = core::ptr::addr_of!((*p).sa_restorer)
+                    .cast::<usize>()
+                    .vm_read()?;
+                core::mem::transmute::<usize, __sigrestore_t>(bits)
+            },
+            sa_mask: kernel_sigset_t {
+                sig: [core::ptr::addr_of!((*p).sa_mask.sig[0]).vm_read()?],
+            },
+        })
+    }
+}
+
+#[cfg(not(any(
+    target_arch = "x86_64",
+    target_arch = "x86",
+    target_arch = "powerpc",
+    target_arch = "powerpc64",
+    target_arch = "s390x",
+    target_arch = "arm",
+    target_arch = "aarch64",
+)))]
+fn read_kernel_sigaction_user(p: *const kernel_sigaction) -> AxResult<kernel_sigaction> {
+    let sa_handler_kernel = {
+        let bits = unsafe {
+            core::ptr::addr_of!((*p).sa_handler_kernel)
+                .cast::<usize>()
+                .vm_read()?
+        };
+        unsafe { core::mem::transmute::<usize, __kernel_sighandler_t>(bits) }
+    };
+    unsafe {
+        Ok(kernel_sigaction {
+            sa_handler_kernel,
+            sa_flags: core::ptr::addr_of!((*p).sa_flags).vm_read()?,
+            sa_mask: kernel_sigset_t {
+                sig: [core::ptr::addr_of!((*p).sa_mask.sig[0]).vm_read()?],
+            },
+        })
+    }
+}
+
+fn read_signal_set_user(p: *const SignalSet) -> AxResult<SignalSet> {
+    let p = p.cast::<kernel_sigset_t>();
+    let word = unsafe { core::ptr::addr_of!((*p).sig[0]).vm_read()? };
+    Ok(kernel_sigset_t { sig: [word] }.into())
+}
+
+fn read_timespec_user(p: *const timespec) -> AxResult<timespec> {
+    unsafe {
+        Ok(timespec {
+            tv_sec: core::ptr::addr_of!((*p).tv_sec).vm_read()?,
+            tv_nsec: core::ptr::addr_of!((*p).tv_nsec).vm_read()?,
+        })
+    }
+}
+
+fn read_signal_stack_user(p: *const SignalStack) -> AxResult<SignalStack> {
+    unsafe {
+        Ok(SignalStack {
+            sp: core::ptr::addr_of!((*p).sp).vm_read()?,
+            flags: core::ptr::addr_of!((*p).flags).vm_read()?,
+            size: core::ptr::addr_of!((*p).size).vm_read()?,
+        })
+    }
+}
 
 pub(crate) fn check_sigset_size(size: usize) -> AxResult<()> {
     // Linux `copy_sigset_from_user` / `rt_sigprocmask` 等：`sigsetsize` 须严格等于
@@ -61,7 +163,7 @@ pub fn sys_rt_sigprocmask(
                 SIG_BLOCK | SIG_UNBLOCK | SIG_SETMASK => {}
                 _ => return Err(AxError::InvalidInput),
             }
-            let set = unsafe { set_ptr.vm_read_uninit()?.assume_init() };
+            let set = read_signal_set_user(set_ptr)?;
             let new_mask = match how as u32 {
                 SIG_BLOCK => old | set,
                 SIG_UNBLOCK => old & !set,
@@ -105,7 +207,7 @@ pub fn sys_rt_sigaction(
         Some(act_ptr) => {
             // Linux do_rt_sigaction: copy_from_user(act) before copy_to_user(oldact); EFAULT on
             // `act` must not clobber `oldact` (issue-147).
-            let act = unsafe { act_ptr.vm_read_uninit()?.assume_init() }.into();
+            let act = read_kernel_sigaction_user(act_ptr)?.into();
             debug!("sys_rt_sigaction <= signo: {signo:?}, act: {act:?}");
             actions[signo] = act;
             if let Some(oldact) = oldact.nullable() {
@@ -252,10 +354,10 @@ pub fn sys_rt_sigtimedwait(
         return Err(AxError::BadAddress);
     }
 
-    let set = unsafe { set.vm_read_uninit()?.assume_init() };
+    let set = read_signal_set_user(set)?;
 
     let timeout = if let Some(ts) = timeout.nullable() {
-        let ts = unsafe { ts.vm_read_uninit()?.assume_init() };
+        let ts = read_timespec_user(ts)?;
         Some(ts.try_into_time_value()?)
     } else {
         None
@@ -315,7 +417,7 @@ pub fn sys_rt_sigsuspend(
     let curr = current();
     let thr = curr.as_thread();
 
-    let set = unsafe { set.vm_read_uninit()?.assume_init() };
+    let set = read_signal_set_user(set)?;
     let old_blocked = thr.signal.set_blocked(set);
 
     // sigsuspend always returns -EINTR when a signal is caught
@@ -343,7 +445,7 @@ pub fn sys_sigaltstack(ss: *const SignalStack, old_ss: *mut SignalStack) -> AxRe
     }
 
     if let Some(ss) = ss.nullable() {
-        let ss = unsafe { ss.vm_read_uninit()?.assume_init() };
+        let ss = read_signal_stack_user(ss)?;
         // Linux EINVAL for ss_size below MINSIGSTKSZ (illegal stack_t), not ENOMEM.
         if ss.size < MINSIGSTKSZ as usize {
             return Err(AxError::InvalidInput);

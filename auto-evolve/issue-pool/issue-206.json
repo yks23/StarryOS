@@ -1,0 +1,40 @@
+{
+  "id": "issue-206",
+  "title": "rt_sig* / sigaltstack：对用户 `SignalSet`/`kernel_sigaction`/`stack_t`/`timespec` 使用 `vm_read_uninit`+`assume_init`",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`signal.rs`**：新增 **`read_signal_set_user`**（**`kernel_sigset_t.sig[0]`** 单字，等价定长 **`sigset_t`**）、**`read_timespec_user`**、**`read_signal_stack_user`**、**`read_kernel_sigaction_user`**（**`sa_flags`/`sa_mask.sig[0]`** 标量读；**`sa_handler`/`sa_restorer`** 为 **`Option<fn>`** 非 **`AnyBitPattern`**，按 **`usize` `vm_read`** 再 **`transmute`** 保 Linux 指针位型；**`sa_restorer`** 仅 **`sa_restorer` ABI 架构** 分支）。**`rt_sigprocmask`/`rt_sigaction`/`rt_sigtimedwait`/`rt_sigsuspend`/`sigaltstack`** 已去掉上述路径的 **`assume_init`**。**`make_queue_signal_info`** 中 **`siginfo_t`** 整读仍保留（与本 issue 所列 syscall 范围正交）。**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过。",
+  "files_changed": [
+    "kernel/src/syscall/signal.rs",
+    "auto-evolve/issue-pool/issue-206.json",
+    "auto-evolve/memory/executor-memory.md"
+  ],
+  "description": "**`kernel/src/syscall/signal.rs`** 多处从用户态读整结构后 **`unsafe { …vm_read_uninit()?.assume_init() }`**，无 **`FIXME: AnyBitPattern`** 标注但语义与 **issue-201/204/205** 同类：**`sys_rt_sigprocmask`**（**`SignalSet`**，约 **64** 行）、**`sys_rt_sigaction`**（**`kernel_sigaction`**，约 **108** 行）、**`sys_rt_sigtimedwait`**（**`SignalSet`** + 可选 **`timespec`**，约 **255-258** 行）、**`sys_rt_sigsuspend`**（**`SignalSet`**，约 **318** 行）、**`sys_sigaltstack`**（**`stack_t`/`SignalStack`**，约 **346** 行）。**`check_sigset_size`**、**`act`/`oldact` 顺序**（**issue-146/147**）已部分覆盖，但 **`assume_init`** 仍依赖 **`linux_raw_sys`** 布局与 **Pod** 假设；结构体升级或 padding 变化时存在 **可审计性/UB** 风险。**更稳妥**：按字段 **`vm_read`**、**`zerocopy::FromBytes`**，或对 **`sigset_t`** 用与内核 **`copy_sigset_from_user`** 等价的定长字节读。",
+  "category": "syscall-semantics",
+  "affected_syscalls": [
+    "rt_sigprocmask",
+    "rt_sigaction",
+    "rt_sigtimedwait",
+    "rt_sigsuspend",
+    "sigaltstack"
+  ],
+  "source_context": {
+    "primary_files": [
+      "kernel/src/syscall/signal.rs:38-117",
+      "kernel/src/syscall/signal.rs:241-354"
+    ],
+    "related_files": [],
+    "key_insight": "多处 `assume_init`；与 issue-146/147 顺序修复正交"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "静态审查 + **`linux_raw_sys` 升级**试编译；对齐 **issue-201** 字段读模式。",
+    "expected_output_contains": "",
+    "pass_criteria": "消除 **`assume_init`** 或证明各 **uapi 结构**全 **`Pod`** 且读路径逐字节一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（2026-04-12）"
+  },
+  "suggested_fix": "对 **`kernel_sigaction`** 拆 **`sa_handler`/`sa_flags`/`sa_restorer`/`sa_mask`**；**`SignalSet`** 按 **`as_mut_bytes`** 定长读；**`stack_t`** 拆 **`ss_sp`/`ss_flags`/`ss_size`**；**`timespec`** 同 **issue-205**。",
+  "references": ["man 2 rt_sigaction", "man 2 sigaltstack", "issue-146", "issue-147", "issue-201", "issue-205"]
+}
