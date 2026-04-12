@@ -133,6 +133,43 @@ macro_rules! call_dispatch {
     }
 }
 
+/// Like [`call_dispatch!`], but the fallback arm does `sockfd_lookup` before `ENOPROTOOPT` without
+/// reading `optval` (issue-348); matched arms expect `dispatch!` to read user input before `from_fd`.
+macro_rules! call_setsockopt_dispatch {
+    ($dispatch:ident, $fd:expr, $pat:expr) => {{
+        use conv::*;
+        use linux_raw_sys::net::*;
+
+        call_setsockopt_dispatch! {
+            $dispatch, $fd, $pat,
+            (SOL_SOCKET, SO_REUSEADDR) => ReuseAddress as IntBool,
+            (SOL_SOCKET, SO_ERROR) => Error,
+            (SOL_SOCKET, SO_DONTROUTE) => DontRoute as IntBool,
+            (SOL_SOCKET, SO_SNDBUF) => SendBuffer as Int<usize>,
+            (SOL_SOCKET, SO_RCVBUF) => ReceiveBuffer as Int<usize>,
+            (SOL_SOCKET, SO_KEEPALIVE) => KeepAlive as IntBool,
+            (SOL_SOCKET, SO_PASSCRED) => PassCredentials as IntBool,
+            (SOL_SOCKET, SO_PEERCRED) => PeerCredentials as Ucred,
+
+            (PROTO_TCP, TCP_NODELAY) => NoDelay as IntBool,
+            (PROTO_TCP, TCP_MAXSEG) => MaxSegment as Int<usize>,
+        }
+    }};
+    ($dispatch:ident, $fd:expr, $in:expr, $($pat:pat => $which:ident $(as $conv:ty)?),* $(,)?) => {
+        match $in {
+            $(
+                $pat => {
+                    dispatch!($which $(as $conv)?);
+                }
+            )*
+            _ => {
+                let _ = Socket::from_fd($fd)?;
+                return Err(AxError::from(LinuxError::ENOPROTOOPT));
+            }
+        }
+    }
+}
+
 pub fn sys_getsockopt(
     fd: i32,
     level: u32,
@@ -238,9 +275,13 @@ pub fn sys_setsockopt(
         val.cast().get_as_ref()
     }
 
-    let socket = Socket::from_fd(fd)?;
+    // Linux `do_setsockopt`: copy/validate user `optval` before `sockfd_lookup` on known paths
+    // (issue-348; symmetric with issue-347 `getsockopt` / `optlen` before `from_fd`). Unknown
+    // `(level, optname)` still does `sockfd_lookup` before `ENOPROTOOPT` without touching `optval`
+    // (`call_setsockopt_dispatch` fallback).
     if level == PROTO_IP && optname == IP_TTL {
         let val = conv::IpTtl::sys_to_rust(optval, optlen)?;
+        let socket = Socket::from_fd(fd)?;
         socket.set_option(SetSocketOption::Ttl(&val))?;
         return Ok(0);
     }
@@ -251,6 +292,7 @@ pub fn sys_setsockopt(
         }
         let p = optval.address().as_usize() as *const timeval;
         let val = conv::Duration::sys_to_rust(read_timeval_user(p)?)?;
+        let socket = Socket::from_fd(fd)?;
         if optname == SO_RCVTIMEO {
             socket.set_option(SetSocketOption::ReceiveTimeout(&val))?;
         } else {
@@ -260,14 +302,21 @@ pub fn sys_setsockopt(
     }
     macro_rules! dispatch {
         ($which:ident) => {
-            socket.set_option(SetSocketOption::$which(get(optval, optlen)?))?;
+            {
+                let r = get(optval, optlen)?;
+                let socket = Socket::from_fd(fd)?;
+                socket.set_option(SetSocketOption::$which(r))?;
+            }
         };
         ($which:ident as $conv:ty) => {
-            let mut val = <$conv>::sys_to_rust(*get(optval, optlen)?)?;
-            socket.set_option(SetSocketOption::$which(&mut val))?;
+            {
+                let mut val = <$conv>::sys_to_rust(*get(optval, optlen)?)?;
+                let socket = Socket::from_fd(fd)?;
+                socket.set_option(SetSocketOption::$which(&mut val))?;
+            }
         };
     }
-    call_dispatch!(dispatch, (level, optname));
+    call_setsockopt_dispatch!(dispatch, fd, (level, optname));
 
     Ok(0)
 }

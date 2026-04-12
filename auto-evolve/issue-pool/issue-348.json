@@ -1,0 +1,32 @@
+{
+  "id": "issue-348",
+  "title": "`setsockopt(2)`：`sys_setsockopt` 先 `Socket::from_fd(fd)`（`EBADF`）再按 `level`/`optname` 读 `optval`；当 `fd` 无效且 `optval`/`optlen` 用户访问会 `EFAULT` 时，与 Linux `sock_setsockopt`/`compat` 路径上 `EFAULT`/`EBADF` 优先级可能不完全一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T16:15:00Z",
+  "resolved_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/net/opt.rs`** **`sys_setsockopt`** **（** **约** **215–239** **行** **）** **顺序** **：** **`Socket::from_fd(fd)?`** **→** **`IP_TTL`** **`/`** **`SO_RCVTIMEO`** **等** **分支** **内** **`UserConstPtr`/`read_timeval_user`** **。** **当** **`fd`** **无效** **（** **`EBADF`** **）** **且** **`optval`** **不可** **读** **（** **`EFAULT`** **）** **时** **，** **本** **路径** **固定** **先** **`EBADF`** **。** **Linux** **`setsockopt`** **在** **`sockfd_lookup`** **与** **`copy_from_user`** **之间** **的** **errno** **顺序** **可能** **因** **路径** **不同** **。** **与** **issue-347** **`getsockopt`** **`fd`/`optlen`** **为** **对称** **主题** **。**\n\n**建议** **：** **对照** **`net/socket.c` `do_setsockopt`** **，** **将** **`optval`/`optlen`** **可** **访问性** **与** **`fd`** **解析** **顺序** **与** **上游** **对齐** **，** **或** **注释** **说明** **差异** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["setsockopt"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/opt.rs:215-239"],
+    "related_files": [],
+    "key_insight": "setsockopt EBADF before EFAULT on optval"
+  },
+  "fix_summary": "`sys_setsockopt`：在 `IP_TTL`/`SO_RCVTIMEO`/`SO_SNDTIMEO` 及 `call_dispatch` 支持的选项上先读用户 `optval`（`get`/`read_timeval_user`/`IpTtl::sys_to_rust`）再 `Socket::from_fd`，使 `EFAULT` 可先于 `EBADF`；未知 `(level, optname)` 仍 `from_fd` 后 `ENOPROTOOPT` 且不触碰 `optval`。新增 `call_setsockopt_dispatch!`（传入 `fd` 以通过宏卫生性）。",
+  "files_changed": [
+    "kernel/src/syscall/net/opt.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-348.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：坏 `fd` + 坏 `optval` 对照 Linux。",
+    "expected_output_contains": "",
+    "pass_criteria": "`EBADF`/`EFAULT` 与上游一致或文档化。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "先校验用户 `optval`/`optlen`（与 Linux 一致）再 `from_fd`；或文档化 errno 顺序。",
+  "references": ["man 2 setsockopt", "kernel/src/syscall/net/opt.rs", "issue-347"]
+}
