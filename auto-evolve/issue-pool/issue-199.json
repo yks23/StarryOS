@@ -1,0 +1,31 @@
+{
+  "id": "issue-199",
+  "title": "scatter/gather：`IoVectorBuf` 对 `struct iovec` 多次 `vm_read`，未钉扎快照，与 Linux `import_iovec` 不一致",
+  "status": "resolved",
+  "created_at": "2026-04-15T08:00:00Z",
+  "severity": "medium",
+  "fix_summary": "**`IoVectorBuf`** 改为 **`Vec<IoVec>`**：**`new`** 内对用户 **`iovs[0..iovcnt)`** 逐元素 **`vm_read`** 推入 **`Vec`**并 **`checked_add`** 总 **`len`**；**`read_with`/`fill_with`/`IoVectorBufIo`（`skip_empty`、`Read`、`Write`）** 只遍历内核副本，不再对 **`iovs` 用户指针**二次 **`vm_read`**。**`iov_base`/`iov_len`** 在单次 syscall 内固定；缓冲区地址仍为用户页，由 **`vm_read_slice`/`vm_write_slice`** 按次校验。**`sendmsg`/`recvmsg`/`readv`/`writev`** 凡 **`IoVectorBuf::new`** 处自动受益。**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过。",
+  "files_changed": [
+    "kernel/src/mm/io.rs",
+    "auto-evolve/issue-pool/issue-199.json",
+    "auto-evolve/memory/executor-memory.md"
+  ],
+  "description": "**`kernel/src/mm/io.rs`** **`IoVectorBuf::new`** 遍历 **`iovcnt`**，对每个下标 **`iovs.wrapping_add(i).vm_read()`** 校验 **`iov_len ≥ 0`** 并累加总长度。随后在 **`read_with`/`fill_with`** 及 **`IoVectorBufIo::skip_empty` 等路径**再次对同一用户数组 **`vm_read` 每个 `IoVec`**。用户线程可在 **`new` 与实际读写**之间修改 **`iov_base`/`iov_len`**，或在 **`sendmsg`/`recvmsg` 长时间 `send`/`recv`** 过程中改写尚未处理到的项，使**校验过的总长度、指针**与**后续访问**不一致。**Linux**对 **`sendmsg`/`recvmsg`** 通常 **`import_iovec`/`copy_iovec_from_user`**（或 **`iovec` 内核副本 + access_ok`** 策略）后，**单次 syscall** 内使用**固定**的 **`iovec` 描述**。**`issue-197`** 已把 **`msghdr` 主体**拷入栈，但 **`msg_iov` 仍指向用户数组**，本问题仍影响 **`sendmsg`/`recvmsg`/`writev` 类路径**（凡构造 **`IoVectorBuf`** 处）。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["sendmsg", "recvmsg", "readv", "writev"],
+  "source_context": {
+    "primary_files": ["kernel/src/mm/io.rs:22-74"],
+    "related_files": ["kernel/src/syscall/net/io.rs:148-156", "kernel/src/syscall/net/io.rs:302-321"],
+    "key_insight": "`new` 读一遍 iovec；`read_with`/`fill_with` 再逐段 `vm_read`"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "构造 **`sendmsg`/`recvmsg`** + **`IoVectorBuf`**：在 **`socket.send`/`recv` 阻塞** 或 **`new` 与第一次 `read_with` 之间** 改写 **`iovec[i]`**；对照 **Linux** **`import_iovec`** 行为。",
+    "expected_output_contains": "",
+    "pass_criteria": "**`IoVec` 数组**在内核侧**单次快照**（或等价 **`copy_iovec_from_user`**），**IO 循环**只读内核副本；或文档化差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（2026-04-12）"
+  },
+  "suggested_fix": "在 **`IoVectorBuf::new`** 将 **`iovcnt` 个 `IoVec`** 读入 **`Vec<IoVec>`**（或上限内栈数组），后续 **`read_with`/`fill_with`** 仅遍历内核副本；注意 **`iov_base` 仍为用户指针**时的 **`access_ok`** 与 **`max_len`** 上限。",
+  "references": ["man 2 readv", "Linux import_iovec", "issue-197"]
+}

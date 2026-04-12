@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-199 resolved（**`IoVectorBuf`**：**`Vec<IoVec>`** 快照用户 **`iovec`**；**`read_with`/`IoVectorBufIo`** 不再对用户表二次 **`vm_read`**；对齐 **`import_iovec`** 固定描述；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-198 resolved（**`recvmsg`**：**`msghdr`** 快照 + **`offset_of!` `UserPtr`** 写 **`msg_namelen`/`msg_controllen`/`msg_flags`**；**`CMsgBuilder`**用 **`UserPtr<usize>`**替代 **`&mut msg.msg_controllen`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-197 resolved（**`sendmsg`**：**`*msg.get_as_ref()?`** 整 **`msghdr`** 拷内核栈后再解析 **`msg_control`**与组 **`IoVectorBuf`/地址**；缓解 **`msghdr` 字段级 TOCTOU**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-196 resolved（**`renameat2` `RENAME_EXCHANGE`**：**`ctl.rs`** 文档化 **三次 `rename` + 临时名** 实现 **非 crash-atomic**、与 Linux **VFS 交换** 故障语义可能不同；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
