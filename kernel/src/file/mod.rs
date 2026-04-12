@@ -271,6 +271,29 @@ pub fn add_file_like(f: Arc<dyn FileLike>, cloexec: bool) -> AxResult<c_int> {
     Ok(table.add(fd).map_err(|_| AxError::TooManyOpenFiles)? as c_int)
 }
 
+/// Like [`add_file_like`], but the new fd is the smallest free number **`>= min_fd`**
+/// (`F_DUPFD` / `F_DUPFD_CLOEXEC`, Linux `__get_unused_fd_flags`).
+pub fn add_file_like_at_least(f: Arc<dyn FileLike>, cloexec: bool, min_fd: usize) -> AxResult<c_int> {
+    if min_fd >= AX_FILE_LIMIT {
+        return Err(AxError::InvalidInput);
+    }
+    let max_nofile = current().as_thread().proc_data.rlim.read()[RLIMIT_NOFILE].current;
+    let mut table = FD_TABLE.write();
+    if table.count() as u64 >= max_nofile {
+        return Err(AxError::TooManyOpenFiles);
+    }
+    let fd = FileDescriptor { inner: f, cloexec };
+    for id in min_fd..AX_FILE_LIMIT {
+        if !table.is_assigned(id) {
+            return table
+                .add_at(id, fd)
+                .map_err(|_| AxError::TooManyOpenFiles)
+                .map(|i| i as c_int);
+        }
+    }
+    Err(AxError::TooManyOpenFiles)
+}
+
 /// Close a file by `fd`.
 pub fn close_file_like(fd: c_int) -> AxResult {
     flock::release_fd(fd);

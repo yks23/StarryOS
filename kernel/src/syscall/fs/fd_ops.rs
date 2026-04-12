@@ -11,8 +11,8 @@ use spin::RwLock;
 
 use crate::{
     file::{
-        Directory, FD_TABLE, File, FileLike, Pipe, add_file_like, close_file_like,
-        dirfd_for_path_resolution, get_file_like, with_fs,
+        Directory, FD_TABLE, File, FileLike, Pipe, add_file_like, add_file_like_at_least,
+        close_file_like, dirfd_for_path_resolution, get_file_like, with_fs,
     },
     mm::{UserConstPtr, UserPtr, vm_load_string},
     pseudofs::{Device, dev::tty},
@@ -186,15 +186,19 @@ pub fn sys_close_range(first: i32, last: i32, flags: u32) -> AxResult<isize> {
     Ok(0)
 }
 
-fn dup_fd(old_fd: c_int, cloexec: bool) -> AxResult<isize> {
+fn dup_fd(old_fd: c_int, cloexec: bool, min_fd: usize) -> AxResult<isize> {
     let f = get_file_like(old_fd)?;
-    let new_fd = add_file_like(f, cloexec)?;
+    let min_i = min_fd as c_int;
+    if min_i < 0 {
+        return Err(AxError::InvalidInput);
+    }
+    let new_fd = add_file_like_at_least(f, cloexec, min_i as usize)?;
     Ok(new_fd as _)
 }
 
 pub fn sys_dup(old_fd: c_int) -> AxResult<isize> {
     debug!("sys_dup <= {old_fd}");
-    dup_fd(old_fd, false)
+    dup_fd(old_fd, false, 0)
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -240,8 +244,8 @@ pub fn sys_fcntl(fd: c_int, cmd: c_int, arg: usize) -> AxResult<isize> {
     debug!("sys_fcntl <= fd: {fd} cmd: {cmd} arg: {arg}");
 
     match cmd as u32 {
-        F_DUPFD => dup_fd(fd, false),
-        F_DUPFD_CLOEXEC => dup_fd(fd, true),
+        F_DUPFD => dup_fd(fd, false, arg),
+        F_DUPFD_CLOEXEC => dup_fd(fd, true, arg),
         F_SETLK | F_OFD_SETLK => {
             // Linux do_fcntl: fget(fd) before copy_from_user(flock) (EBADF before EFAULT).
             get_file_like(fd)?;
