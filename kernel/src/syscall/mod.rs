@@ -334,6 +334,10 @@ pub fn handle_syscall(uctx: &mut UserContext) {
             uctx.arg3() as _,
             uctx.arg4() as _,
         ),
+        // Legacy `access(2)` syscall number exists only on ABIs where `syscalls::Sysno` defines
+        // `Sysno::access` (x86/x86_64). Linux riscv64/aarch64 typically have no separate
+        // `__NR_access`; libc implements `access(2)` via `faccessat`/`faccessat2` with `AT_FDCWD`
+        // → `sys_faccessat2` below (issue-296; symmetric to poll issue-291, renameat issue-292).
         #[cfg(target_arch = "x86_64")]
         Sysno::access => sys_access(uctx.arg0() as _, uctx.arg1() as _),
         Sysno::faccessat | Sysno::faccessat2 => sys_faccessat2(
