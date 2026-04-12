@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-093 resolved（**`setpgid`**：仅调用者或子进程、子须同 session；**`zombie` → `NoSuchProcess`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-092 resolved（**`with_blocked_signals`**：**`f()`** **`Ok`/`Err`** 均恢复 **`sigmask`**；**`ppoll`/`pselect`/`epoll_pwait`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-091 resolved（**`getresuid`/`getresgid`**：**`NULL`** 输出指针按字段跳过写入；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-090 resolved（**`fill_addr`**：**`*addrlen==0` → `InvalidInput`**；**`getsockname`/`getpeername`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -73,6 +74,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-093 | setpgid caller/child same session; zombie ESRCH | resolved | 2026-04-13 |
 | issue-092 | with_blocked_signals restore mask on Err too | resolved | 2026-04-13 |
 | issue-091 | getresuid/getresgid NULL ptr per-field optional | resolved | 2026-04-13 |
 | issue-090 | fill_addr addrlen 0 → EINVAL | resolved | 2026-04-13 |

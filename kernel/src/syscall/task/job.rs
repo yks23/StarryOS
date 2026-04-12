@@ -1,3 +1,5 @@
+use alloc::sync::Arc;
+
 use axerrno::{AxError, AxResult};
 use axtask::current;
 use starry_process::Pid;
@@ -27,11 +29,30 @@ pub fn sys_getpgid(pid: Pid) -> AxResult<isize> {
 }
 
 pub fn sys_setpgid(pid: Pid, pgid: Pid) -> AxResult<isize> {
-    let proc = &get_process_data(pid)?.proc;
+    // Linux: only the process itself or its parent may change its process group; a
+    // non-self target must be in the same session as the caller (EPERM otherwise).
+    let caller = current().as_thread().proc_data.proc.clone();
+    let target_pd = get_process_data(pid)?;
+    let target = &target_pd.proc;
+
+    if target.is_zombie() {
+        return Err(AxError::NoSuchProcess);
+    }
+
+    let is_self = Arc::ptr_eq(&caller, target);
+    let is_child = target
+        .parent()
+        .is_some_and(|p| Arc::ptr_eq(&p, &caller));
+    if !is_self && !is_child {
+        return Err(AxError::OperationNotPermitted);
+    }
+    if is_child && caller.group().session().sid() != target.group().session().sid() {
+        return Err(AxError::OperationNotPermitted);
+    }
 
     if pgid == 0 {
-        proc.create_group();
-    } else if !proc.move_to_group(&get_process_group(pgid)?) {
+        target.create_group();
+    } else if !target.move_to_group(&get_process_group(pgid)?) {
         return Err(AxError::OperationNotPermitted);
     }
 
