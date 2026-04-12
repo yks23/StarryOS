@@ -306,8 +306,9 @@ pub fn sys_sigaltstack(ss: *const SignalStack, old_ss: *mut SignalStack) -> AxRe
 
     if let Some(ss) = ss.nullable() {
         let ss = unsafe { ss.vm_read_uninit()?.assume_init() };
-        if ss.size <= MINSIGSTKSZ as usize {
-            return Err(AxError::NoMemory);
+        // Linux EINVAL for ss_size below MINSIGSTKSZ (illegal stack_t), not ENOMEM.
+        if ss.size < MINSIGSTKSZ as usize {
+            return Err(AxError::InvalidInput);
         }
         sig.set_stack(ss);
     }
