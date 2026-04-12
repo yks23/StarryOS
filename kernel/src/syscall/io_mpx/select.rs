@@ -1,9 +1,10 @@
 use alloc::vec::Vec;
-use core::{fmt, mem, ptr, time::Duration};
+use core::{fmt, mem, ptr};
 
 use axerrno::{AxError, AxResult};
+use axhal::time::TimeValue;
 use axpoll::IoEvents;
-use axtask::future::{self, block_on, poll_io};
+use axtask::future::{self, block_on, interruptible, poll_io};
 use bitmaps::Bitmap;
 use linux_raw_sys::{
     general::*,
@@ -87,7 +88,7 @@ fn do_select(
     readfds: UserPtr<__kernel_fd_set>,
     writefds: UserPtr<__kernel_fd_set>,
     exceptfds: UserPtr<__kernel_fd_set>,
-    timeout: Option<Duration>,
+    timeout: Option<TimeValue>,
     sigmask: UserConstPtr<SignalSetWithSize>,
 ) -> AxResult<isize> {
     // Also enforced in `sys_select`/`sys_pselect6` before `timeout` read (issue-333).
@@ -156,7 +157,10 @@ fn do_select(
     }
 
     let poll_result = with_blocked_signals(sigmask.copied(), || {
-        match block_on(future::timeout(
+        // Align with `do_poll` / `ppoll` (issue-355): `interruptible`(`timeout_at`(`poll_io`));
+        // `Elapsed` is timer expiry only; `Interrupted` → `EINTR`. Do not map outer `Err` to `Ok(0)`
+        // (issue-364).
+        match block_on(interruptible(future::timeout_at(
             timeout,
             poll_io(&fds, IoEvents::empty(), false, || {
                 let mut res = 0usize;
@@ -182,14 +186,22 @@ fn do_select(
                     }
                 }
                 if res > 0 {
-                    return Ok(res as _);
+                    return Ok(res as isize);
                 }
 
                 Err(AxError::WouldBlock)
             }),
-        )) {
-            Ok(r) => r,
-            Err(_) => Ok(0),
+        ))) {
+            Ok(Ok(Ok(n))) => Ok(n),
+            Ok(Ok(Err(e))) => Err(e),
+            Ok(Err(_elapsed)) => {
+                // Timeout: Linux returns 0 and clears all fd_sets (`man 2 select`).
+                read_kernel = readfds.is_some().then_some(empty_kernel_fd_set());
+                write_kernel = writefds.is_some().then_some(empty_kernel_fd_set());
+                except_kernel = exceptfds.is_some().then_some(empty_kernel_fd_set());
+                Ok(0)
+            }
+            Err(_) => Err(AxError::Interrupted),
         }
     });
 
