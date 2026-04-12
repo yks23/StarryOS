@@ -605,14 +605,15 @@ pub fn sys_utimensat(
     dirfd: i32,
     path: *const c_char,
     times: *const [timespec; 2],
-    mut flags: u32,
+    flags: u32,
 ) -> AxResult<isize> {
-    if path.is_null() {
-        flags |= AT_EMPTY_PATH;
-    }
     // Linux VALID_UTIMENSAT_FLAGS (see utimes.c): AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH.
     const VALID_UTIMENSAT_FLAGS: u32 = AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH;
     if flags & !VALID_UTIMENSAT_FLAGS != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    // Linux do_utimensat: NULL pathname requires AT_EMPTY_PATH in flags; do not imply it (issue-331).
+    if path.is_null() && flags & AT_EMPTY_PATH == 0 {
         return Err(AxError::InvalidInput);
     }
     fn utime_to_duration(time: &timespec) -> Option<AxResult<Duration>> {
