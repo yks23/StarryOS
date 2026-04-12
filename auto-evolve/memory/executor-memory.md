@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-134 resolved（**`sendmsg`**：**`Socket::from_fd`** 与 **`SENDMSG_FLAGS_MASK`** 先于 **`msghdr`**/cmsg/iovec；**`send_on_socket`** 复用；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-133 resolved（**`sendto`/`sendmsg`**：**`send_impl`** 内 **`Socket::from_fd`** 先于 **`SocketAddrEx::read_from_user`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-132 resolved（**`bind`/`connect`**：**`Socket::from_fd`** 先于 **`SocketAddrEx::read_from_user`**，**`EBADF`** 先于 **EFAULT** 类；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-131 resolved（**`fstatat`/`newfstatat`**：**`VALID_NEWFSTATAT_FLAGS`** + **`AT_STATX_SYNC_TYPE`** 互斥先于 **`vm_load_string(path)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -114,6 +115,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-134 | sendmsg from_fd 先于 copy msghdr/iov | resolved | 2026-04-12 |
 | issue-133 | sendto/sendmsg send_impl from_fd 先于读 addr | resolved | 2026-04-12 |
 | issue-132 | bind/connect from_fd 先于读 sockaddr | resolved | 2026-04-12 |
 | issue-131 | fstatat/newfstatat flags 掩码 EINVAL | resolved | 2026-04-12 |
@@ -294,7 +296,8 @@
 - **`setsockopt(2)`**：**`optlen`** 须 **`>=`** 选项值 **`sizeof(T)`**（与 Linux / **`getsockopt`** 侧一致），只使用缓冲区前 **`sizeof(T)`** 字节；**`optlen < sizeof(T)`** → **`EINVAL`**。
 - **`getsockopt(2)`**（**`net/opt.rs`**）：**`Socket::from_fd`** 须早于 **`optlen.get_as_mut`**，使无效 **`fd`** 先 **`EBADF`**，再触碰 **`optlen`/`optval`**（与 Linux **`sockfd_lookup`** 顺序及 **`setsockopt`** 对称）；日志仅用 **`UserPtr::address`** 避免提前用户读。
 - **`bind(2)`/`connect(2)`**（**`socket.rs`**）：**`Socket::from_fd`** 须早于 **`SocketAddrEx::read_from_user`**，无效 **`fd`** 先 **`BadFileDescriptor`**（**EBADF**），与 Linux **`sockfd_lookup`** 及 **`sys_accept4`** 顺序一致（issue-132）。
-- **`sendto(2)`/`sendmsg(2)`**（**`net/io.rs`** **`send_impl`**）：在 **`flags`** 掩码校验后、读对端地址前 **`Socket::from_fd`**，与 Linux **`__sys_sendto`** 及 **`recv_impl`** 对称（issue-133）。**`sys_sendmsg`** 仍先在用户侧解析 **`msghdr`/cmsg**；仅 **`msg_name`** 拷贝顺序在 **`send_impl`** 内与 **`fd`**  lookup 对齐。
+- **`sendto(2)`**（**`net/io.rs`**）：**`send_impl`**：**`SENDMSG_FLAGS_MASK`** 后 **`Socket::from_fd`**，再 **`send_on_socket`**（**`msg_name`** **`read_from_user`** + **`send`**），对齐 **`__sys_sendto`**（issue-133）。
+- **`sendmsg(2)`**：**`Socket::from_fd`** → **`SENDMSG_FLAGS_MASK`** → **`msghdr.get_as_ref`** / cmsg / **`IoVectorBuf::new`** → **`send_on_socket`**（无二次 **`from_fd`**），对齐 **`__sys_sendmsg`** **`sockfd_lookup` 先于 `copy_msghdr_from_user`**（issue-134）。
 - **`bind`/`connect`/`sendto` 等 INET 地址**：**`SocketAddrV4`/`SocketAddrV6::read_from_user`** 要求 **`addrlen >= sizeof(sockaddr_in|sockaddr_in6)`**，只按固定布局读 **`sockaddr_in`/`sockaddr_in6`**；**`addrlen` 大于结构体**时与 Linux 一样忽略尾部字节。**vsock** **`sockaddr_vm`** 同理。
 - **`sendmsg` / `recvmsg` 与 ancillary**：控制缓冲区须与 Linux 一致使用 **`CMSG_ALIGN(sizeof(cmsghdr)+payload)`** 作为**占用步长**；**`cmsg_len`** 仍为含头的逻辑长度。遍历下一条头用 **`ptr += CMSG_ALIGN(cmsg_len)`**；**`CMsgBuilder::push`** 在 **`msg_controllen`** 与下一 **`cmsghdr`** 指针上前移对齐后长度，**`cmsg_len` 至对齐边界**建议填 **0**。**`CMsg::parse`（`sendmsg`）** 仅实现 **`(SOL_SOCKET, SCM_RIGHTS)`**；**`SCM_CREDENTIALS`/`SCM_TIMESTAMP`/`SCM_TIMESTAMPNS`/`SCM_TIMESTAMPING`/`SCM_SECURITY`** → **`Unsupported`**，勿与格式错误混用 **`EINVAL`**。
 - **`sched_getaffinity` / `sched_setaffinity`**：`pid==0` 为当前任务；非零先 **`get_task(pid)`**，失败再 **`get_process_data(pid)`** 取 **`proc.threads()` 最小 tid** 定位线程组代表线程。set 时当前任务走 **`set_current_affinity`**（SMP 迁移），其它任务仅 **`set_cpumask`**。未完整建模 CAP、僵尸 **`ESRCH`** 等。
@@ -326,7 +329,8 @@
 - issue-130：**`fsync`/`fdatasync`** 在 **pipe**/**socket** fd 上应 **`EINVAL`**，勿 **`BrokenPipe`**/**`IsADirectory`**。
 - issue-131：**`fstatat`** 非法 **`flags`**（如保留高位）→ **`EINVAL`**；可与 **`statx`** 非法 flags 用例类比。
 - issue-132：无效 **socket `fd`** + 坏 **`addr`**，首错应 **`EBADF`**（先于 **EFAULT**）。
-- issue-133：**`sendto`/`sendmsg`** 路径上 **`send_impl`**：无效 **`fd`** + 坏 **`msg_name`**，首错应 **`EBADF`**（**`sendmsg`** 若在 **`send_impl`** 前已碰 **`msghdr`** 则另论）。
+- issue-133：**`sendto`** 或 **`sendmsg`** 仅坏 **`msg_name`**（**`msghdr`** 本身合法）：无效 **`fd`** 时首错 **`EBADF`**。
+- issue-134：**`sendmsg`** 无效 **`fd`** + 坏 **`msghdr`/`iov`**：首错应 **`EBADF`**（先于 **EFAULT**）。
 - issue-053：请跑 **`/bin/test_memfd_create_invalid_flags`**（**`memfd_create(..., 0x80000000)`** → **`EINVAL`**）。
 - issue-052：请跑 **`/bin/test_fchownat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`uid`/`gid`** 不变）。
 - issue-051：请跑 **`/bin/test_utimensat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`mtime`** 不变）。

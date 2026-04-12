@@ -50,7 +50,9 @@ use crate::{
     syscall::net::{CMsg, CMsgBuilder, cmsg_align},
 };
 
-fn send_impl(
+/// After [`Socket::from_fd`] and `flags` validation: optional `to` address + [`Socket::send`].
+fn send_on_socket(
+    socket: &Socket,
     fd: i32,
     mut src: impl Read + IoBuf,
     flags: u32,
@@ -58,13 +60,6 @@ fn send_impl(
     addrlen: socklen_t,
     cmsg: Vec<CMsgData>,
 ) -> AxResult<isize> {
-    if flags & !SENDMSG_FLAGS_MASK != 0 {
-        return Err(AxError::InvalidInput);
-    }
-
-    // Linux __sys_sendto / sendmsg: sockfd_lookup before copy sockaddr (EBADF before EFAULT).
-    let socket = Socket::from_fd(fd)?;
-
     let addr = if addr.is_null() || addrlen == 0 {
         None
     } else {
@@ -84,6 +79,23 @@ fn send_impl(
     Ok(sent as isize)
 }
 
+fn send_impl(
+    fd: i32,
+    src: impl Read + IoBuf,
+    flags: u32,
+    addr: UserConstPtr<sockaddr>,
+    addrlen: socklen_t,
+    cmsg: Vec<CMsgData>,
+) -> AxResult<isize> {
+    if flags & !SENDMSG_FLAGS_MASK != 0 {
+        return Err(AxError::InvalidInput);
+    }
+
+    // Linux __sys_sendto / sendmsg: sockfd_lookup before copy sockaddr (EBADF before EFAULT).
+    let socket = Socket::from_fd(fd)?;
+    send_on_socket(&socket, fd, src, flags, addr, addrlen, cmsg)
+}
+
 pub fn sys_sendto(
     fd: i32,
     buf: *const u8,
@@ -96,6 +108,12 @@ pub fn sys_sendto(
 }
 
 pub fn sys_sendmsg(fd: i32, msg: UserConstPtr<msghdr>, flags: u32) -> AxResult<isize> {
+    // Linux __sys_sendmsg: sockfd_lookup before copy_msghdr_from_user (EBADF before EFAULT).
+    let socket = Socket::from_fd(fd)?;
+    if flags & !SENDMSG_FLAGS_MASK != 0 {
+        return Err(AxError::InvalidInput);
+    }
+
     let msg = msg.get_as_ref()?;
     let mut cmsg = Vec::new();
     if !msg.msg_control.is_null() {
@@ -117,7 +135,8 @@ pub fn sys_sendmsg(fd: i32, msg: UserConstPtr<msghdr>, flags: u32) -> AxResult<i
             ptr += step;
         }
     }
-    send_impl(
+    send_on_socket(
+        &socket,
         fd,
         IoVectorBuf::new(msg.msg_iov as *const IoVec, msg.msg_iovlen)?.into_io(),
         flags,
