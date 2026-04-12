@@ -588,6 +588,11 @@ pub fn sys_splice(
     let mut has_pipe = false;
 
     let src = if !off_in.is_null() {
+        // Linux `do_splice`: `*_off` must not be used with a pipe end — EINVAL, not EPIPE-style
+        // errors from `File::from_fd` / `BrokenPipe` (issue-379).
+        if Pipe::from_fd(fd_in).is_ok() {
+            return Err(AxError::InvalidInput);
+        }
         let file = File::from_fd(fd_in)?;
         if off_in.vm_read()? < 0 {
             return Err(AxError::InvalidInput);
@@ -609,6 +614,9 @@ pub fn sys_splice(
     };
 
     let dst = if !off_out.is_null() {
+        if Pipe::from_fd(fd_out).is_ok() {
+            return Err(AxError::InvalidInput);
+        }
         let file = File::from_fd(fd_out)?;
         if off_out.vm_read()? < 0 {
             return Err(AxError::InvalidInput);
