@@ -1,0 +1,32 @@
+{
+  "id": "issue-354",
+  "title": "`mincore(2)`：`sys_mincore` 用 `length.div_ceil(PAGE_SIZE)` 得到 `page_count` 后直接 `vec![0u8; page_count]`，未在分配前校验 `addr+length` 是否超出进程地址空间或与 Linux 一致的 `ENOMEM` 上界；极大 `length` 可能导致不当大内核分配或资源耗尽",
+  "status": "resolved",
+  "created_at": "2026-04-13T12:30:00Z",
+  "resolved_at": "2026-04-13T00:00:00Z",
+  "severity": "medium",
+  "description": "**`kernel/src/syscall/mm/mincore.rs`** **`sys_mincore`** **（** **约** **67–74** **行** **）** **：** **`page_count = length.div_ceil(PAGE_SIZE_4K)`** **后** **立即** **`vec![0u8; page_count]`** **。** **注释** **（** **约** **34–45** **行** **）** **称** **Linux** **`ENOMEM`** **在** **`length > (TASK_SIZE - addr)`** **等** **情形** **，** **但** **实现** **未** **在** **分配** **前** **对** **`addr`/`length`** **做** **与** **用户** **地址** **空间** **上界** **/`checked_add`** **的** **一致** **拒绝** **。** **攻击** **面** **：** **用户** **传入** **极大** **`length`** **可** **迫使** **内核** **尝试** **分配** **与** **页** **数** **成** **比** **的** **Vec** **，** **与** **Linux** **在** **范围** **检查** **后** **再** **填** **向量** **的** **路径** **不一致** **。**\n\n**建议** **：** **在** **`vec!`** **前** **按** **`TASK_SIZE`** **/** **`AddrSpace`** **策略** **校验** **`addr`+`length`** **无** **溢出** **且** **落在** **合法** **映射** **上界** **内** **；** **或** **对** **`page_count`** **设** **硬** **上限** **并** **返回** **`ENOMEM`/`EINVAL`** **与** **`mm/mincore.c`** **对齐** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["mincore"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/mm/mincore.rs:44-74"],
+    "related_files": [],
+    "key_insight": "mincore vec allocation before TASK_SIZE/addr+length bounds like Linux ENOMEM"
+  },
+  "fix_summary": "`sys_mincore`：在 `vec![0u8; page_count]` 前用 `addr.checked_add(length)` 与 `USER_SPACE_BASE`/`USER_SPACE_BASE+USER_SPACE_SIZE` 做边界检查，超出或溢出 → `NoMemory`（ENOMEM），与 Linux `length > TASK_SIZE - addr` 类语义一致并避免极大 `length` 触发大内核分配（issue-354）。",
+  "files_changed": [
+    "kernel/src/syscall/mm/mincore.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-354.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：用户态传入 `length ≈ usize::MAX` 观察内核分配行为。",
+    "expected_output_contains": "",
+    "pass_criteria": "在分配输出缓冲前拒绝非法 `addr+length` 或与 Linux `ENOMEM` 语义一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "`checked_add(addr, length)` 与 `TASK_SIZE`/VMA 上界检查后再 `vec!`；或对 `page_count` 设上限返回 `ENOMEM`。",
+  "references": ["man 2 mincore", "kernel/mm/mincore.c", "kernel/src/syscall/mm/mincore.rs"]
+}

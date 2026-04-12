@@ -14,7 +14,10 @@ use axtask::current;
 use memory_addr::{MemoryAddr, PAGE_SIZE_4K, VirtAddr};
 use starry_vm::vm_write_slice;
 
-use crate::task::AsThread;
+use crate::{
+    config::{USER_SPACE_BASE, USER_SPACE_SIZE},
+    task::AsThread,
+};
 
 /// Check whether pages are resident in memory.
 ///
@@ -63,6 +66,14 @@ pub fn sys_mincore(addr: usize, length: usize, vec: *mut u8) -> AxResult<isize> 
     }
 
     debug!("sys_mincore <= addr: {addr:#x}, length: {length:#x}, vec: {vec:?}");
+
+    // Linux ENOMEM: `length > TASK_SIZE - addr` (overflow or past user AS end). Reject before
+    // `vec![..; page_count]` so absurd `length` cannot force huge kernel allocations (issue-354).
+    const USER_SPACE_END: usize = USER_SPACE_BASE + USER_SPACE_SIZE;
+    let end = addr.checked_add(length).ok_or(AxError::NoMemory)?;
+    if addr < USER_SPACE_BASE || end > USER_SPACE_END {
+        return Err(AxError::NoMemory);
+    }
 
     // Calculate number of pages to check
     let page_count = length.div_ceil(PAGE_SIZE_4K);
