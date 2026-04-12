@@ -1,0 +1,27 @@
+{
+  "id": "issue-400",
+  "title": "`linkat(2)`：`old_path` 为 `\"\"` 且无 `AT_EMPTY_PATH` 时未在 `resolve_at` 前拒绝为 `EINVAL`",
+  "status": "resolved",
+  "created_at": "2026-04-12T23:59:00Z",
+  "severity": "low",
+  "description": "`kernel/src/syscall/fs/ctl.rs` **`sys_linkat`**（约 255–311 行）：**`old_path.nullable().map(vm_load_string)`** 可得 **`Some(\"\")`**；**`new_path.is_empty()`** 已由 **issue-398** **verified** 处理，**`old_path`** 侧 **无** 对称检查。Linux **`linkat(2)`**：**`oldpath`** 为 **空串** 时 **须** 与 **`AT_EMPTY_PATH`** 联用（**作用于** **`old_dirfd`** **本身**）；**未** 置 **`AT_EMPTY_PATH`** 时 **空** **`oldpath`** **通常** **`EINVAL`**（与 **issue-399** **`fchownat`** **等** **`Some(\"\")`+无`AT_EMPTY_PATH`** **主题** **一致**）。\n\n建议：**`vm_load_string(new_path)`** **之前**（或 **`old_path`** **就绪后** **立即**）**`if let Some(p) = old_path.as_deref() { if p.is_empty() && flags & AT_EMPTY_PATH == 0 { return Err(InvalidInput); } }`**，注释引用 issue-400 及 **issue-398**/**issue-399**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["linkat", "link"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/ctl.rs:255-311"],
+    "related_files": [],
+    "key_insight": "`old_path`=`Some(\"\")` 且未置 `AT_EMPTY_PATH` → `InvalidInput`（复用 `reject_empty_pathname_without_empty_path_flag`）；`None`（NULL）+`AT_EMPTY_PATH` 正交"
+  },
+  "fix_summary": "`sys_linkat`：在 `old_path` 就绪、`vm_load_string(new_path)` 之前调用 `reject_empty_pathname_without_empty_path_flag(&old_path, flags)`，使空 `oldpath` 且无 `AT_EMPTY_PATH` 时返回 `InvalidInput`，与 issue-399 模式及 Linux `linkat(2)` 一致。",
+  "files_changed": ["kernel/src/syscall/fs/ctl.rs"],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：`linkat(AT_FDCWD, \"\", AT_FDCWD, \"b\", 0)`（flags 无 AT_EMPTY_PATH）对照 Linux `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "空 `oldpath` 且无 AT_EMPTY_PATH 时返回 EINVAL（`InvalidInput`）。",
+    "last_result": "通过：`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`（exit 0）"
+  },
+  "suggested_fix": "在 `resolve_at` 之前为 `old_path` 增加与 issue-399 相同模式的空串+`AT_EMPTY_PATH` 门控。",
+  "references": ["man 2 linkat", "kernel/src/syscall/fs/ctl.rs", "issue-399", "issue-398", "issue-393"]
+}

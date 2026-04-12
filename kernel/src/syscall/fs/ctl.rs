@@ -283,6 +283,10 @@ pub fn sys_linkat(
         }
     }
 
+    // Linux: empty oldpathname requires AT_EMPTY_PATH; otherwise EINVAL (issue-400; issue-399 theme;
+    // new_path empty: issue-398).
+    reject_empty_pathname_without_empty_path_flag(&old_path, flags)?;
+
     let new_path = vm_load_string(new_path)?;
     // Linux rejects empty new pathname with EINVAL (issue-398; issue-397/393 theme).
     if new_path.is_empty() {
