@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-258 resolved（**`memfd_create`/`memfd_secret`**：**`MFD_EXEC`** 与 **`MFD_NOEXEC_SEAL`** 同置 → **`InvalidInput`（EINVAL）**；**`validate_memfd_flags`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-257 resolved（**`sendto`/`sendmsg`**：**`msg_name`/`addr` 非空**且 **`addrlen==0`** → **`InvalidInput`（EINVAL）**；仅 **`addr.is_null()`** 时 **`to: None`**；**`send_on_socket`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-256 resolved（**`getsockname`/`getpeername`**：**`addr==NULL`** 时 **`Ok(0)`**，不读 **`addrlen`**、不 **`write_to_user`**；非 NULL 仍先 **`addrlen.get_as_mut()`** 再地址再写（**`net/name.rs`**；与 issue-119 顺序兼容）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-255 resolved（**`recvfrom`/`recvmsg`**：流式套接字 **`msg_name`/`addr` 非空**时写回 **`peer_addr()`**（与 **`getpeername`** 一致）；占位 **`0.0.0.0:0`** 仅在 transport 未填 **`RecvOptions::from`** 时替换；**`net/io.rs` `recv_on_socket`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -265,6 +266,7 @@
 | issue-255 | recvfrom/recvmsg 流式套接字写回 peer 地址 | resolved | 2026-04-12 |
 | issue-256 | getsockname/getpeername addr==NULL 不写用户 | resolved | 2026-04-12 |
 | issue-257 | sendto/sendmsg 非空 addr 且 addrlen==0 → EINVAL | resolved | 2026-04-12 |
+| issue-258 | memfd MFD_EXEC 与 MFD_NOEXEC_SEAL 互斥 EINVAL | resolved | 2026-04-12 |
 | issue-219 | waitpid __WNOTHREAD → Unsupported | resolved | 2026-04-12 |
 | issue-225 | fallocate FALLOC_FL 掩码 + 非零 EOPNOTSUPP | resolved | 2026-04-12 |
 | issue-227 | shmat 无效 shmid 不 unwrap（EINVAL） | resolved | 2026-04-12 |
@@ -441,7 +443,7 @@
 - **`fchmodat(2)`** / **`fchmod`**： **`flags`** 须为 Linux **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW`** 的子集（**`sys_fchmod`** 用 **`AT_EMPTY_PATH`**），否则 **`EINVAL`**；掩码须在 **`vm_load_string(path)`** 之前完成（issue-139，非法 flags 先 **EINVAL** 于 **EFAULT**）；勿未校验即传入 **`resolve_at`**。
 - **`utimensat(2)`**：**`path==NULL`** 时逻辑上含 **`AT_EMPTY_PATH`**；**`flags`** 须为 **`AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH`** 的子集（与 Linux **`VALID_UTIMENSAT_FLAGS`**），在 **`update_times`/`resolve_at`** 前校验，非法位 **`EINVAL`**（含双 **`UTIME_OMIT`** 时亦应先拒绝非法 **`flags`**）。
 - **`fchownat(2)`** / **`fchown`** / **`lchown`**：**`flags`** 须为 **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW`** 的子集（**`VALID_FCHOWNAT_FLAGS`**），否则 **`EINVAL`**；掩码须在 **`vm_load_string(path)`** 之前完成（issue-139）。**`sys_fchown`** 用 **`AT_EMPTY_PATH`**，**`lchown`** 用 **`AT_SYMLINK_NOFOLLOW`**。
-- **`memfd_create(2)`/`memfd_secret(2)`**：**`flags`** 低位须为 **`MFD_CLOEXEC|ALLOW_SEALING|HUGETLB|EXEC|NOEXEC_SEAL`** 的子集；**`MFD_HUGE_MASK<<MFD_HUGE_SHIFT`** 域须为 **0** 或等于某一 **`linux_raw_sys::general::MFD_HUGE_*`**（勿仅用 **`(MFD_HUGE_MASK<<SHIFT)`** 整域放行，否则 **`0x80000000`** 等无效编码会误过）。**`name`** 经 **`UserConstPtr::get_as_str`** 读入，**`MemfdCreatedFile`** 的 **`FileLike::path`** 为 **`/memfd:{sanitized}`**（供 **`/proc/self/fd`** readlink）；**`tmpfs`** 上仍用唯一 **`/tmp/memfd-....`** 作真实 backing。
+- **`memfd_create(2)`/`memfd_secret(2)`**：**`flags`** 低位须为 **`MFD_CLOEXEC|ALLOW_SEALING|HUGETLB|EXEC|NOEXEC_SEAL`** 的子集；**`MFD_EXEC`** 与 **`MFD_NOEXEC_SEAL`** 不得同置（**`EINVAL`**，见 Linux **`sanitize_flags`**，issue-258）。**`MFD_HUGE_MASK<<MFD_HUGE_SHIFT`** 域须为 **0** 或等于某一 **`linux_raw_sys::general::MFD_HUGE_*`**（勿仅用 **`(MFD_HUGE_MASK<<SHIFT)`** 整域放行，否则 **`0x80000000`** 等无效编码会误过，issue-053）。**`name`** 经 **`UserConstPtr::get_as_str`** 读入，**`MemfdCreatedFile`** 的 **`FileLike::path`** 为 **`/memfd:{sanitized}`**（供 **`/proc/self/fd`** readlink）；**`tmpfs`** 上仍用唯一 **`/tmp/memfd-....`** 作真实 backing。
 - **`faccessat2(2)`**：**`flags`** 须为 **`AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH | AT_EACCESS`** 的子集（**`VALID_FACCESSAT_FLAGS`**），否则 **`EINVAL`**；**`mode`** 须为 **`F_OK|R_OK|W_OK|X_OK`** 子集（**`linux_raw_sys`** 上 **`F_OK==0`**，与 Linux **`~(F_OK|R_OK|W_OK|X_OK)`** 掩码一致），否则 **`EINVAL`**（issue-128）。上述 **`flags`/`mode`** 须在 **`vm_load_string(path)`** 与 **`resolve_at`** 之前完成（issue-129，非法参数先 **EINVAL** 于 **EFAULT**）；**`AT_EACCESS`** 与 **`resolve_at`** 语义可仍简化，但须先拒绝未知位。
 - **`fstatat(2)`/`newfstatat(2)`**（**`sys_fstatat`**）：**`flags`** 须为 **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT | AT_STATX_SYNC_TYPE`** 的子集（Linux **`VALID_NEWFSTATAT_FLAGS`**）；**`AT_STATX_FORCE_SYNC`** 与 **`AT_STATX_DONT_SYNC`** 不能同时置位；须在 **`vm_load_string(path)`** 之前校验（issue-131）。**`AT_NO_AUTOMOUNT`** 等可仍为 no-op，但未知位须 **`EINVAL`**。**`resolve_at`** 仍只消费 **`AT_EMPTY_PATH`**/**`AT_SYMLINK_NOFOLLOW`**。
 - **`statx(2)`**：**`flags`** 须为 **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW | AT_STATX_SYNC_TYPE`** 的子集；**`AT_STATX_FORCE_SYNC`** 与 **`AT_STATX_DONT_SYNC`** 不能同时置位（**`(flags & AT_STATX_SYNC_TYPE) == AT_STATX_SYNC_TYPE`** → **`EINVAL`**）；上述须在 **`vm_load_string(path)`** 之前完成（issue-127，非法 flags 先 **EINVAL**）；再 **`resolve_at`**。

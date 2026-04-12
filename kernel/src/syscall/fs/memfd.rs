@@ -19,6 +19,10 @@ use crate::{
 /// `MFD_HUGE_MASK << MFD_HUGE_SHIFT` field (see `linux/uapi/linux/memfd.h`). A full huge-tlb
 /// field mask would incorrectly accept invalid encodings such as `0x80000000`.
 fn validate_memfd_flags(flags: u32) -> AxResult<()> {
+    // Linux `sanitize_flags`: MFD_EXEC and MFD_NOEXEC_SEAL are mutually exclusive.
+    if flags & MFD_EXEC != 0 && flags & MFD_NOEXEC_SEAL != 0 {
+        return Err(AxError::InvalidInput);
+    }
     const BASE: u32 = MFD_CLOEXEC | MFD_ALLOW_SEALING | MFD_HUGETLB | MFD_EXEC | MFD_NOEXEC_SEAL;
     let huge_field = MFD_HUGE_MASK << MFD_HUGE_SHIFT;
     let base = flags & !huge_field;
