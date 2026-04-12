@@ -179,6 +179,9 @@ pub fn sys_fallocate(
     len: __kernel_off_t,
 ) -> AxResult<isize> {
     debug!("sys_fallocate <= fd: {fd}, mode: {mode}, offset: {offset}, len: {len}");
+    // Resolve `fd` before `mode`/`offset`/`len` so **EBADF** precedes **EINVAL**/**EOPNOTSUPP** when
+    // both an invalid fd and bad parameters are present (Linux `fdget`/`__sys_fallocate`; issue-313).
+    let f = File::from_fd(fd)?;
     if mode & !FALLOC_FL_KNOWN_MASK != 0 {
         return Err(AxError::InvalidInput);
     }
@@ -194,7 +197,6 @@ pub fn sys_fallocate(
         return Err(AxError::InvalidInput);
     };
 
-    let f = File::from_fd(fd)?;
     let inner = f.inner();
     let file = inner.access(FileFlags::WRITE)?;
     file.set_len(file.location().len()?.max(end))?;

@@ -1,0 +1,27 @@
+{
+  "id": "issue-313",
+  "title": "`fallocate(2)`：`sys_fallocate` 在 `File::from_fd(fd)`（`EBADF`）之前校验 `mode`/`offset`/`len`（`EINVAL`/`EOPNOTSUPP`），与 Linux 先 `fget`/`fdget` 再解析参数时「无效 fd」与「非法 mode/范围」组合下的错误优先级可能不完全一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T12:45:00Z",
+  "severity": "low",
+  "fix_summary": "将 `sys_fallocate` 中 `File::from_fd(fd)?` 提前到 `mode`/`offset`/`len` 校验之前，使无效 fd 先返回 EBADF；注释引用 Linux `fdget`/`__sys_fallocate` 与 issue-313。更新 `executor-memory` `fallocate(2)` 条、表格与最近更新；新增 `issue-313.json`。",
+  "files_changed": ["kernel/src/syscall/fs/io.rs", "auto-evolve/memory/executor-memory.md"],
+  "description": "**`kernel/src/syscall/fs/io.rs`** **`sys_fallocate`** **（** **约** **175–197** **行** **）** **顺序** **为** **：** **`mode`** **未知** **位** **/** **非** **零** **`mode`** **（** **`EOPNOTSUPP`** **）** **、** **`offset`/`len`** **负** **或** **加法** **溢出** **（** **`EINVAL`** **）** **，** **最后** **才** **`File::from_fd(fd)`** **。** **Linux** **`__sys_fallocate`** **通常** **先** **解析** **`fd`→`file`** **，** **无效** **`fd`** **→** **`EBADF`** **，** **再** **处理** **`mode`** **与** **范围** **。** **当** **调用** **同时** **存在** **坏** **`fd`** **与** **非法** **`mode`** **或** **`offset`/`len`** **时** **，** **本** **实现** **可能** **固定** **返回** **`EINVAL`/`EOPNOTSUPP`** **而非** **`EBADF`** **，** **与** **issue-303**/**issue-310** **类** **「** **句柄** **解析** **与** **标量** **校验** **顺序** **」** **问题** **同类** **。**\n\n**建议** **：** **对照** **Linux** **`vfs_fallocate`** **入口** **顺序** **，** **按需** **将** **`from_fd`/`get_file_like`** **提前** **，** **或** **在** **注释** **中** **说明** **有意** **先** **拒绝** **畸形** **参数** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["fallocate"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/io.rs:175-201"],
+    "related_files": [],
+    "key_insight": "fallocate EBADF vs EINVAL order"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：无效 fd + 非法 mode 对照 Linux 返回码顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游 `fallocate` 错误优先级一致，或注释说明差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "查阅 Linux `__sys_fallocate`/`fdget` 顺序，将 `File::from_fd(fd)?` 提前到参数校验之前，或补充与 issue-303 同类的注释。",
+  "references": ["man 2 fallocate", "kernel/src/syscall/fs/io.rs", "issue-303", "issue-310"]
+}
