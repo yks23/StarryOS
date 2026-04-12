@@ -121,6 +121,8 @@ pub fn sys_mkdirat(dirfd: i32, path: *const c_char, mode: u32) -> AxResult<isize
 struct DirBuffer {
     buf: Vec<u8>,
     offset: usize,
+    /// Set when a directory entry cannot be encoded (e.g. `d_reclen` overflow); syscall returns this error.
+    fatal: Option<AxError>,
 }
 
 impl DirBuffer {
@@ -128,6 +130,7 @@ impl DirBuffer {
         Self {
             buf: vec![0; len],
             offset: 0,
+            fatal: None,
         }
     }
 
@@ -136,22 +139,40 @@ impl DirBuffer {
     }
 
     fn write_entry(&mut self, d_ino: u64, d_off: i64, d_type: NodeType, name: &[u8]) -> bool {
+        if self.fatal.is_some() {
+            return false;
+        }
+
         const NAME_OFFSET: usize = offset_of!(linux_dirent64, d_name);
+        const NAME_MAX_LEN: usize = NAME_MAX as usize;
+
+        if name.len() > NAME_MAX_LEN {
+            self.fatal = Some(AxError::InvalidInput);
+            return false;
+        }
 
         let len = NAME_OFFSET + name.len() + 1;
-        // alignment
         let len = len.next_multiple_of(align_of::<linux_dirent64>());
+        let reclen = match u16::try_from(len) {
+            Ok(r) => r,
+            Err(_) => {
+                self.fatal = Some(AxError::InvalidInput);
+                return false;
+            }
+        };
+
         if self.remaining_space() < len {
             return false;
         }
 
-        // FIXME: safety
+        // SAFETY: `len` fits in `u16` (`d_reclen`) and in `remaining_space`; `name` length is ≤ `NAME_MAX`;
+        // `NAME_OFFSET + name.len() + 1` ≤ `len` (aligned); NUL is written at `name_ptr + name.len()`.
         unsafe {
             let entry_ptr = self.buf.as_mut_ptr().add(self.offset);
             entry_ptr.cast::<linux_dirent64>().write(linux_dirent64 {
-                d_ino,
+                d_ino: d_ino as _,
                 d_off,
-                d_reclen: len as _,
+                d_reclen: reclen,
                 d_type: d_type as _,
                 d_name: Default::default(),
             });
@@ -179,12 +200,23 @@ pub fn sys_getdents64(fd: i32, buf: *mut u8, len: usize) -> AxResult<isize> {
     dir.inner()
         .read_dir(*dir_offset, &mut |name: &str, ino, node_type, offset| {
             has_remaining = true;
-            if !buffer.write_entry(ino, offset as _, node_type, name.as_bytes()) {
+            let d_off = match i64::try_from(offset) {
+                Ok(v) => v,
+                Err(_) => {
+                    buffer.fatal = Some(AxError::InvalidInput);
+                    return false;
+                }
+            };
+            if !buffer.write_entry(ino, d_off, node_type, name.as_bytes()) {
                 return false;
             }
             *dir_offset = offset;
             true
         })?;
+
+    if let Some(e) = buffer.fatal {
+        return Err(e);
+    }
 
     if has_remaining && buffer.offset == 0 {
         return Err(AxError::InvalidInput);

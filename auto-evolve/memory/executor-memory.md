@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-221 resolved（**`getdents64`**：**`DirBuffer`**：**`NAME_MAX`**、**`d_reclen`**（**`u16::try_from`**）、**`d_off`**（**`i64::try_from`**）与 **`SAFETY`** 注释；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-219 resolved（**`waitpid`/`wait4`**：**`__WNOTHREAD`** → **`Unsupported`**，勿静默忽略；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-225 resolved（**`fallocate`**：**`FALLOC_FL_*`** 掩码未知位 **`EINVAL`**；**`mode==0`** 仍为 **`set_len(max…)`**；其它已知 **`FALLOC_FL_*`** → **`EOPNOTSUPP`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-227 resolved（**`shmat`**：无效 **`shmid`** **`get_inner_by_shmid` → `InvalidInput`**，替代 **`unwrap()`**，对齐 **`sys_shmdt`/`sys_shmctl`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -205,6 +206,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-221 | getdents64 dirent64 NAME_MAX/d_reclen/d_off | resolved | 2026-04-12 |
 | issue-219 | waitpid __WNOTHREAD → Unsupported | resolved | 2026-04-12 |
 | issue-225 | fallocate FALLOC_FL 掩码 + 非零 EOPNOTSUPP | resolved | 2026-04-12 |
 | issue-227 | shmat 无效 shmid 不 unwrap（EINVAL） | resolved | 2026-04-12 |
@@ -434,6 +436,7 @@
 - **`syslog(2)`/`klogctl`**：**`action`** 须在 **`SYSLOG_ACTION_CLOSE`..=`SIZE_BUFFER`（0..=10）**，否则 **`InvalidInput`**。无 printk 环：**`READ`/`READ_ALL`/`READ_CLEAR`** 与 **`CLEAR`/`CONSOLE_*`** → **`Unsupported`**；**`SIZE_UNREAD`/`SIZE_BUFFER`** 返回 **0**（空环）；**`OPEN`/`CLOSE`** → **`Ok(0)`**。勿对任意参数无条件 **`Ok(0)`**。
 - **`splice(2)` / `copy_file_range(2)`**：**`flags`** 须在 Linux 已知掩码内（**`SPLICE_F_MOVE|NONBLOCK|MORE|GIFT`**；**`copy_file_range`** 为 **`COPY_FILE_RANGE_COMPRESS|DEDUPE`**），否则 **`EINVAL`**。**`SPLICE_F_*`** 语义（如非阻塞）若与底层 **`do_send`** 未完全对齐，属后续增强；非法位须先拒绝。**`splice`**：**`off_in`/`off_out` 非空**时须先 **`File::from_fd`**（**`EBADF`**）再读用户偏移（**EFAULT** 类），与 **Linux `do_splice`** / **issue-122** 同类顺序。**`sendfile(2)`**：**`offset` 非空**时同样先 **`File::from_fd(in_fd)`** 再 **`offset.vm_read`**（**`offset==NULL`** 分支仍为 **`get_file_like(in_fd)`** 在前）。
 - **`fallocate(2)`**：**`mode`** 未知 **`FALLOC_FL_*`** 位 → **`EINVAL`**；**`mode == 0`** 仅扩展逻辑长度（**`set_len(max(current, offset+len))`**）；其它已知标志（**`KEEP_SIZE`/打洞/零范围等**）尚无稀疏 extent → **`EOPNOTSUPP`**（issue-225），勿与非法位混为同一 **`EINVAL`**。
+- **`getdents64(2)`**：**`linux_dirent64`** 中 **`d_name`** 长度 ≤ **`NAME_MAX`**；记录总长 **`d_reclen`** 用 **`u16::try_from(aligned_len)`**，目录 cookie **`d_off`** 用 **`i64::try_from(VFS offset)`**，溢出/超长 → **`EINVAL`**（issue-221）；**`unsafe`** 写入前有 **`SAFETY`** 说明。
 - **`pwrite64(2)`**：**`offset < 0` → `InvalidInput`**（issue-108）；**`len == 0`** 仍须先 **`File::from_fd`** 再 **`Ok(0)`**，勿在 **`from_fd`** 前早退，以便无效 fd 得 **EBADF**（issue-125，对齐 Linux **`vfs_write`/`fget`**）。
 - **`truncate(2)`**：**`length < 0` → `InvalidInput`** 须先于 **`path.get_as_str()`**，以便坏 **`path`** 与负长度组合时优先 **EINVAL**（issue-126，与 **`ftruncate`** 及 Linux **`do_truncate`** 一致）。
 - **`recvmsg`/`recvfrom`/`sendmsg`/`sendto`**：**`flags`** 须在 **`linux_raw_sys::net::MSG_*`** 定义的 **接收** 与 **发送** 掩码内（**`RECVMSG_FLAGS_MASK`** 含 **`MSG_PEEK`**；**`SENDMSG_FLAGS_MASK`** 不含 **`MSG_PEEK`**），否则 **`EINVAL`**。**`axnet::SendFlags`** 仍为占位 **`bitflags!`**，合法 **`MSG_*`** 尚未透传到 **`SendOptions.flags`**；**`MSG_DONTWAIT`** 等语义需在 **`axnet-ng`** 扩展 **`SendFlags`** 并在各 **`SocketOps::send`/`recv`** 中实现。
