@@ -251,6 +251,7 @@ fn recv_on_socket(
         if iter.next().is_some() {
             cmsg_trunc = true;
         }
+        builder.commit();
     } else if !cmsg.is_empty() {
         cmsg_trunc = true;
     }

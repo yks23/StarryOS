@@ -62,22 +62,30 @@ pub struct CMsgBuilder<'a> {
     hdr: UserPtr<cmsghdr>,
     len: &'a mut usize,
     capacity: usize,
+    /// Ancillary bytes written; user `*len` is updated only in [`Self::commit`] after `recv` succeeds.
+    written: usize,
 }
 impl<'a> CMsgBuilder<'a> {
     pub fn new(msg: UserPtr<cmsghdr>, len: &'a mut usize) -> Self {
         let capacity = *len;
-        *len = 0;
         Self {
             hdr: msg,
             len,
             capacity,
+            written: 0,
         }
+    }
+
+    /// After a successful `recvmsg`, write the final ancillary length to user `msg_controllen`.
+    #[inline]
+    pub fn commit(self) {
+        *self.len = self.written;
     }
 
     /// Bytes still available in the user control buffer (from `msg_controllen` capacity).
     #[inline]
     pub fn remaining(&self) -> usize {
-        self.capacity.saturating_sub(*self.len)
+        self.capacity.saturating_sub(self.written)
     }
 
     pub fn push(
@@ -113,7 +121,7 @@ impl<'a> CMsgBuilder<'a> {
                 .fill(0);
         }
         self.hdr = UserPtr::from(cmsg_base + padded);
-        *self.len += padded;
+        self.written += padded;
         Ok(true)
     }
 }
