@@ -1,0 +1,27 @@
+{
+  "id": "issue-170",
+  "title": "getsockopt SO_ERROR：GeneralOptions 恒写 0（TODO），无法反映套接字待处理错误",
+  "status": "open",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "medium",
+  "fix_summary": "",
+  "files_changed": [],
+  "description": "**`sys_getsockopt`**（`kernel/src/syscall/net/opt.rs`）对 **`(SOL_SOCKET, SO_ERROR)`** 走 **`GetSocketOption::Error`**（**`i32`**）。**`Configurable::get_option_inner`** 在 **`vendor/axnet-ng/src/general.rs`** 中 **`O::Error(error)`** 分支仅有 **`// TODO(mivik): actual logic`** 与 **`**error = 0`**，**恒成功**（**`Ok(true)`**）。**各具体套接字**（如 **`TcpSocket`**）先调用 **`self.general.get_option_inner(option)?`**，**`SO_ERROR` 在通用层即被消费**，**永远向用户返回0**。**Linux** **`getsockopt(SO_ERROR)`** 返回并**清除**套接字上**挂起的异步错误**（连接失败、对端复位等），非0 时对应 **`errno`**。**Starry** 当前行为会导致依赖 **`SO_ERROR`** 的应用**误判无错误**。**`setsockopt(SO_ERROR)`** 在 **`general`** 中无 **`O::Error`**  arm，多为 **`ENOPROTOOPT`**，与 **get** 侧「假全零」不对称。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["getsockopt"],
+  "source_context": {
+    "primary_files": ["vendor/axnet-ng/src/general.rs:103-126", "kernel/src/syscall/net/opt.rs:83-86"],
+    "related_files": ["vendor/axnet-ng/src/tcp.rs:166-172"],
+    "key_insight": "`general` 先于传输层处理 `Error`，且仅写 0"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "制造 **TCP** 连接失败或对端 **RST** 后 **`getsockopt(SO_ERROR)`**；对比 **Linux** 与 **Starry** 读出的 **`errno`**。",
+    "expected_output_contains": "",
+    "pass_criteria": "与 **Linux** 一致地返回挂起错误码（或明确 **`EOPNOTSUPP`** 且文档化），**禁止**始终 **0** 的假实现。",
+    "last_result": ""
+  },
+  "suggested_fix": "在 **`GeneralOptions` 或各 `Socket` 实现**中维护 **`AtomicI32`/`Option<i32>`** 挂起错误；**`get_option_inner` `O::Error`** 交换读出并清零；在 **连接/读写失败路径** **`store`** 错误码；或 **`TcpSocket`** 在调用 **`general`** 前拦截 **`SO_ERROR`** 并对接 **`smol`**/**栈** 错误状态。",
+  "references": ["man 7 socket", "Linux SO_ERROR"]
+}
