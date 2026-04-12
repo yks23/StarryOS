@@ -5,6 +5,7 @@ mod net;
 mod pidfd;
 mod pipe;
 pub mod signalfd;
+pub mod timerfd;
 
 use alloc::{borrow::Cow, sync::Arc};
 use core::{ffi::c_int, time::Duration};
@@ -25,6 +26,7 @@ pub use self::{
     net::Socket,
     pidfd::PidFd,
     pipe::Pipe,
+    timerfd::TimerFd,
 };
 use crate::task::{AX_FILE_LIMIT, AsThread};
 
