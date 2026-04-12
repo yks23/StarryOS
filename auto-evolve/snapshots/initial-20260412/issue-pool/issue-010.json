@@ -1,0 +1,28 @@
+{
+  "id": "issue-010",
+  "title": "timerfd_create 返回 DummyFd，poll 永不就绪、定时器永不触发",
+  "status": "open",
+  "created_at": "2026-04-12T12:00:00Z",
+  "severity": "high",
+  "description": "timerfd 系列经 sys_dummy_fd 创建 DummyFd，Pollable::poll 返回空事件，epoll_wait + timerfd 的事件循环永久阻塞。影响 libuv、tokio 等依赖 timerfd 的栈。",
+  "category": "syscall-stub",
+  "affected_syscalls": ["timerfd_create", "timerfd_settime", "timerfd_gettime"],
+  "source_context": {
+    "primary_files": [
+      "kernel/src/syscall/fs/io.rs:21-42",
+      "kernel/src/syscall/mod.rs:617-628"
+    ],
+    "related_files": [],
+    "key_insight": "DummyFd::poll 返回 IoEvents::empty()"
+  },
+  "test": {
+    "source_file": "auto-evolve/tests/test_timerfd.c",
+    "build_command": "riscv64-linux-musl-gcc -static -o test_timerfd test_timerfd.c",
+    "run_method": "QEMU 中运行 /bin/test_timerfd",
+    "expected_output_contains": "SUMMARY",
+    "pass_criteria": "timerfd_settime 后 poll 在超时内返回 POLLIN，read 得到到期次数",
+    "last_result": "待运行"
+  },
+  "suggested_fix": "实现 TimerFd：到期时间、间隔、armed 状态；Pollable 到期返回 IN；read 返回 u64 计数。",
+  "references": ["man 2 timerfd_create", "Question1.md 改进3"]
+}

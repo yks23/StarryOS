@@ -1,0 +1,25 @@
+{
+  "id": "issue-020",
+  "title": "mremap implemented via mmap+memcpy+munmap (loses MAP_SHARED backend)",
+  "status": "open",
+  "created_at": "2026-04-12T12:00:00Z",
+  "severity": "medium",
+  "description": "sys_mremap 通过新 mmap、拷贝、munmap 模拟，不处理 MREMAP_FIXED 等；文件共享映射扩展后可能不再与文件一致。",
+  "category": "correctness",
+  "affected_syscalls": ["mremap"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/mm/mmap.rs:282-317"],
+    "related_files": [],
+    "key_insight": "TODO: full implementation"
+  },
+  "test": {
+    "source_file": "auto-evolve/tests/test_mremap_shared.c",
+    "build_command": "riscv64-linux-musl-gcc -static -o test_mremap_shared test_mremap_shared.c",
+    "run_method": "运行 /bin/test_mremap_shared",
+    "expected_output_contains": "SUMMARY",
+    "pass_criteria": "扩展后第二页写入经 msync 可在文件中读到",
+    "last_result": "待运行"
+  },
+  "suggested_fix": "页表级 mremap，保留文件/匿名后端类型。",
+  "references": ["man 2 mremap"]
+}

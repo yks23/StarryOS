@@ -1,0 +1,28 @@
+{
+  "id": "issue-022",
+  "title": "setresuid/setreuid/setresgid are no-op; getuid always 0",
+  "status": "open",
+  "created_at": "2026-04-12T12:00:00Z",
+  "severity": "high",
+  "description": "setresuid/setreuid/setresgid 直接 Ok(0)；sys_getuid 等恒返回 0。权限模型无法模拟非 root。",
+  "category": "syscall-stub",
+  "affected_syscalls": ["setresuid", "setreuid", "setresgid", "getuid", "geteuid", "getgid", "getegid"],
+  "source_context": {
+    "primary_files": [
+      "kernel/src/syscall/task/ctl.rs:56-66",
+      "kernel/src/syscall/sys.rs:15-38"
+    ],
+    "related_files": [],
+    "key_insight": "Question2.md 2.3/2.11"
+  },
+  "test": {
+    "source_file": "auto-evolve/tests/test_setuid_stub.c",
+    "build_command": "riscv64-linux-musl-gcc -static -o test_setuid_stub test_setuid_stub.c",
+    "run_method": "运行 /bin/test_setuid_stub",
+    "expected_output_contains": "SUMMARY",
+    "pass_criteria": "setuid(1000) 后 getuid()==1000",
+    "last_result": "待运行"
+  },
+  "suggested_fix": "在 ProcessData 中维护 ruid/euid/suid 与 gid 系列字段。",
+  "references": ["man 2 setresuid"]
+}

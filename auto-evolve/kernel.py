@@ -417,10 +417,51 @@ class AgentSession:
         self.state.status = AgentStatus.STOPPED
 
 
+# ── Priority-sorted issue picker for executor ─────────────────
+
+SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+
+
+def pick_next_issue() -> Optional[dict]:
+    """按 severity 排序取出下一个 open issue（含完整内容）。"""
+    candidates = []
+    for f in sorted(ISSUE_POOL.glob("issue-*.json")):
+        try:
+            d = json.loads(f.read_text())
+            if d.get("status") == "open":
+                candidates.append((f, d))
+        except Exception:
+            pass
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: SEVERITY_ORDER.get(x[1].get("severity", "low"), 9))
+    return candidates[0][1]
+
+
+def count_open_issues() -> int:
+    count = 0
+    for f in ISSUE_POOL.glob("issue-*.json"):
+        try:
+            d = json.loads(f.read_text())
+            if d.get("status") == "open":
+                count += 1
+        except Exception:
+            pass
+    return count
+
+
 # ── Scheduler ─────────────────────────────────────────────────
 
 class Scheduler:
-    """调度内核：管理两个 agent 的生命周期和消息分发。"""
+    """调度内核：executor 按优先级连续修复，debugger 按需唤醒。
+
+    调度策略：
+    - executor: 手动消息优先 → 否则自动取最高优先级 open issue
+    - debugger: 手动消息优先 → open issue < 10 时唤醒 → 每 30 分钟唤醒
+    """
+
+    DEBUGGER_MIN_ISSUES = 10
+    DEBUGGER_WAKE_INTERVAL = 30 * 60  # 30 分钟
 
     def __init__(self):
         self.kernel_state = KernelState.load()
@@ -432,33 +473,117 @@ class Scheduler:
             "executor", SKILL_EXECUTOR, self.kernel_state.executor)
 
         self._running = True
-        self._tick_interval = 5  # 秒
+        self._tick_interval = 5
+        self._last_debugger_wake = 0.0  # epoch
+        self._executor_thread: Optional[threading.Thread] = None
+        self._debugger_thread: Optional[threading.Thread] = None
 
-    def tick(self):
-        """一次调度循环。"""
-        now = datetime.now().isoformat()
-        self.kernel_state.last_tick = now
-        self.kernel_state.issue_stats = scan_issues()
+    def _run_executor_once(self):
+        """executor 单次执行：手动消息 > 自动取最高优先级 issue。"""
+        msg = dequeue_message("executor")
+        if msg:
+            is_manual = msg["type"] in ("manual", "file_drop")
+            prio_label = "手动" if is_manual else "自动"
+            print(f"[kernel] executor: 处理{prio_label}消息")
+            self.executor.send_message(msg["content"])
+            return
 
-        for name, agent, gen_prompt in [
-            ("debugger", self.debugger, generate_auto_prompt_debugger),
-            ("executor", self.executor, generate_auto_prompt_executor),
-        ]:
-            if agent.is_stopped():
+        issue = pick_next_issue()
+        if not issue:
+            print("[kernel] executor: 问题池无 open issue，等待...")
+            self.executor.state.status = AgentStatus.IDLE
+            return
+
+        issue_id = issue.get("id", "?")
+        severity = issue.get("severity", "?")
+        title = issue.get("title", "?")[:60]
+        print(f"[kernel] executor: 取 {issue_id} [{severity}] {title}")
+
+        issue_content = json.dumps(issue, indent=2, ensure_ascii=False)
+        prompt = (
+            f"请处理以下问题（优先级: {severity}）：\n\n"
+            f"```json\n{issue_content}\n```\n\n"
+            f"按照 skill-executor 工作流程执行：\n"
+            f"1. 将 status 改为 in-progress\n"
+            f"2. 阅读 source_context 定位代码\n"
+            f"3. 实施修复（修改 kernel/src/ 下的源码）\n"
+            f"4. 运行 cargo clippy --target riscv64gc-unknown-none-elf -F qemu\n"
+            f"5. 编译通过后将 status 改为 resolved，填写 fix_summary 和 files_changed\n"
+            f"6. 更新 auto-evolve/memory/executor-memory.md\n"
+            f"7. git add && git commit 你的改动"
+        )
+        self.executor.send_message(prompt)
+
+    def _should_wake_debugger(self) -> bool:
+        """判断是否需要唤醒 debugger。"""
+        # 有手动消息，必须唤醒
+        if queue_size("debugger") > 0:
+            return True
+
+        open_count = count_open_issues()
+
+        # open issue 数量 < 10，唤醒
+        if open_count < self.DEBUGGER_MIN_ISSUES:
+            print(f"[kernel] debugger: open issues = {open_count} < {self.DEBUGGER_MIN_ISSUES}，唤醒")
+            return True
+
+        # 每 30 分钟唤醒一次
+        now = time.time()
+        if now - self._last_debugger_wake >= self.DEBUGGER_WAKE_INTERVAL:
+            print(f"[kernel] debugger: 30 分钟定期唤醒")
+            return True
+
+        return False
+
+    def _run_debugger_once(self):
+        """debugger 单次执行：手动消息 > 自动巡检。"""
+        msg = dequeue_message("debugger")
+        if msg:
+            prio_label = "手动" if msg["type"] in ("manual", "file_drop") else "自动"
+            print(f"[kernel] debugger: 处理{prio_label}消息")
+            self.debugger.send_message(msg["content"])
+            self._last_debugger_wake = time.time()
+            return
+
+        prompt = generate_auto_prompt_debugger()
+        print(f"[kernel] debugger: 自动巡检...")
+        self.debugger.send_message(prompt)
+        self._last_debugger_wake = time.time()
+
+    def _executor_loop(self):
+        """executor 工作线程：连续取 issue 并修复。"""
+        print("[kernel] executor 工作线程启动")
+        while self._running:
+            if self.executor.is_stopped():
+                time.sleep(5)
                 continue
+            try:
+                self._run_executor_once()
+            except Exception as e:
+                print(f"[kernel] executor error: {e}")
+                self.executor.state.error = str(e)[:200]
+                time.sleep(10)
+            self.kernel_state.issue_stats = scan_issues()
+            self.kernel_state.save()
+            time.sleep(3)
 
-            msg = dequeue_message(name)
-
-            if msg:
-                is_manual = msg["type"] in ("manual", "file_drop")
-                if is_manual:
-                    agent.state.status = AgentStatus.MANUAL
-                agent.send_message(msg["content"])
-            elif agent.is_idle():
-                auto_prompt = gen_prompt()
-                agent.send_message(auto_prompt)
-
-        self.kernel_state.save()
+    def _debugger_loop(self):
+        """debugger 工作线程：按需唤醒。"""
+        print("[kernel] debugger 工作线程启动（按需唤醒模式）")
+        while self._running:
+            if self.debugger.is_stopped():
+                time.sleep(5)
+                continue
+            if self._should_wake_debugger():
+                try:
+                    self._run_debugger_once()
+                except Exception as e:
+                    print(f"[kernel] debugger error: {e}")
+                    self.debugger.state.error = str(e)[:200]
+                    time.sleep(10)
+                self.kernel_state.issue_stats = scan_issues()
+                self.kernel_state.save()
+            time.sleep(10)
 
     def start_agent(self, name: str):
         agent = self.debugger if name == "debugger" else self.executor
@@ -472,19 +597,42 @@ class Scheduler:
         print(f"[kernel] {name} 已停止")
 
     def run(self):
-        """主循环。"""
-        print("[kernel] 调度内核启动")
-        self.start_agent("debugger")
+        """主循环：启动 executor 和 debugger 线程。"""
+        print("[kernel] ═══════════════════════════════════════")
+        print("[kernel] Auto-Evolve 调度内核启动")
+        print(f"[kernel] Issue pool: {count_open_issues()} open issues")
+        print(f"[kernel] Debugger 唤醒阈值: open < {self.DEBUGGER_MIN_ISSUES}")
+        print(f"[kernel] Debugger 定期唤醒: 每 {self.DEBUGGER_WAKE_INTERVAL//60} 分钟")
+        print("[kernel] ═══════════════════════════════════════")
+
         self.start_agent("executor")
+        self.start_agent("debugger")
+
+        self._executor_thread = threading.Thread(
+            target=self._executor_loop, name="executor-loop", daemon=True)
+        self._debugger_thread = threading.Thread(
+            target=self._debugger_loop, name="debugger-loop", daemon=True)
+
+        self._executor_thread.start()
+        self._debugger_thread.start()
 
         while self._running:
-            try:
-                self.tick()
-            except Exception as e:
-                print(f"[kernel] tick error: {e}")
+            self.kernel_state.last_tick = datetime.now().isoformat()
+            self.kernel_state.issue_stats = scan_issues()
+            self.kernel_state.save()
+
+            stats = self.kernel_state.issue_stats
+            print(
+                f"[kernel] tick | "
+                f"executor={self.executor.state.status.value} "
+                f"debugger={self.debugger.state.status.value} | "
+                f"open={stats['open']} progress={stats['in_progress']} "
+                f"resolved={stats['resolved']} verified={stats['verified']}"
+            )
             time.sleep(self._tick_interval)
 
     def shutdown(self):
+        print("[kernel] 关闭中...")
         self._running = False
         self.stop_agent("debugger")
         self.stop_agent("executor")

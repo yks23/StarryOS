@@ -1,0 +1,25 @@
+{
+  "id": "issue-021",
+  "title": "capget reports all caps max; capset is no-op",
+  "status": "open",
+  "created_at": "2026-04-12T12:00:00Z",
+  "severity": "medium",
+  "description": "capget 写 u32::MAX；capset 校验 header 后直接 Ok(0)，不更新能力集，安全策略形同虚设。",
+  "category": "syscall-stub",
+  "affected_syscalls": ["capget", "capset"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/ctl.rs:27-47"],
+    "related_files": [],
+    "key_insight": "validate_capheader 后写死全 CAP"
+  },
+  "test": {
+    "source_file": "auto-evolve/tests/test_cap_stub.c",
+    "build_command": "riscv64-linux-musl-gcc -static -o test_cap_stub test_cap_stub.c",
+    "run_method": "运行 /bin/test_cap_stub；若 capset EPERM 则测试 PASS 跳过",
+    "expected_output_contains": "SUMMARY",
+    "pass_criteria": "capset 清零后 capget 全 0",
+    "last_result": "待运行"
+  },
+  "suggested_fix": "在进程结构存储 capability 集合并实现真实 capset。",
+  "references": ["man 2 capget"]
+}
