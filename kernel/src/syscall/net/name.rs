@@ -14,8 +14,13 @@ pub fn sys_getsockname(
     addrlen: UserPtr<socklen_t>,
 ) -> AxResult<isize> {
     let socket = Socket::from_fd(fd)?;
+    // Linux `getsockname(2)`: `addr == NULL` → success without copying; no `*addrlen` update.
+    if addr.is_null() {
+        socket.local_addr()?;
+        return Ok(0);
+    }
     // Resolve `addrlen` before `local_addr` so NULL/unwritable `addrlen` fails like Linux
-    // (move_addr_to_user) before any address lookup with potential side effects.
+    // (`move_addr_to_user`) before any address lookup with potential side effects.
     let alen = addrlen.get_as_mut()?;
     let local_addr = socket.local_addr()?;
     debug!("sys_getsockname <= fd: {fd}, addr: {local_addr:?}");
@@ -30,6 +35,10 @@ pub fn sys_getpeername(
     addrlen: UserPtr<socklen_t>,
 ) -> AxResult<isize> {
     let socket = Socket::from_fd(fd)?;
+    if addr.is_null() {
+        socket.peer_addr()?;
+        return Ok(0);
+    }
     let alen = addrlen.get_as_mut()?;
     let peer_addr = socket.peer_addr()?;
     debug!("sys_getpeername <= fd: {fd}, addr: {peer_addr:?}");
