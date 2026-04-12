@@ -1,0 +1,27 @@
+{
+  "id": "issue-402",
+  "title": "`statfs(2)`：空路径 `path==\"\"` 未在 `resolve` 前拒绝为 `EINVAL`",
+  "status": "resolved",
+  "created_at": "2026-04-13T01:05:00Z",
+  "severity": "low",
+  "description": "`kernel/src/syscall/fs/stat.rs` **`sys_statfs`**（约 212–229 行）：在校验 **`buf`** **非** **NULL**（**issue-281**）后 **`vm_load_string(path)?`**，继而 **`FS_CONTEXT.resolve(path)`**，**无** **`path.is_empty()`** **`→`** **`InvalidInput`** 早退。\n\nLinux **`statfs(2)`** 对 **空路径名** 通常 **`EINVAL`**（与同文件 **`fstatat`** **等** **路径** **语义** **及** **`ctl.rs`** **issue-391–400** **空** **组件** **主题** **一致**；**`fstatfs`** **经** **`fd`** **无** **此** **路径** **问题**。\n\n**`issue-401`** 聚焦 **`*at`+`AT_EMPTY_PATH`**；**`statfs`** **为** **非** **`AT_EMPTY_PATH`** **API**，**单列** **本** **issue**。\n\n建议：**`vm_load_string`** **之后**、**`resolve`** **之前** **`path.is_empty()`** **`→`** **`InvalidInput`**，注释引用 issue-402 及 **issue-393**/**issue-281**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["statfs"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/stat.rs:212-229"],
+    "related_files": [],
+    "key_insight": "`vm_load_string` 后、`FS_CONTEXT.resolve` 前 `path.is_empty()` → `InvalidInput`；非 *at API，与 issue-401（AT_EMPTY_PATH）正交"
+  },
+  "fix_summary": "`sys_statfs`：在 `vm_load_string(path)` 之后、`debug!` 与 `resolve` 之前对空路径返回 `InvalidInput`，保留 issue-281 先校验 `buf` 的顺序。",
+  "files_changed": ["kernel/src/syscall/fs/stat.rs"],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：`statfs(\"\", &buf)` 对照 Linux `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "空路径返回 EINVAL（`InvalidInput`）。",
+    "last_result": "通过：`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`（exit 0）"
+  },
+  "suggested_fix": "在 `sys_statfs` 中于 `debug!` 与 `resolve` 前增加与 `sys_mkdirat`（issue-393）相同的 `path.is_empty()` 检查。",
+  "references": ["man 2 statfs", "kernel/src/syscall/fs/stat.rs", "issue-401", "issue-281", "issue-393"]
+}

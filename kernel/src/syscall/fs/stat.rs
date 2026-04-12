@@ -229,6 +229,11 @@ pub fn sys_statfs(path: *const c_char, buf: *mut statfs) -> AxResult<isize> {
         return Err(AxError::BadAddress);
     }
     let path = vm_load_string(path)?;
+    // Linux rejects empty pathname with EINVAL before path resolution (issue-402; issue-393 theme;
+    // user `buf` validated first, issue-281).
+    if path.is_empty() {
+        return Err(AxError::InvalidInput);
+    }
     debug!("sys_statfs <= path: {path:?}");
 
     buf.vm_write(statfs(
