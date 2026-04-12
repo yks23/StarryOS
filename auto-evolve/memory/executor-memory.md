@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-05-14：issue-335 resolved（**`brk`**：**4K 页对齐** **先于** **`addr > heap_limit`**（**`EINVAL`** **先于** **`ENOMEM`**）；**`brk.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-05-13：issue-334 resolved（**`ppoll`**：**`fds`/`nfds`** **切片** **先于** **`check_sigset_size`**；**`poll.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-05-12：issue-333 resolved（**`select`/`pselect6`**：**`nfds`** **上界** **先于** **`timeout`** **用户** **读**；**`select.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-05-11：issue-332 resolved（**`clock_nanosleep`**：**`clock_id`** **解析** **先于** **`read_timespec_user(req)`**，**`EINVAL`** **先于** **坏** **`req`** **的** **`EFAULT`**；**`schedule.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -358,6 +359,7 @@
 | issue-271 | mlock/mlock2 addr 须页对齐 EINVAL | resolved | 2026-04-12 |
 | issue-272 | lseek SEEK_SET 负 offset EINVAL | resolved | 2026-04-12 |
 | issue-273 | prlimit64 跨 pid 权限 EPERM | resolved | 2026-04-12 |
+| issue-335 | brk 页对齐先于 heap_limit（EINVAL 先于 ENOMEM） | resolved | 2026-05-14 |
 | issue-334 | ppoll fds 切片先于 check_sigset_size | resolved | 2026-05-13 |
 | issue-333 | select/pselect6 nfds 先于 timeout 读 | resolved | 2026-05-12 |
 | issue-332 | clock_nanosleep clock_id 先于 read_timespec(req) | resolved | 2026-05-11 |
@@ -586,7 +588,7 @@
 - **`mmap(2)` `flags`**：先 **`flags & !ALLOWED_MAP_FLAGS`**（**`MAP_TYPE|MAP_FIXED|MAP_ANONYMOUS|…|MAP_DROPPABLE|(MAP_HUGE_MASK<<MAP_HUGE_SHIFT)`** 等 uapi 位），非零 → **`InvalidInput`**；**`MmapFlags::from_bits(flags)`**，**`None`** 时 **`MAP_SHARED_VALIDATE` 类型 → `OperationNotSupported`**，否则 **`InvalidInput`**；勿在未知/非法组合上 **`from_bits_truncate`**。合法 **`MAP_HUGE_*`** 等须在 **`MmapFlags`** 中声明以便 **`from_bits`** 成功。
 - **`mmap(2)` `MAP_ANONYMOUS`/`fd`**：与 Linux 2.6.12+ 一致，**`MAP_ANONYMOUS`** 时 **`fd` 被忽略**（匿名路径不 **`File::from_fd`**），**`offset` 须为 0**；无 **`MAP_ANONYMOUS`** 时 **`fd <= 0`** → **`InvalidInput`**（issue-264）。
 - **`mprotect(2)`**：**`length == 0`** 在 **`prot` 可解析**、**无** **`PROT_GROWSDOWN`/`GROWSUP`**、**`addr` 页对齐**后 **`Ok(0)`** **no-op**（Linux **`do_mprotect_pkey`**，issue-280）；**非零** **`length`** 仍 **`align_up_4k`** 后 **`protect`**。**`addr`** 非页对齐 **`EINVAL`**（issue-270）。**`munmap(2)`**：**`length == 0`** → **`InvalidInput`**（**EINVAL**）（issue-234）；**`addr`** 须 **4K 页对齐**，否则 **`EINVAL`**（issue-268）。
-- **`brk(2)`**：非零 **`addr`** 须 **4K 页对齐**（**`VirtAddr::is_aligned(PAGE_SIZE_4K)`**），否则 **`InvalidInput`（EINVAL）**；成功路径 **`set_heap_top`/`return`** 均为对齐地址（issue-253；**`USER_HEAP_BASE`/`heap_limit`** 等仍见 issue-089）。
+- **`brk(2)`**：非零 **`addr`** 须 **4K 页对齐**（**`VirtAddr::is_aligned(PAGE_SIZE_4K)`**），否则 **`InvalidInput`（EINVAL）**；**页对齐** **先于** **`addr > USER_HEAP_BASE+USER_HEAP_SIZE_MAX`**（**`NoMemory`/ENOMEM**），与 Linux **`do_brk`** 常见顺序一致（**issue-335**；**issue-253** 对齐规则；**`USER_HEAP_BASE`/`heap_limit`** 等仍见 issue-089）。成功路径 **`set_heap_top`/`return`** 均为对齐地址。
 - **`openat(2)`/`open(2)`**（**`fs/fd_ops.rs`**）：**`validate_open_flags`** **先于** **`vm_load_string(path)`**，**`EINVAL`** **先于** **不可读** **`pathname`** **的** **`BadAddress`**（**issue-323**；与 **issue-318**/**issue-305** **同类**）；**`validate_open_flags`** 先于 **`flags_to_options`**；若 **`O_PATH`**，**`flags`** 须为 Linux **`O_PATH_FLAGS`**（**`O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC|O_PATH`**）子集，否则 **`InvalidInput`（EINVAL）**（**`fs/open.c` `build_open_flags`**，issue-259；含 **`O_PATH|O_CREAT`** 等）。
 - **`close_range(2)`**（**`fs/fd_ops.rs`**）：**`CloseRangeFlags::from_bits(flags)`** **先于** **`first<0` 或 `last<first`** **校验**，**`EINVAL`** **（掩码外 flags 位）** **先于** **区间** **`EINVAL`**（**issue-324**；与 **issue-323**/**issue-317** **同类**）。**`CLOSE_RANGE_UNSHARE`** 快照与 **issue-178**。
 - **`open`/`dup2`（legacy）**：**`mod.rs`** **`fd ops`** 段 **`Sysno::open`**/**`dup2`** 仅 **`#[cfg(target_arch = "x86_64")]`**；**riscv64**/**aarch64** 等 **`libc`** **`open(2)`** 经 **`openat`（`AT_FDCWD`）** → **`sys_openat`**，**`dup2(2)`** 经 **`dup3`（第三参 `flags=0`）** → **`sys_dup3`**；**`mod.rs`** **概括注释** **issue-301**（与 **issue-300** **`file ops`** **同类**）。**`Sysno::dup`** **无** **`cfg`**（**`dup`/`dup3`** **全** **目标** **可用**）。

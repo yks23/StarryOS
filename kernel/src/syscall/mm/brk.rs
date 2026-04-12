@@ -24,12 +24,14 @@ pub fn sys_brk(addr: usize) -> AxResult<isize> {
     if addr < USER_HEAP_BASE {
         return Err(AxError::InvalidInput);
     }
-    if addr > heap_limit {
-        return Err(AxError::NoMemory);
-    }
-    // Linux `brk(2)`: program break must be page-aligned on common ports; unaligned `addr` → EINVAL.
+    // Linux `mm/mmap.c` `do_brk`: unaligned program break → EINVAL before rlimit/data-segment
+    // failure → ENOMEM. Starry maps `heap_limit` to ENOMEM; check alignment first (issue-335;
+    // issue-253 still applies).
     if !VirtAddr::from(addr).is_aligned(PAGE_SIZE_4K) {
         return Err(AxError::InvalidInput);
+    }
+    if addr > heap_limit {
+        return Err(AxError::NoMemory);
     }
 
     let new_top_aligned = align_up_4k(addr);

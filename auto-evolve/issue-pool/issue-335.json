@@ -1,0 +1,32 @@
+{
+  "id": "issue-335",
+  "title": "`brk(2)`：`sys_brk` 在页对齐校验前先 `addr > heap_limit` → `ENOMEM`（`NoMemory`），当 `addr` 同时超出 Starry 堆上限且未页对齐时，与 Linux `do_brk`/`sys_brk` 常见「未对齐 program break → `EINVAL`」相对「超出数据段/rlimit → `ENOMEM`」的 `EINVAL`/`ENOMEM` 优先级可能不完全一致",
+  "status": "resolved",
+  "created_at": "2026-04-14T01:05:00Z",
+  "resolved_at": "2026-05-14T00:00:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/mm/brk.rs`** **`sys_brk`** **（** **约** **18–33** **行** **）** **顺序** **：** **`addr < USER_HEAP_BASE`** **→** **`InvalidInput`** **→** **`addr > heap_limit`** **→** **`NoMemory`** **→** **未** **页** **对齐** **→** **`InvalidInput`** **。** **当** **`addr`** **既** **大于** **`heap_limit`** **又** **非** **`PAGE_SIZE_4K`** **对齐** **时** **，** **本** **路径** **固定** **先** **`ENOMEM`** **；** **Linux** **常** **在** **扩展** **失败** **路径** **上** **先** **拒绝** **未** **对齐** **的** **`brk`** **请求** **为** **`EINVAL`** **（** **与** **具体** **arch** **`mm/mmap.c`** **`do_brk`** **顺序** **有关** **）** **。** **与** **issue-253** **`brk`** **功能** **验证** **正交** **。**\n\n**建议** **：** **对照** **Linux** **`mm/mmap.c`** **`do_brk`** **，** **将** **页** **对齐** **校验** **提前** **到** **`addr > heap_limit`** **之前** **（** **或** **与** **`RLIMIT_DATA`** **语义** **一致** **的** **失败** **顺序** **）** **，** **或** **注释** **说明** **边界** **与** **上游** **差异** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["brk"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/mm/brk.rs:12-33"],
+    "related_files": [],
+    "key_insight": "brk ENOMEM heap limit before unaligned EINVAL order"
+  },
+  "fix_summary": "`sys_brk`：在 `addr > heap_limit`（`NoMemory`/ENOMEM）之前校验 4K 页对齐（`InvalidInput`/EINVAL），与 Linux `do_brk` 先拒绝未对齐 program break 再处理上限/扩展失败的常见顺序一致；注释说明 issue-335 与 issue-253。",
+  "files_changed": [
+    "kernel/src/syscall/mm/brk.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-335.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：超大且未对齐 `addr` 对照 Linux `brk` 返回 `ENOMEM`/`EINVAL` 顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游 `brk` 错误优先级一致，或注释说明差异。",
+    "last_result": "2026-05-14：cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有 dead_code/clippy 警告）"
+  },
+  "suggested_fix": "先拒绝未页对齐 `addr` → `EINVAL`，再判断超出 `heap_limit`/`RLIMIT` → `ENOMEM`；与 Linux `do_brk` 对齐。",
+  "references": ["man 2 brk", "kernel/src/syscall/mm/brk.rs", "issue-253"]
+}
