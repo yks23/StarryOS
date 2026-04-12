@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-139 resolved（**`fchownat`**/**`fchmodat`**：**`VALID_FCHOWNAT_FLAGS`**/**`VALID_FCHMODAT_FLAGS`** 先于 **`vm_load_string(path)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-138 resolved（**`unlinkat`**/**`renameat2`**：**`flags`** / **`RENAME_*`** 校验先于 **`vm_load_string`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-137 resolved（**`linkat`**：**`VALID_LINKAT_FLAGS`** + **`resolve_flags`** 先于 **`vm_load_string`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-136 resolved（**`fcntl`** 记录锁 **`F_SETLK`/`F_GETLK`** 与 **`F_OFD_*`**：**`get_file_like(fd)`** 先于用户 **`flock64`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -119,6 +120,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-139 | fchownat/fchmodat flags 先于 vm_load_string | resolved | 2026-04-12 |
 | issue-138 | unlinkat/renameat2 flags 先于路径 | resolved | 2026-04-12 |
 | issue-137 | linkat flags 先于 vm_load_string | resolved | 2026-04-12 |
 | issue-136 | fcntl 记录锁 get_file_like 先于 flock 用户访问 | resolved | 2026-04-12 |
@@ -265,9 +267,9 @@
 - **`poll(2)`/`ppoll(2)`**：**`pollfd.fd < 0`** 的条目被忽略，**`revents`** 须置 **0**（勿保留陈旧位）。
 - **`linkat(2)`**：**`flags`** 仅允许 **`AT_EMPTY_PATH | AT_SYMLINK_FOLLOW`**（与 Linux **`VALID_LINKAT_FLAGS`**），否则 **`EINVAL`**；上述与 **`resolve_flags`**（**`FOLLOW` ↔ `NOFOLLOW`** 映射）须在 **`vm_load_string(old_path/new_path)`** 之前完成（issue-137，非法 flags 先 **EINVAL**）。**`resolve_at`** 仍用 **`AT_SYMLINK_NOFOLLOW`** 表示「不 follow」。
 - **`unlinkat(2)`**：**`flags`** 仅 **`0`** 或 **`AT_REMOVEDIR`**，须在 **`vm_load_string(path)`** 之前校验，否则 **`EINVAL`**（issue-138）；勿将未知位当作「删文件」分支。
-- **`fchmodat(2)`** / **`fchmod`**： **`flags`** 须为 Linux **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW`** 的子集（**`sys_fchmod`** 用 **`AT_EMPTY_PATH`**），否则 **`EINVAL`**；勿未校验即传入 **`resolve_at`**。
+- **`fchmodat(2)`** / **`fchmod`**： **`flags`** 须为 Linux **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW`** 的子集（**`sys_fchmod`** 用 **`AT_EMPTY_PATH`**），否则 **`EINVAL`**；掩码须在 **`vm_load_string(path)`** 之前完成（issue-139，非法 flags 先 **EINVAL** 于 **EFAULT**）；勿未校验即传入 **`resolve_at`**。
 - **`utimensat(2)`**：**`path==NULL`** 时逻辑上含 **`AT_EMPTY_PATH`**；**`flags`** 须为 **`AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH`** 的子集（与 Linux **`VALID_UTIMENSAT_FLAGS`**），在 **`update_times`/`resolve_at`** 前校验，非法位 **`EINVAL`**（含双 **`UTIME_OMIT`** 时亦应先拒绝非法 **`flags`**）。
-- **`fchownat(2)`** / **`fchown`** / **`lchown`**：**`flags`** 须为 **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW`** 的子集（**`VALID_FCHOWNAT_FLAGS`**），否则 **`EINVAL`**；**`sys_fchown`** 用 **`AT_EMPTY_PATH`**，**`lchown`** 用 **`AT_SYMLINK_NOFOLLOW`**。
+- **`fchownat(2)`** / **`fchown`** / **`lchown`**：**`flags`** 须为 **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW`** 的子集（**`VALID_FCHOWNAT_FLAGS`**），否则 **`EINVAL`**；掩码须在 **`vm_load_string(path)`** 之前完成（issue-139）。**`sys_fchown`** 用 **`AT_EMPTY_PATH`**，**`lchown`** 用 **`AT_SYMLINK_NOFOLLOW`**。
 - **`memfd_create(2)`/`memfd_secret(2)`**：**`flags`** 低位须为 **`MFD_CLOEXEC|ALLOW_SEALING|HUGETLB|EXEC|NOEXEC_SEAL`** 的子集；**`MFD_HUGE_MASK<<MFD_HUGE_SHIFT`** 域须为 **0** 或等于某一 **`linux_raw_sys::general::MFD_HUGE_*`**（勿仅用 **`(MFD_HUGE_MASK<<SHIFT)`** 整域放行，否则 **`0x80000000`** 等无效编码会误过）。**`name`** 经 **`UserConstPtr::get_as_str`** 读入，**`MemfdCreatedFile`** 的 **`FileLike::path`** 为 **`/memfd:{sanitized}`**（供 **`/proc/self/fd`** readlink）；**`tmpfs`** 上仍用唯一 **`/tmp/memfd-....`** 作真实 backing。
 - **`faccessat2(2)`**：**`flags`** 须为 **`AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH | AT_EACCESS`** 的子集（**`VALID_FACCESSAT_FLAGS`**），否则 **`EINVAL`**；**`mode`** 须为 **`F_OK|R_OK|W_OK|X_OK`** 子集（**`linux_raw_sys`** 上 **`F_OK==0`**，与 Linux **`~(F_OK|R_OK|W_OK|X_OK)`** 掩码一致），否则 **`EINVAL`**（issue-128）。上述 **`flags`/`mode`** 须在 **`vm_load_string(path)`** 与 **`resolve_at`** 之前完成（issue-129，非法参数先 **EINVAL** 于 **EFAULT**）；**`AT_EACCESS`** 与 **`resolve_at`** 语义可仍简化，但须先拒绝未知位。
 - **`fstatat(2)`/`newfstatat(2)`**（**`sys_fstatat`**）：**`flags`** 须为 **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT | AT_STATX_SYNC_TYPE`** 的子集（Linux **`VALID_NEWFSTATAT_FLAGS`**）；**`AT_STATX_FORCE_SYNC`** 与 **`AT_STATX_DONT_SYNC`** 不能同时置位；须在 **`vm_load_string(path)`** 之前校验（issue-131）。**`AT_NO_AUTOMOUNT`** 等可仍为 no-op，但未知位须 **`EINVAL`**。**`resolve_at`** 仍只消费 **`AT_EMPTY_PATH`**/**`AT_SYMLINK_NOFOLLOW`**。
@@ -344,6 +346,7 @@
 - issue-136：**`fcntl`** **`F_SETLK`/`F_GETLK`**（含 **`F_OFD_*`**）：无效 **`fd`** + 坏 **`flock64 *`**，首错 **`EBADF`**。
 - issue-137：**`linkat`** 非法 **`flags`** + 坏 path指针，首错 **`EINVAL`**（先于 **EFAULT**）。
 - issue-138：**`unlinkat`**/**`renameat2`** 非法 **`flags`** + 坏 path，首错 **`EINVAL`**（先于 **EFAULT**）。
+- issue-139：**`fchownat`**/**`fchmodat`** 非法 **`flags`** + 坏 **`path`**，首错 **`EINVAL`**（先于 **EFAULT**）；可扩展现有 **`/bin/test_fchownat_invalid_flags`**/**`test_fchmodat_invalid_flags`** 思路加坏指针组合。
 - issue-053：请跑 **`/bin/test_memfd_create_invalid_flags`**（**`memfd_create(..., 0x80000000)`** → **`EINVAL`**）。
 - issue-052：请跑 **`/bin/test_fchownat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`uid`/`gid`** 不变）。
 - issue-051：请跑 **`/bin/test_utimensat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`mtime`** 不变）。

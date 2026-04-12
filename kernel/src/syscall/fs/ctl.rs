@@ -360,12 +360,13 @@ pub fn sys_fchownat(
     gid: i32,
     flags: u32,
 ) -> AxResult<isize> {
-    let path = path.nullable().map(vm_load_string).transpose()?;
-    // Linux VALID_FCHOWNAT_FLAGS (see open.c): AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW.
+    // Linux fchownat: reject unknown flags before copy_from_user(pathname) (EINVAL before EFAULT).
     const VALID_FCHOWNAT_FLAGS: u32 = AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW;
     if flags & !VALID_FCHOWNAT_FLAGS != 0 {
         return Err(AxError::InvalidInput);
     }
+
+    let path = path.nullable().map(vm_load_string).transpose()?;
     let loc = resolve_at(dirfd, path.as_deref(), flags)?
         .into_file()
         .ok_or(AxError::BadFileDescriptor)?;
@@ -399,12 +400,13 @@ pub fn sys_fchmod(fd: i32, mode: u32) -> AxResult<isize> {
 }
 
 pub fn sys_fchmodat(dirfd: i32, path: *const c_char, mode: u32, flags: u32) -> AxResult<isize> {
-    let path = path.nullable().map(vm_load_string).transpose()?;
-    // Linux VALID_FCHMODAT_FLAGS (see open.c): AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW.
+    // Linux fchmodat: reject unknown flags before copy_from_user(pathname) (EINVAL before EFAULT).
     const VALID_FCHMODAT_FLAGS: u32 = AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW;
     if flags & !VALID_FCHMODAT_FLAGS != 0 {
         return Err(AxError::InvalidInput);
     }
+
+    let path = path.nullable().map(vm_load_string).transpose()?;
     resolve_at(dirfd, path.as_deref(), flags)?
         .into_file()
         .ok_or(AxError::BadFileDescriptor)?
