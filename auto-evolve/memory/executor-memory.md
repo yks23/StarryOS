@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-294 resolved（**`sendto`**：**`send_impl`** **`Socket::from_fd`** 先于 **`SENDMSG_FLAGS_MASK`**，与 **`sys_sendmsg`**/**`__sys_sendto`** **sockfd_lookup** 顺序一致；**`net/io.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-293 resolved（**`recvfrom`/`recvmsg`**：**`Socket::from_fd`** 先于 **`validate_recvmsg_flags`**，非法 **fd** 时 **EBADF** 先于 **flags** 的 **EINVAL/EOPNOTSUPP**；**`net/io.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-292 resolved（**`renameat`** **riscv64**：**`syscalls::Sysno`** **无** **`renameat`**（musl 仅 **`__NR_renameat2`**）；**`renameat(2)`** 由 **libc** 走 **`renameat2(..., 0)`** → **`sys_renameat2`**；**`mod.rs`** **`cfg(not(riscv64))`** 注释说明；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-291 resolved（**`poll(2)`** **riscv64**：Linux ABI **无** 独立 **`__NR_poll`**；**`syscalls::Sysno`** **亦无** **`poll`**；**`poll(2)`** 由 **libc** 走 **`__NR_ppoll`** → **`sys_ppoll`**；**`mod.rs`** 注释说明 **`Sysno::poll`** 仅 **x86_64**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -317,6 +318,7 @@
 | issue-271 | mlock/mlock2 addr 须页对齐 EINVAL | resolved | 2026-04-12 |
 | issue-272 | lseek SEEK_SET 负 offset EINVAL | resolved | 2026-04-12 |
 | issue-273 | prlimit64 跨 pid 权限 EPERM | resolved | 2026-04-12 |
+| issue-294 | sendto send_impl from_fd 先于 SENDMSG_FLAGS_MASK | resolved | 2026-04-13 |
 | issue-293 | recvfrom/recvmsg from_fd 先于 validate_recvmsg_flags | resolved | 2026-04-13 |
 | issue-292 | renameat riscv64：无 Sysno::renameat，libc 走 renameat2 | resolved | 2026-04-13 |
 | issue-291 | poll riscv64：ABI 无 poll 号，libc 走 ppoll | resolved | 2026-04-13 |
@@ -567,7 +569,7 @@
 - **`setsockopt(2)`**：**`optlen`** 须 **`>=`** 选项值 **`sizeof(T)`**（与 Linux / **`getsockopt`** 侧一致），只使用缓冲区前 **`sizeof(T)`** 字节；**`optlen < sizeof(T)`** → **`EINVAL`**。**`SO_RCVTIMEO`/`SO_SNDTIMEO`**（**`SOL_SOCKET`**）用户 **`timeval`** 须经 **`read_timeval_user`** 字段读，勿经 **`UserConstPtr::get_as_ref::<timeval>`** 整结构拷贝（issue-217）。
 - **`getsockopt(2)`**（**`net/opt.rs`**）：**`Socket::from_fd`** 须早于 **`optlen.get_as_mut`**，使无效 **`fd`** 先 **`EBADF`**，再触碰 **`optlen`/`optval`**（与 Linux **`sockfd_lookup`** 顺序及 **`setsockopt`** 对称）；日志仅用 **`UserPtr::address`** 避免提前用户读。**`SO_RCVTIMEO`/`SO_SNDTIMEO`**：**`GetSocketOption::ReceiveTimeout`/`SendTimeout`** + **`write_timeval_user`** 字段写 **`timeval`**，**`*optlen = sizeof(timeval)`**（issue-223，与 issue-217 **`setsockopt`** 对称）。
 - **`bind(2)`/`connect(2)`**（**`socket.rs`**）：**`Socket::from_fd`** 须早于 **`SocketAddrEx::read_from_user`**，无效 **`fd`** 先 **`BadFileDescriptor`**（**EBADF**），与 Linux **`sockfd_lookup`** 及 **`sys_accept4`** 顺序一致（issue-132）。
-- **`sendto(2)`**（**`net/io.rs`**）：**`send_impl`**：**`SENDMSG_FLAGS_MASK`** 后 **`Socket::from_fd`**，再 **`send_on_socket`**（**`msg_name`** **`read_from_user`** + **`send`**），对齐 **`__sys_sendto`**（issue-133）。**`send_on_socket`**：**`addr` 非空**且 **`addrlen==0`** → **`InvalidInput`（EINVAL）**（Linux **`move_addr_to_kernel`**；勿与 **`addr==NULL`** 混为 **`to: None`**，issue-257）。
+- **`sendto(2)`**（**`net/io.rs`**）：**`send_impl`**：**`Socket::from_fd`** → **`SENDMSG_FLAGS_MASK`** → **`send_on_socket`**（**`read_from_user`** + **`send`**），与 **`sys_sendmsg`** 及 **`__sys_sendto`** **`sockfd_lookup` 先于 flags** 一致（issue-133、issue-294）。**`send_on_socket`**：**`addr` 非空**且 **`addrlen==0`** → **`InvalidInput`（EINVAL）**（Linux **`move_addr_to_kernel`**；勿与 **`addr==NULL`** 混为 **`to: None`**，issue-257）。
 - **`sendmsg(2)`**：**`Socket::from_fd`** → **`SENDMSG_FLAGS_MASK`** → **`msghdr.get_as_ref`** → **`validate_msghdr_ptr_len_consistency`**（**`msg_control`/长度**、**`msg_name`/长度**；issue-276）/ cmsg / **`IoVectorBuf::new`** → **`send_on_socket`**（无二次 **`from_fd`**），对齐 **`__sys_sendmsg`** **`sockfd_lookup` 先于 `copy_msghdr_from_user`**（issue-134）。**`msg_name` 非空**且 **`msg_namelen==0`** 同 issue-257。
 - **`recvmsg(2)`**：**`Socket::from_fd`** → **`validate_recvmsg_flags`**（**`RECVMSG_FLAGS_MASK`** + **`RECVMSG_FLAGS_UNSUPPORTED`**）→ **`msghdr.get_as_mut`** → **`validate_msghdr_ptr_len_consistency`**（issue-276）/ **`IoVectorBuf::new`** → **`recv_on_socket`**，对齐 **`sockfd_lookup` 先于 flags 与 `copy_msghdr_from_user`**（issue-293；原 issue-135 曾写 flags 在前，已修正）。**`recvfrom`** 经 **`recv_impl`** 同序。**`recv_on_socket`**：用户 **`msg_name`/`addr` 非空**时用占位 **`RecvOptions::from`**；数据报 **`recv`** 会覆盖为发送方；**TCP/Unix stream/vsock** 不覆盖时，若仍为占位 **`0.0.0.0:0`** 则 **`peer_addr()`** 写回（对齐 Linux **`recvfrom(2)`** 与 **`getpeername`**，issue-255）。
 - **`bind`/`connect`/`sendto` 等 INET 地址**：**`SocketAddrV4`/`SocketAddrV6::read_from_user`** 要求 **`addrlen >= sizeof(sockaddr_in|sockaddr_in6)`**，只按固定布局读 **`sockaddr_in`/`sockaddr_in6`**；**`addrlen` 大于结构体**时与 Linux 一样忽略尾部字节。**vsock** **`sockaddr_vm`** 同理。

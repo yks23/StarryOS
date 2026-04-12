@@ -101,12 +101,12 @@ fn send_impl(
     addrlen: socklen_t,
     cmsg: Vec<CMsgData>,
 ) -> AxResult<isize> {
+    // Linux __sys_sendto: sockfd_lookup before flag validation and copy sockaddr (EBADF before
+    // EINVAL; issue-294). Matches `sys_sendmsg` order in this file.
+    let socket = Socket::from_fd(fd)?;
     if flags & !SENDMSG_FLAGS_MASK != 0 {
         return Err(AxError::InvalidInput);
     }
-
-    // Linux __sys_sendto / sendmsg: sockfd_lookup before copy sockaddr (EBADF before EFAULT).
-    let socket = Socket::from_fd(fd)?;
     send_on_socket(&socket, fd, src, flags, addr, addrlen, cmsg)
 }
 

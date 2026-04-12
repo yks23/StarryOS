@@ -1,0 +1,27 @@
+{
+  "id": "issue-294",
+  "title": "`sendto` 与 `sendmsg` 对 `flags` 与 `Socket::from_fd` 的先后不一致；与 Linux 及同文件 `sendmsg` 路径可能分叉",
+  "status": "resolved",
+  "created_at": "2026-04-13T09:00:00Z",
+  "severity": "low",
+  "fix_summary": "`send_impl`（`sendto`）改为先 `Socket::from_fd(fd)?`，再校验 `flags & !SENDMSG_FLAGS_MASK`，与 `sys_sendmsg` 及 Linux `sockfd_lookup` 先于 flags 的常见顺序一致；无效 fd + 非法 flags 时先 EBADF 再 EINVAL。",
+  "files_changed": ["kernel/src/syscall/net/io.rs", "auto-evolve/memory/executor-memory.md"],
+  "description": "**`kernel/src/syscall/net/io.rs`** **`send_impl`** **（** **约** **96–111** **行** **）** **在** **`sendto`** **路径** **上** **先** **`if flags & !SENDMSG_FLAGS_MASK != 0`** **→** **`InvalidInput`** **，** **再** **`Socket::from_fd(fd)?`** **。**\n\n**同文件** **`sys_sendmsg`** **（** **约** **124–129** **行** **）** **则** **先** **`Socket::from_fd(fd)?`** **，** **再** **校验** **`SENDMSG_FLAGS_MASK`** **，** **与** **注释** **「** **sockfd_lookup** **before** **copy_msghdr** **」** **及** **Linux** **`__sys_sendmsg`** **常见** **顺序** **一致** **。**\n\n**后果** **：** **当** **`fd`** **非法** **且** **`flags`** **含** **未知** **位** **时** **，`sendto`** **可能** **先** **`EINVAL`** **(flags)** **，`sendmsg`** **先** **`EBADF`** **(fd)** **，** **两** **入口** **行为** **不** **一致** **；** **`sendto`** **与** **Linux** **`sockfd_lookup`** **优先** **于** **flags** **校验** **的** **顺序** **也可能** **与** **`sendmsg`** **/** **上游** **不同** **（** **与** **issue-293** **`recv`** **类** **错误** **顺序** **讨论** **同类** **）** **。**\n\n**建议**：令 **`send_impl`** **与** **`sys_sendmsg`** **对齐** **：** **先** **`Socket::from_fd(fd)?`** **，** **再** **拒绝** **未知** **`flags`** **位** **；** **或** **显式** **文档化** **`sendto`** **与** **`sendmsg`** **在** **`EBADF`/`EINVAL`** **先后** **上的** **差异** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["sendto", "sendmsg"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/io.rs:96-171"],
+    "related_files": [],
+    "key_insight": "send_impl 先 flags 后 from_fd；sendmsg 先 from_fd 后 flags"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对比同文件 sendto/sendmsg 分支与 Linux __sys_sendto/sendmsg。",
+    "expected_output_contains": "",
+    "pass_criteria": "sendto 与 sendmsg 在非法 fd+flags 组合下 errno 顺序一致且与目标 Linux 一致，或显式文档化。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "将 `send_impl` 调整为先 `from_fd` 再校验 `SENDMSG_FLAGS_MASK`，与 `sys_sendmsg` 一致。",
+  "references": ["man 2 sendto", "man 2 sendmsg", "kernel/src/syscall/net/io.rs", "issue-293"]
+}
