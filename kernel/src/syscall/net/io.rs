@@ -130,7 +130,7 @@ pub fn sys_sendmsg(fd: i32, msg: UserConstPtr<msghdr>, flags: u32) -> AxResult<i
             if hdr.cmsg_len < size_of::<cmsghdr>() {
                 return Err(AxError::InvalidInput);
             }
-            let step = cmsg_align(hdr.cmsg_len);
+            let step = cmsg_align(hdr.cmsg_len)?;
             let Some(next) = ptr.checked_add(step) else {
                 return Err(AxError::InvalidInput);
             };

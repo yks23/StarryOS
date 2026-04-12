@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-188 resolved（**`cmsg_align`**：**`checked_add(align - 1)`** 溢出 → **`InvalidInput`**；**`CMsgBuilder::push` `remaining`** 改为 **`capacity - written`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-189 resolved（**`recvmsg` `msg_controllen`**：**`CMsgBuilder`** 内 **`written`** 累计，**`commit()`** 仅在 **`recv` 成功**且 cmsg 处理完后写回用户；失败路径不再提前 **` *len = 0`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-185 resolved（**`setsockopt`/`getsockopt` `IP_TTL`**：**`conv::IpTtl`** 要求 **`optlen >= sizeof(i32)`**，读 **`i32`** 后 **`u8::try_from`**；**`IP_TTL`** 显式分支（不经 **`call_dispatch` `$conv:ty`**）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-184 resolved（**`getrusage`**：**`From<Rusage> for rusage`** 全字段字面量，去掉 **`mem::zeroed`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）

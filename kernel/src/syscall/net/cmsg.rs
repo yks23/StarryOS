@@ -13,10 +13,14 @@ use crate::{
 };
 
 /// Linux `CMSG_ALIGN(len)`: round up so the next `cmsghdr` is aligned to `sizeof(size_t)`.
+///
+/// Returns [`AxError::InvalidInput`] when `len + align - 1` would overflow `usize` (no wrapping).
 #[inline]
-pub fn cmsg_align(len: usize) -> usize {
+pub fn cmsg_align(len: usize) -> AxResult<usize> {
     let align = size_of::<usize>();
-    (len + align - 1) & !(align - 1)
+    len.checked_add(align - 1)
+        .map(|x| x & !(align - 1))
+        .ok_or(AxError::InvalidInput)
 }
 
 pub enum CMsg {
@@ -94,7 +98,7 @@ impl<'a> CMsgBuilder<'a> {
         ty: u32,
         body: impl FnOnce(&mut [u8]) -> AxResult<usize>,
     ) -> AxResult<bool> {
-        let remaining = self.capacity.saturating_sub(*self.len);
+        let remaining = self.capacity.saturating_sub(self.written);
         if remaining < size_of::<cmsghdr>() {
             return Ok(false);
         }
@@ -110,7 +114,7 @@ impl<'a> CMsgBuilder<'a> {
         let body_len = body(data)?;
 
         let cmsg_len = size_of::<cmsghdr>() + body_len;
-        let padded = cmsg_align(cmsg_len);
+        let padded = cmsg_align(cmsg_len)?;
         if padded > remaining {
             return Err(AxError::InvalidInput);
         }
