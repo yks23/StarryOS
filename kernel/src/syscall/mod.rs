@@ -132,6 +132,11 @@ pub fn handle_syscall(uctx: &mut UserContext) {
         ),
 
         // fd ops
+        // Legacy `open(2)` / `dup2(2)` syscall numbers exist only on ABIs where `syscalls::Sysno`
+        // defines `Sysno::open` / `Sysno::dup2` (x86/x86_64). Linux riscv64/aarch64 often omit
+        // separate `__NR_open` / `__NR_dup2`; libc usually routes `open(2)` via `openat` with
+        // `AT_FDCWD` and `dup2(2)` via `dup3(old, new, 0)` → `sys_openat` / `sys_dup3` below
+        // (issue-301; symmetric to `file ops` legacy `*at`, issue-300).
         #[cfg(target_arch = "x86_64")]
         Sysno::open => sys_open(uctx.arg0() as _, uctx.arg1() as _, uctx.arg2() as _),
         Sysno::openat => sys_openat(

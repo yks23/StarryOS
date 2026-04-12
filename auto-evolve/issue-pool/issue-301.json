@@ -1,0 +1,27 @@
+{
+  "id": "issue-301",
+  "title": "`fd ops` 段 `open(2)`/`dup2(2)` 仅 `x86_64`；无与 issue-300 `file ops` 同级的 `openat`/`dup3` 路由概括注释",
+  "status": "resolved",
+  "created_at": "2026-04-13T20:05:00Z",
+  "severity": "low",
+  "fix_summary": "在 `mod.rs` 中 `// fd ops` 后、`Sysno::open` 前增加与 issue-300 同风格的概括注释：riscv 等无独立 legacy `open`/`dup2` 号，libc `open(2)` 经 `openat(AT_FDCWD)` → `sys_openat`，`dup2(2)` 经 `dup3(..., 0)` → `sys_dup3`。`executor-memory` 在 `openat`/`open` 条后增加 legacy `open`/`dup2` 与 `dup`/`dup3` 说明（issue-301）。",
+  "files_changed": ["kernel/src/syscall/mod.rs", "auto-evolve/memory/executor-memory.md"],
+  "description": "**`kernel/src/syscall/mod.rs`** **`// fd ops`** **段** **（** **约** **128** **行** **起** **）** **`Sysno::open`** **与** **`Sysno::dup2`** **置于** **`#[cfg(target_arch = \"x86_64\")]`** **；** **`openat`** **、** **`dup3`** **等** **无** **此** **限制** **。** **与** **issue-300** **`file ops`** **legacy** **/** **`*at`** **模式** **同类** **：** **riscv64**/**aarch64** **`syscalls::Sysno`** **常** **无** **独立** **`open`/`dup2`** **legacy** **号** **；** **glibc/musl** **`open(2)`** **多** **实现** **为** **`openat(AT_FDCWD, …)`** **，** **`dup2(2)`** **为** **`dup3(old, new, 0)`** **或** **等价** **路由** **，** **落到** **已** **接线** **的** **`sys_openat`** **/** **`sys_dup3`** **。**\n\n**`file ops`** **段** **issue-300** **仍** **open** **（** **缺** **概括** **旁注** **）** **；** **`fd ops`** **段** **仅** **有** **`// fd ops`** **标题** **，** **无** **同级** **说明** **，** **读者** **易** **误判** **riscv** **遗漏** **`open`/`dup2`** **。**\n\n**建议**：在 **`Sysno::open`** **`#[cfg]`** **前** **或** **`// fd ops`** **后** **增加** **一段** **与** **issue-297**/**issue-300** **风格** **一致** **的** **概括** **注释** **（** **或** **在** **`executor-memory`** **中** **与** **`openat`/`dup3`** **条** **并列** **扩展** **）** **，** **列出** **`open`/`dup2`** **与** **`openat`/`dup3`** **的** **libc** **路由** **关系** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["open", "openat", "dup", "dup2", "dup3"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/mod.rs:128-146"],
+    "related_files": ["auto-evolve/memory/executor-memory.md"],
+    "key_insight": "open/dup2 仅 x86_64；fd ops 段无 file ops 式 issue-300 概括旁注"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 musl `open`/`dup2` 与 `openat`/`dup3`。",
+    "expected_output_contains": "",
+    "pass_criteria": "`mod.rs` 或 executor 对 legacy `open`/`dup2` 与 `openat`/`dup3` 的关系有明确概括说明，或经评审认为无需补充。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `// fd ops` 段首部增加与 `fs ctl` issue-297 / `file ops` issue-300 同风格的 legacy→*at/dup3 路由注释。",
+  "references": ["man 2 open", "man 2 openat", "kernel/src/syscall/mod.rs", "issue-300"]
+}
