@@ -8,7 +8,7 @@ use axhal::{
 use axsync::Mutex;
 use axtask::current;
 use linux_raw_sys::{ctypes::c_ushort, general::*};
-use memory_addr::{PAGE_SIZE_4K, VirtAddr, VirtAddrRange};
+use memory_addr::{MemoryAddr, PAGE_SIZE_4K, VirtAddr, VirtAddrRange};
 use starry_process::Pid;
 
 use super::{IPC_PRIVATE, IPC_RMID, IPC_SET, IPC_STAT, IpcPerm, next_ipc_id};
@@ -579,7 +579,14 @@ pub fn sys_shmctl(shmid: i32, cmd: u32, buf: UserPtr<ShmidDs>) -> AxResult<isize
 // Note: all the below delete functions only delete the mapping between the
 // shm_id and the shm_inner,   but the shm_inner is not deleted or modifyed!
 pub fn sys_shmdt(shmaddr: usize) -> AxResult<isize> {
+    // Linux `shmdt(2)`: `shmaddr` must be the attach address from `shmat`; NULL/0 and unaligned → EINVAL.
+    if shmaddr == 0 {
+        return Err(AxError::InvalidInput);
+    }
     let shmaddr = VirtAddr::from(shmaddr);
+    if !shmaddr.is_aligned(PAGE_SIZE_4K) {
+        return Err(AxError::InvalidInput);
+    }
 
     let curr = current();
     let proc_data = &curr.as_thread().proc_data;

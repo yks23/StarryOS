@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-245 resolved（**`shmdt`**：**`shmaddr==0`**/**非页对齐** → **`InvalidInput`（EINVAL）**，先于 **`get_shmid_by_vaddr`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-244 resolved（**`sigaltstack`**：**`ss==NULL` → `set_stack` 默认 `SS_DISABLE`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-243 resolved（**`execve`**：**`argv==NULL` → EFAULT**；**`envp==NULL`** 继承 **`ProcessData::environment`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-242 resolved（**`sched_getaffinity`**：成功 **`Ok(0)`**，与 Linux/**`sched_setaffinity`** 一致；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -239,6 +240,7 @@
 | issue-242 | sched_getaffinity 成功返回 0 | resolved | 2026-04-12 |
 | issue-243 | execve argv NULL / envp 继承环境 | resolved | 2026-04-12 |
 | issue-244 | sigaltstack ss NULL 禁用备用栈 | resolved | 2026-04-12 |
+| issue-245 | shmdt shmaddr==0/非页对齐 → EINVAL | resolved | 2026-04-12 |
 | issue-219 | waitpid __WNOTHREAD → Unsupported | resolved | 2026-04-12 |
 | issue-225 | fallocate FALLOC_FL 掩码 + 非零 EOPNOTSUPP | resolved | 2026-04-12 |
 | issue-227 | shmat 无效 shmid 不 unwrap（EINVAL） | resolved | 2026-04-12 |
@@ -421,6 +423,7 @@
 - **SysV `msgctl(2)`**：**`IPC_INFO`/`MSG_INFO`/`MSG_STAT`/`IPC_STAT`/`IPC_SET`** 在 **`vm_write`**/**`read_msqid_ds_ipc_set_user`** 前 **`buf==0` → `BadAddress`**（**`IPC_STAT`/`MSG_STAT`** 在 **`EACCES`** 之后、`vm_write` 之前，issue-233）；**`IPC_RMID`** 忽略 **`buf`**。
 - **SysV `shmctl(IPC_STAT)`**：**`buf`** 须为可写 **`shmid_ds`**（**`UserPtr::get_as_mut`**），**`NULL`** → **`BadAddress`**（**EFAULT**），勿 **`nullable!`** 跳过拷贝仍 **`Ok(0)`** 并更新 **`shm_ctime`**（issue-152）；与 **`IPC_SET`** 对 **`buf`** 一致。
 - **SysV `shmat`**：未知或已回收 **`shmid`** → **`get_inner_by_shmid` `None`** → **`InvalidInput`**（**EINVAL**），勿 **`unwrap`**（issue-227；与 **`sys_shmdt`/`sys_shmctl`** 一致）。
+- **SysV `shmdt(2)`**：**`shmaddr`** 须为 **`shmat`** 返回的映射起始地址；**`NULL`/`0`** 与**非 4K 页对齐** → **`InvalidInput`**（**EINVAL**），须在 **`get_shmid_by_vaddr`**/**`unmap`** 之前校验（issue-245；与 **`sys_mincore`** 页对齐风格一致）。
 - **`getrusage(RUSAGE_CHILDREN)`**：须为 **`wait`** 回收子进程的 **CPU** 累计（**`ProcessData::child_utime_ns`/`child_stime_ns`**），与 **`times`/`waitpid`** 累加路径一致；**勿**把 **`proc.threads()`** 中除当前线程外的 **pthread** 当作子进程。
 - **`getrusage(2)`**：**`who`** 非法 → **`InvalidInput`**（**EINVAL**）；**`usage`** 为 **NULL** → **`BadAddress`**（**EFAULT**），须在聚合 **`Rusage`** 之前检查，与 Linux 顺序一致。
 - **`uname(2)`/`sysinfo(2)`**：输出结构体指针 **必填可写**；**`NULL` → `BadAddress`**（**EFAULT**），在 **`vm_write`** 前显式检查（issue-230；与 **`getrusage`** 一致）。
