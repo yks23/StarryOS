@@ -192,7 +192,7 @@ fn recv_addr_is_kernel_placeholder(addr: &SocketAddrEx) -> bool {
     )
 }
 
-/// After [`validate_recvmsg_flags`], [`Socket::from_fd`], and (for `recvmsg`) user `msghdr` setup.
+/// After [`Socket::from_fd`], [`validate_recvmsg_flags`], and (for `recvmsg`) user `msghdr` setup.
 fn recv_on_socket(
     socket: &Socket,
     fd: i32,
@@ -313,8 +313,9 @@ fn recv_impl(
     addrlen: UserPtr<socklen_t>,
     cmsg_builder: Option<CMsgBuilder>,
 ) -> AxResult<isize> {
-    validate_recvmsg_flags(flags)?;
+    // Linux __sys_recvfrom: sockfd_lookup before flag checks (EBADF before EINVAL/EOPNOTSUPP).
     let socket = Socket::from_fd(fd)?;
+    validate_recvmsg_flags(flags)?;
     recv_on_socket(&socket, fd, dst, flags, addr, addrlen, cmsg_builder, None)
 }
 
@@ -330,9 +331,10 @@ pub fn sys_recvfrom(
 }
 
 pub fn sys_recvmsg(fd: i32, msg: UserPtr<msghdr>, flags: u32) -> AxResult<isize> {
-    // Linux __sys_recvmsg: flags + sockfd_lookup before copy_msghdr_from_user (EINVAL/EBADF before EFAULT).
-    validate_recvmsg_flags(flags)?;
+    // Linux __sys_recvmsg: sockfd_lookup before flag validation and copy_msghdr_from_user
+    // (EBADF before EINVAL/EOPNOTSUPP/EFAULT) (issue-293).
     let socket = Socket::from_fd(fd)?;
+    validate_recvmsg_flags(flags)?;
     // Snapshot `msghdr` + field addresses: avoid holding `&mut msghdr` across `recv` (issue-198).
     let base = msg.address().as_usize();
     let m = *msg.get_as_mut()?;

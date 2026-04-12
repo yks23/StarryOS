@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-293 resolved（**`recvfrom`/`recvmsg`**：**`Socket::from_fd`** 先于 **`validate_recvmsg_flags`**，非法 **fd** 时 **EBADF** 先于 **flags** 的 **EINVAL/EOPNOTSUPP**；**`net/io.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-292 resolved（**`renameat`** **riscv64**：**`syscalls::Sysno`** **无** **`renameat`**（musl 仅 **`__NR_renameat2`**）；**`renameat(2)`** 由 **libc** 走 **`renameat2(..., 0)`** → **`sys_renameat2`**；**`mod.rs`** **`cfg(not(riscv64))`** 注释说明；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-291 resolved（**`poll(2)`** **riscv64**：Linux ABI **无** 独立 **`__NR_poll`**；**`syscalls::Sysno`** **亦无** **`poll`**；**`poll(2)`** 由 **libc** 走 **`__NR_ppoll`** → **`sys_ppoll`**；**`mod.rs`** 注释说明 **`Sysno::poll`** 仅 **x86_64**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-290 resolved（**`fadvise64`**：**`get_file_like`** 后 **`Pipe`→ESPIPE**；仅 **`File`/`MemfdCreatedFile`** 桩 **`Ok(0)`**；socket/timerfd/epoll 等 → **`EINVAL`**；**`fs/io.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -316,6 +317,7 @@
 | issue-271 | mlock/mlock2 addr 须页对齐 EINVAL | resolved | 2026-04-12 |
 | issue-272 | lseek SEEK_SET 负 offset EINVAL | resolved | 2026-04-12 |
 | issue-273 | prlimit64 跨 pid 权限 EPERM | resolved | 2026-04-12 |
+| issue-293 | recvfrom/recvmsg from_fd 先于 validate_recvmsg_flags | resolved | 2026-04-13 |
 | issue-292 | renameat riscv64：无 Sysno::renameat，libc 走 renameat2 | resolved | 2026-04-13 |
 | issue-291 | poll riscv64：ABI 无 poll 号，libc 走 ppoll | resolved | 2026-04-13 |
 | issue-290 | fadvise64 非 File/Memfd 非 pipe → EINVAL | resolved | 2026-04-13 |
@@ -567,7 +569,7 @@
 - **`bind(2)`/`connect(2)`**（**`socket.rs`**）：**`Socket::from_fd`** 须早于 **`SocketAddrEx::read_from_user`**，无效 **`fd`** 先 **`BadFileDescriptor`**（**EBADF**），与 Linux **`sockfd_lookup`** 及 **`sys_accept4`** 顺序一致（issue-132）。
 - **`sendto(2)`**（**`net/io.rs`**）：**`send_impl`**：**`SENDMSG_FLAGS_MASK`** 后 **`Socket::from_fd`**，再 **`send_on_socket`**（**`msg_name`** **`read_from_user`** + **`send`**），对齐 **`__sys_sendto`**（issue-133）。**`send_on_socket`**：**`addr` 非空**且 **`addrlen==0`** → **`InvalidInput`（EINVAL）**（Linux **`move_addr_to_kernel`**；勿与 **`addr==NULL`** 混为 **`to: None`**，issue-257）。
 - **`sendmsg(2)`**：**`Socket::from_fd`** → **`SENDMSG_FLAGS_MASK`** → **`msghdr.get_as_ref`** → **`validate_msghdr_ptr_len_consistency`**（**`msg_control`/长度**、**`msg_name`/长度**；issue-276）/ cmsg / **`IoVectorBuf::new`** → **`send_on_socket`**（无二次 **`from_fd`**），对齐 **`__sys_sendmsg`** **`sockfd_lookup` 先于 `copy_msghdr_from_user`**（issue-134）。**`msg_name` 非空**且 **`msg_namelen==0`** 同 issue-257。
-- **`recvmsg(2)`**：**`validate_recvmsg_flags`**（**`RECVMSG_FLAGS_MASK`** + **`RECVMSG_FLAGS_UNSUPPORTED`**）→ **`Socket::from_fd`** → **`msghdr.get_as_mut`** → **`validate_msghdr_ptr_len_consistency`**（issue-276）/ **`IoVectorBuf::new`** → **`recv_on_socket`**，与 **`__sys_recvmsg`** 及 issue-134 **`sendmsg`** 对称（issue-135）。**`recvfrom`** 仍走 **`recv_impl`**（相同校验 + **`recv_on_socket`**）。**`recv_on_socket`**：用户 **`msg_name`/`addr` 非空**时用占位 **`RecvOptions::from`**；数据报 **`recv`** 会覆盖为发送方；**TCP/Unix stream/vsock** 不覆盖时，若仍为占位 **`0.0.0.0:0`** 则 **`peer_addr()`** 写回（对齐 Linux **`recvfrom(2)`** 与 **`getpeername`**，issue-255）。
+- **`recvmsg(2)`**：**`Socket::from_fd`** → **`validate_recvmsg_flags`**（**`RECVMSG_FLAGS_MASK`** + **`RECVMSG_FLAGS_UNSUPPORTED`**）→ **`msghdr.get_as_mut`** → **`validate_msghdr_ptr_len_consistency`**（issue-276）/ **`IoVectorBuf::new`** → **`recv_on_socket`**，对齐 **`sockfd_lookup` 先于 flags 与 `copy_msghdr_from_user`**（issue-293；原 issue-135 曾写 flags 在前，已修正）。**`recvfrom`** 经 **`recv_impl`** 同序。**`recv_on_socket`**：用户 **`msg_name`/`addr` 非空**时用占位 **`RecvOptions::from`**；数据报 **`recv`** 会覆盖为发送方；**TCP/Unix stream/vsock** 不覆盖时，若仍为占位 **`0.0.0.0:0`** 则 **`peer_addr()`** 写回（对齐 Linux **`recvfrom(2)`** 与 **`getpeername`**，issue-255）。
 - **`bind`/`connect`/`sendto` 等 INET 地址**：**`SocketAddrV4`/`SocketAddrV6::read_from_user`** 要求 **`addrlen >= sizeof(sockaddr_in|sockaddr_in6)`**，只按固定布局读 **`sockaddr_in`/`sockaddr_in6`**；**`addrlen` 大于结构体**时与 Linux 一样忽略尾部字节。**vsock** **`sockaddr_vm`** 同理。
 - **`sendmsg` / `recvmsg` 与 ancillary**：控制缓冲区须与 Linux 一致使用 **`CMSG_ALIGN(sizeof(cmsghdr)+payload)`** 作为**占用步长**；**`cmsg_len`** 仍为含头的逻辑长度。遍历下一条头用 **`ptr += CMSG_ALIGN(cmsg_len)`**；**`CMsgBuilder::push`** 在 **`msg_controllen`** 与下一 **`cmsghdr`** 指针上前移对齐后长度，**`cmsg_len` 至对齐边界**建议填 **0**。**`CMsg::parse`（`sendmsg`）** 仅实现 **`(SOL_SOCKET, SCM_RIGHTS)`**；**`SCM_CREDENTIALS`/`SCM_TIMESTAMP`/`SCM_TIMESTAMPNS`/`SCM_TIMESTAMPING`/`SCM_SECURITY`** → **`Unsupported`**，勿与格式错误混用 **`EINVAL`**。
 - **`sched_getaffinity` / `sched_setaffinity`**：`pid==0` 为当前任务；非零先 **`get_task(pid)`**，失败再 **`get_process_data(pid)`** 取 **`proc.threads()` 最小 tid** 定位线程组代表线程。set 时当前任务走 **`set_current_affinity`**（SMP 迁移），其它任务仅 **`set_cpumask`**。**`sched_getaffinity`** 成功 **`Ok(0)`**，掩码仅经 **`vm_write_slice`**（issue-242）。**`sched_setaffinity`** 须先 **`sched_resolve_task`**（**`ESRCH`**）再 **`vm_load(user_mask)`**（**EFAULT** 类），与 Linux 一致（issue-142）。未完整建模 CAP、僵尸 **`ESRCH`** 等。
@@ -605,7 +607,7 @@
 - issue-132：无效 **socket `fd`** + 坏 **`addr`**，首错应 **`EBADF`**（先于 **EFAULT**）。
 - issue-133：**`sendto`** 或 **`sendmsg`** 仅坏 **`msg_name`**（**`msghdr`** 本身合法）：无效 **`fd`** 时首错 **`EBADF`**。
 - issue-134：**`sendmsg`** 无效 **`fd`** + 坏 **`msghdr`/`iov`**：首错应 **`EBADF`**（先于 **EFAULT**）。
-- issue-135：**`recvmsg`** 非法 **`flags`** 先于 **`msghdr`**；无效 **`fd`** + 坏 **`msghdr`/`iov`**：首错 **`EBADF`** 或 **`EINVAL`**（**flags**）先于 **EFAULT**。
+- issue-135：**`recvmsg`** 须先 **`Socket::from_fd`** 再碰用户 **`msghdr`**；与 issue-293 合看：**`from_fd`** 亦先于 **`validate_recvmsg_flags`**，无效 **`fd`** + 非法 **`flags`** 时首错 **`EBADF`**。坏 **`msghdr`/`iov`**：**EBADF** 先于 **EFAULT**。
 - issue-136：**`fcntl`** **`F_SETLK`/`F_GETLK`**（含 **`F_OFD_*`**）：无效 **`fd`** + 坏 **`flock64 *`**，首错 **`EBADF`**。
 - issue-137：**`linkat`** 非法 **`flags`** + 坏 path指针，首错 **`EINVAL`**（先于 **EFAULT**）。
 - issue-138：**`unlinkat`**/**`renameat2`** 非法 **`flags`** + 坏 path，首错 **`EINVAL`**（先于 **EFAULT**）。
