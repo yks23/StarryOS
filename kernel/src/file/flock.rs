@@ -1,9 +1,14 @@
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, VecDeque};
 use core::ffi::c_int;
+use core::future::poll_fn;
+use core::task::{Poll, Waker};
 
 use axerrno::{AxError, AxResult};
 use axsync::Mutex;
-use axtask::current;
+use axtask::{
+    current,
+    future::{block_on, interruptible},
+};
 use hashbrown::HashMap;
 use lazy_static::lazy_static;
 use linux_raw_sys::general::{LOCK_EX, LOCK_NB, LOCK_SH, LOCK_UN};
@@ -36,12 +41,23 @@ enum InodeLocks {
 struct FlockTables {
     by_fd: HashMap<u32, FlockFdEntry>,
     by_inode: HashMap<FlockInodeKey, InodeLocks>,
+    /// Waiters blocked on `flock` for a given inode (blocking path; issue-417).
+    waiters: HashMap<FlockInodeKey, VecDeque<Waker>>,
+}
+
+fn wake_flock_waiters(g: &mut FlockTables, key: FlockInodeKey) {
+    if let Some(q) = g.waiters.remove(&key) {
+        for w in q {
+            w.wake();
+        }
+    }
 }
 
 lazy_static! {
     static ref FLOCK: Mutex<FlockTables> = Mutex::new(FlockTables {
         by_fd: HashMap::new(),
         by_inode: HashMap::new(),
+        waiters: HashMap::new(),
     });
 }
 
@@ -73,6 +89,7 @@ fn release_fd_locked(g: &mut FlockTables, fd: u32) {
             *refs = refs.saturating_sub(1);
             if *refs == 0 {
                 g.by_inode.remove(&entry.key);
+                wake_flock_waiters(g, entry.key);
             }
         }
         Some(InodeLocks::Shared { map }) => {
@@ -84,6 +101,7 @@ fn release_fd_locked(g: &mut FlockTables, fd: u32) {
             }
             if map.is_empty() {
                 g.by_inode.remove(&entry.key);
+                wake_flock_waiters(g, entry.key);
             }
         }
         _ => {}
@@ -125,6 +143,37 @@ fn try_acquire_exclusive(
         Some(InodeLocks::Exclusive { .. }) | Some(InodeLocks::Shared { .. }) => {
             Err(AxError::WouldBlock)
         }
+    }
+}
+
+/// One attempt to satisfy `LOCK_SH`/`LOCK_EX` for `fd` (may release prior `by_fd` entry).
+/// `Ok(Some(()))` = lock held; `Ok(None)` = must wait; `Err` = fatal.
+fn do_flock_acquire_attempt(
+    g: &mut FlockTables,
+    fdu: u32,
+    key: FlockInodeKey,
+    tid: u64,
+    cmd: u32,
+) -> Result<Option<()>, AxError> {
+    if let Some(e) = g.by_fd.get(&fdu) {
+        if cmd == LOCK_EX && e.kind == FlockKind::Ex {
+            return Ok(Some(()));
+        }
+        if cmd == LOCK_SH && e.kind == FlockKind::Sh {
+            return Ok(Some(()));
+        }
+        release_fd_locked(g, fdu);
+    }
+
+    let r = if cmd == LOCK_EX {
+        try_acquire_exclusive(g, fdu, key, tid)
+    } else {
+        try_acquire_shared(g, fdu, key, tid)
+    };
+    match r {
+        Ok(()) => Ok(Some(())),
+        Err(AxError::WouldBlock) => Ok(None),
+        Err(e) => Err(e),
     }
 }
 
@@ -194,31 +243,31 @@ pub fn sys_flock(fd: c_int, operation: c_int) -> AxResult<isize> {
         return Ok(0);
     }
 
-    loop {
+    if nb {
         let mut g = FLOCK.lock();
-        if let Some(e) = g.by_fd.get(&fdu) {
-            if cmd == LOCK_EX && e.kind == FlockKind::Ex {
-                return Ok(0);
-            }
-            if cmd == LOCK_SH && e.kind == FlockKind::Sh {
-                return Ok(0);
-            }
-            release_fd_locked(&mut g, fdu);
-        }
-
-        let r = if cmd == LOCK_EX {
-            try_acquire_exclusive(&mut g, fdu, key, tid)
-        } else {
-            try_acquire_shared(&mut g, fdu, key, tid)
+        return match do_flock_acquire_attempt(&mut g, fdu, key, tid, cmd) {
+            Ok(Some(())) => Ok(0),
+            Ok(None) => Err(AxError::WouldBlock),
+            Err(e) => Err(e),
         };
+    }
 
-        match r {
-            Ok(()) => return Ok(0),
-            Err(AxError::WouldBlock) if !nb => {
+    // Blocking `flock`: wait with wakers + `interruptible` so signals yield **EINTR** (Linux
+    // `flock(2)`); replaces unbounded `yield_now` polling (issue-417).
+    match block_on(interruptible(poll_fn(|cx| {
+        let mut g = FLOCK.lock();
+        match do_flock_acquire_attempt(&mut g, fdu, key, tid, cmd) {
+            Ok(Some(())) => Poll::Ready(Ok(0isize)),
+            Ok(None) => {
+                g.waiters.entry(key).or_default().push_back(cx.waker().clone());
                 drop(g);
-                axtask::yield_now();
+                Poll::Pending
             }
-            Err(e) => return Err(e),
+            Err(e) => Poll::Ready(Err(e)),
         }
+    }))) {
+        Ok(Ok(n)) => Ok(n),
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err(AxError::Interrupted),
     }
 }
