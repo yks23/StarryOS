@@ -4,7 +4,7 @@ use axtask::current;
 use linux_raw_sys::general::{
     __kernel_clock_t, __kernel_clockid_t, CLOCK_BOOTTIME, CLOCK_MONOTONIC, CLOCK_MONOTONIC_COARSE,
     CLOCK_MONOTONIC_RAW, CLOCK_PROCESS_CPUTIME_ID, CLOCK_REALTIME, CLOCK_REALTIME_COARSE,
-    CLOCK_THREAD_CPUTIME_ID, itimerval, timespec, timeval,
+    CLOCK_THREAD_CPUTIME_ID, itimerval, timespec, timeval, timezone,
 };
 use starry_vm::{VmMutPtr, VmPtr};
 
@@ -111,9 +111,17 @@ pub fn sys_clock_gettime(clock_id: __kernel_clockid_t, ts: *mut timespec) -> AxR
     Ok(0)
 }
 
-pub fn sys_gettimeofday(ts: *mut timeval) -> AxResult<isize> {
+/// Linux `gettimeofday(2)`: legacy `struct timezone *tz` is obsolete; when non-NULL the kernel
+/// still writes zeros for glibc compatibility (issue-288).
+pub fn sys_gettimeofday(ts: *mut timeval, tz: *mut timezone) -> AxResult<isize> {
     if let Some(ts) = ts.nullable() {
         ts.vm_write(timeval::from_time_value(wall_time()))?;
+    }
+    if let Some(tz) = tz.nullable() {
+        tz.vm_write(timezone {
+            tz_minuteswest: 0,
+            tz_dsttime: 0,
+        })?;
     }
     Ok(0)
 }
