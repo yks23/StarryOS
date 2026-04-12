@@ -1,3 +1,4 @@
+use core::mem::size_of;
 use core::sync::atomic::Ordering;
 
 use axerrno::{AxError, AxResult, LinuxError};
@@ -9,6 +10,7 @@ use linux_raw_sys::general::{
 use starry_vm::{VmMutPtr, VmPtr};
 
 use crate::{
+    mm::check_access,
     task::{AsThread, FutexKey, futex_table_for, get_task, may_peer_process_by_cred},
     time::{TimeValueLike, read_timespec_user},
 };
@@ -121,6 +123,14 @@ pub fn sys_get_robust_list(
     head: *mut *const robust_list_head,
     size: *mut usize,
 ) -> AxResult<isize> {
+    // Linux `get_robust_list(2)`: user pointers before task lookup so **EFAULT** precedes **ESRCH** /
+    // **EPERM** when both apply (issue-375; `timerfd_gettime` NULL pattern).
+    if head.is_null() || size.is_null() {
+        return Err(AxError::BadAddress);
+    }
+    check_access(head as usize, size_of::<*const robust_list_head>()).map_err(|_| AxError::BadAddress)?;
+    check_access(size as usize, size_of::<usize>()).map_err(|_| AxError::BadAddress)?;
+
     let task = get_task(tid)?;
     let caller_pd = current().as_thread().proc_data.clone();
     let target_pd = task.as_thread().proc_data.clone();
