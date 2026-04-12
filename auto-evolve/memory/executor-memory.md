@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-244 resolved（**`sigaltstack`**：**`ss==NULL` → `set_stack` 默认 `SS_DISABLE`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-243 resolved（**`execve`**：**`argv==NULL` → EFAULT**；**`envp==NULL`** 继承 **`ProcessData::environment`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-242 resolved（**`sched_getaffinity`**：成功 **`Ok(0)`**，与 Linux/**`sched_setaffinity`** 一致；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-241 resolved（**`socket`/`socketpair`**：**`AF_UNIX` 且 `proto != 0` → `EPROTONOSUPPORT`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -237,6 +238,7 @@
 | issue-241 | AF_UNIX socket/socketpair proto!=0 → EPROTONOSUPPORT | resolved | 2026-04-12 |
 | issue-242 | sched_getaffinity 成功返回 0 | resolved | 2026-04-12 |
 | issue-243 | execve argv NULL / envp 继承环境 | resolved | 2026-04-12 |
+| issue-244 | sigaltstack ss NULL 禁用备用栈 | resolved | 2026-04-12 |
 | issue-219 | waitpid __WNOTHREAD → Unsupported | resolved | 2026-04-12 |
 | issue-225 | fallocate FALLOC_FL 掩码 + 非零 EOPNOTSUPP | resolved | 2026-04-12 |
 | issue-227 | shmat 无效 shmid 不 unwrap（EINVAL） | resolved | 2026-04-12 |
@@ -396,6 +398,7 @@
 - `rt_sigreturn` 通过 `block_next_signal` 标记「下一次回到用户循环时跳过一次 `check_signals`」；该标志必须是 **per-thread**（`Thread::skip_next_signal_check`），不可用进程级或全局 AtomicBool。
 - **`rt_sigpending`**：**`set`** 为必填输出（Linux **`NULL` → EFAULT**），**`set.is_null()` → `BadAddress`**，须在 **`vm_write`** 前校验。**`rt_sigprocmask(2)`**：**`set==NULL`** 时仅 **`copy_to_user(old)`**（若 **`oldset` 非空**），**`how`** 忽略；**`set` 非空**时须先校验 **`how`**（**`SIG_BLOCK`/`SIG_UNBLOCK`/`SIG_SETMASK`**）再 **`vm_read(set)`**，成功后再 **`vm_write(oldset)`** 与 **`set_blocked`**，非法 **`how`** 或 **`set`** 读失败不得改写 **`oldset`**（issue-146）。**`rt_sigaction(2)`**：持锁后先 **`clone`** 当前表项为 **`old`**；**`act` 非空**时先 **`vm_read(act)`** 并写回 **`actions[signo]`**，再 **`vm_write(oldact)`**（**`old.into()`**）；**`act`** 读失败不得改写 **`oldact`**（issue-147）。**`act==NULL`** 时仅 **`vm_write(oldact)`** 查询。**`oldact`** 仍为 **`nullable()`**。
 - **`signalfd4`**：**`mask`** 为必填输入（Linux **`NULL` → EFAULT**），**`mask.is_null()` → `BadAddress`**，须在 **`vm_read_uninit`** 前校验。
+- **`sigaltstack(2)`**：**`ss==NULL`** 时 **`set_stack(SignalStack::default())`**（**`SS_DISABLE`**），禁用备用栈（issue-244）；非空 **`ss`** 且 **`ss.size < MINSIGSTKSZ` → EINVAL**（issue-098）。
 - **`rt_sigtimedwait`/`rt_sigsuspend`**：**`set`** 为必填可读 **`sigset_t`**（**`NULL` → EFAULT**），**`set.is_null()` → `BadAddress`**，须在 **`vm_read_uninit`** 前校验；**`timeout`/`info`** 等仍 **`nullable()`**。
 - **`rt_sigqueueinfo`/`rt_tgsigqueueinfo`**：Linux 分别为 **3/4 个**用户参数（**`uinfo`** 为最后一参），**无** **`sigsetsize`**；勿从 **`a3`/`a4`** 读 **`sigsetsize`** 或调用 **`check_sigset_size`**（残留寄存器会误 **EINVAL**）。**`rt_sig*`** 中带 **`sigsetsize`** 的是 **`rt_sigprocmask`**、**`rt_sigaction`**、**`rt_sigpending`**、**`rt_sigtimedwait`**、**`rt_sigsuspend`** 等，勿与 queueinfo 混淆。**`make_queue_signal_info`**：**`signo==0`** → **`Ok(None)`**；否则 **`parse_signo`** 后 **`uinfo==NULL` → `BadAddress`** 再 **`vm_read`**（**`pidfd_send_signal`** 同路径）。
 - timerfd：`TimerFd` 实现 `FileLike` + `Pollable`；到期逻辑在 `process_expirations` 中根据时钟纳秒与 `next_deadline_nanos` 比较；通过 `axtask::register_timer_callback`（首次创建时注册）在每次内核 timer tick 中扫描弱引用列表并 `wake` `PollSet`；创建 fd 用 `add_file_like`（与 eventfd2 相同），勿对 `Arc<TimerFd>` 误用 `add_to_fd_table(self)`。**`timerfd_settime`**：**`new_value.is_null()` → `InvalidInput`**。**`timerfd_gettime`**：**`curr_value.is_null()` → `BadAddress`**（Linux **EFAULT**），在 **`from_fd`** 之后、**`gettime`/`vm_write`** 之前校验，避免先算定时器再因用户指针失败。

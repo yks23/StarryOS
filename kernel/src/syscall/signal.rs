@@ -470,6 +470,9 @@ pub fn sys_sigaltstack(ss: *const SignalStack, old_ss: *mut SignalStack) -> AxRe
             return Err(AxError::InvalidInput);
         }
         sig.set_stack(ss);
+    } else {
+        // Linux `sigaltstack(2)`: `ss == NULL` disables the alternate stack (equivalent to `SS_DISABLE`).
+        sig.set_stack(SignalStack::default());
     }
     Ok(0)
 }

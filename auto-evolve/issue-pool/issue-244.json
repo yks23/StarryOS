@@ -1,0 +1,27 @@
+{
+  "id": "issue-244",
+  "title": "sigaltstack：`ss == NULL` 时未禁用备用栈，与 Linux 不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`sys_sigaltstack`**：在 **`ss == NULL`** 时 **`sig.set_stack(SignalStack::default())`**（**`starry_signal`** 默认 **`SS_DISABLE`**），与 Linux 禁用备用栈一致；**`old_ss`** 仍先写回。",
+  "files_changed": ["kernel/src/syscall/signal.rs"],
+  "description": "**`kernel/src/syscall/signal.rs`** **`sys_sigaltstack`**（约 **458–475** 行）仅在 **`ss` 非空** 时 **`read_signal_stack_user`** 并 **`sig.set_stack(ss)`**；**`ss.nullable()` 为 None**（**`ss == NULL`**）时**不** 更新线程备用栈状态。\n\n**Linux `sigaltstack(2)`**：**`ss == NULL`** 表示**禁用**备用信号栈（与 **`stack_t` 中 `SS_DISABLE`** 等价）；**`old_ss` 非 NULL** 时仍应先写回**旧**栈描述再禁用。**当前** **`sigaltstack(NULL, &old)`** 仅写回 **`old`**，**已注册的备用栈仍保持启用**，与 **Linux** 行为不一致，可能影响 **`SA_ONSTACK`** 投递与 **`siglongjmp`** 等路径。\n\n**建议**：在 **`ss.is_null()`** 分支调用 **`Signal`/`ThreadSignal`** 上与 **`SS_DISABLE`** 等价的 **`disable`/`set_stack`** 实现；并与 **`MINSIGSTKSZ`** 校验顺序对齐 **Linux**（禁用前是否校验视内核而定）。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["sigaltstack"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/signal.rs:458-475"],
+    "related_files": [],
+    "key_insight": "NULL ss 应禁用栈；当前 no-op"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；`sigaltstack(NULL, &old)`。",
+    "expected_output_contains": "",
+    "pass_criteria": "`ss==NULL` 后备用栈禁用，与 Linux 一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos：通过（exit 0）"
+  },
+  "suggested_fix": "`ss.is_null()` 时显式禁用 alternate stack（对齐 `SS_DISABLE`）。",
+  "references": ["man 2 sigaltstack", "Linux do_sigaltstack"]
+}
