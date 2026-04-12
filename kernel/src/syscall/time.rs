@@ -203,11 +203,14 @@ pub fn sys_setitimer(
                 .set_itimer(ty, interval, remained)
         }
         None => {
-            if old_value.nullable().is_none() {
-                return Ok(0);
-            }
-            debug!("sys_setitimer <= type: {ty:?}, new_value: NULL (no change)");
-            curr.as_thread().time.borrow().get_itimer(ty)
+            // Linux `setitimer(2)` (man-pages VERSIONS): `new_value == NULL` disarms the timer,
+            // equivalent to zero `it_interval`/`it_value` — not a no-op (issue-279).
+            debug!("sys_setitimer <= type: {ty:?}, new_value: NULL (disarm)");
+            curr
+                .as_thread()
+                .time
+                .borrow_mut()
+                .set_itimer(ty, 0, 0)
         }
     };
 

@@ -1,0 +1,27 @@
+{
+  "id": "issue-279",
+  "title": "setitimer：`new_value == NULL` 时未按 Linux 解除定时器",
+  "status": "resolved",
+  "created_at": "2026-04-12T23:35:00Z",
+  "severity": "medium",
+  "fix_summary": "`new_value == NULL` 分支改为始终 `time.borrow_mut().set_itimer(ty, 0, 0)`，与 Linux man-pages VERSIONS（等价于全零 `itimerval`、disarm）一致；返回值即解除前旧 `it_interval`/`it_value`，仍写入非空 `old_value`。",
+  "files_changed": ["kernel/src/syscall/time.rs"],
+  "description": "**`kernel/src/syscall/time.rs`** **`sys_setitimer`**（约 **185–221** 行）在 **`new_value`** 为 **NULL**（**`new_value.nullable()`** **为** **None**）时：\n\n1. **`old_value`** **亦** **为** **NULL** **时** **直接** **`return Ok(0)`**（约 **206–207** 行），**未** **调用** **`set_itimer`** **解除** **该** **`which`** **对应** **的** **interval** **timer**。\n2. **`old_value`** **非** **NULL** **时** **仅** **`get_itimer(ty)`** **读出** **旧值**（约 **209–210** 行），**同样** **未** **调用** **`set_itimer(..., 0, 0)`** **或** **等价** **逻辑** **解除** **定时器**。\n\n**Linux `setitimer(2)`**（**man-pages** **VERSIONS** **节**）：**`setitimer(which, NULL, &old_value)`** **在** **Linux** **上** **等价于** **`new_value`** **各** **字段** **为** **零**，**即** **禁用** **（disarm）** **定时器**；**与** **仅** **查询** **旧值** **的** **`getitimer`** **不同**。**当前** **Starry** **在** **`new_value == NULL`** **时** **要么** **无操作** **成功** **返回**，**要么** **只** **返回** **旧** **`itimerval`** **而** **保持** **定时器** **仍** **处于** **armed** **状态**，**与** **Linux** **语义** **分叉**（**可** **导致** **SIGALRM/SIGVTALRM/SIGPROF** **仍** **在** **预期** **已** **关闭** **时** **触发**）。\n\n**建议**：在 **`new_value == NULL`** **分支** **中** **始终** **调用** **`set_itimer(ty, 0, 0)`**（**或** **与** **`it_value`/`it_interval` 全零** **等价的** **内部** **API**），**再** **按需** **将** **解除前** **的** **旧值** **写入** **`old_value`**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["setitimer"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/time.rs:185-221"],
+    "related_files": [],
+    "key_insight": "setitimer(NULL new_value) 应 disarm，与 Linux 等价于全零"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 Linux man-pages `setitimer(which, NULL, old_value)` 的 VERSIONS 说明。",
+    "expected_output_contains": "",
+    "pass_criteria": "`new_value == NULL` 后对应 ITIMER_* 被解除，或与 Linux 一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `new_value == NULL` 时调用 `set_itimer` 传入 interval/remained 均为 0，再写回 `old_value`（若非 NULL）。",
+  "references": ["man 2 setitimer (Linux man-pages VERSIONS)", "kernel/src/syscall/time.rs"]
+}
