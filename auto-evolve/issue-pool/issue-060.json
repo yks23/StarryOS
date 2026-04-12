@@ -1,0 +1,28 @@
+{
+  "id": "issue-060",
+  "title": "fanotify_init 未校验 flags/event_f_flags 非法位，与同文件 inotify_init1 及 Linux 不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T18:00:00Z",
+  "resolved_at": "2026-04-13T05:00:00Z",
+  "severity": "low",
+  "description": "同文件 **`sys_inotify_init1`**（`kernel/src/syscall/fs/notify.rs`）对用户 **`flags`** 做 **`f & !(IN_NONBLOCK | IN_CLOEXEC)`** 校验，未知位返回 **`EINVAL`**。**`sys_fanotify_init`** 仅从 **`flags`** 读取本地定义的 **`FAN_CLOEXEC`/`FAN_NONBLOCK`**，**其余位（如 `0x80000000`）被静默忽略**；第二参 **`event_f_flags` 完全未使用也未校验**。Linux **`fanotify_init(2)`** 对 **`flags`**（含 **`FAN_CLASS_*`** 等 uapi 位）及 **`event_f_flags`**（与 **`O_*`** 等相关的合法子集）均有 **EINVAL** 规则；当前桩实现与 **inotify** 侧「非法位即失败」的风格不一致，在具备 **`CAP_SYS_ADMIN`** 时可能与 Linux 对非法组合的行为不符。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["fanotify_init"],
+  "fix_summary": "**`sys_fanotify_init`**：按 **`linux/fanotify.h`** 汇总 **`VALID_FANOTIFY_INIT_FLAGS`**（**`FAN_CLOEXEC`** 至 **`FAN_REPORT_MNT`**）；**`event_f_flags`** 按内核 **`FANOTIFY_INIT_ALL_EVENT_F_BITS`**（**`O_ACCMODE`**、**`O_APPEND`**、**`O_NONBLOCK`**、**`__O_SYNC`**、**`O_DSYNC`**、**`O_CLOEXEC`**、**`O_LARGEFILE`**、**`O_NOATIME`**）。未知位 **`AxError::InvalidInput`**。",
+  "files_changed": ["kernel/src/syscall/fs/notify.rs"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/notify.rs:1-88"],
+    "related_files": [],
+    "key_insight": "`inotify_init1` 严格掩码；`fanotify_init` 两参均已按 uapi / 内核宏拒绝未知位"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "无 **`CAP_SYS_ADMIN`** 时 Linux 常先 **EPERM**，难以在普通用户态断言 **EINVAL**；建议在 root/能力环境或 Starry QEMU 下对比 **`fanotify_init(0x80000000|FAN_CLOEXEC, 0)`** 与 **`inotify_init1` 同类非法 flags** 的返回码。",
+    "expected_output_contains": "",
+    "pass_criteria": "对 **`flags`/`event_f_flags`** 按 **`linux/fanotify.h`** 与内核 **`fanotify_init`** 校验逻辑拒绝非法位（**`InvalidInput`**）。",
+    "last_result": "2026-04-13：已实现 `VALID_FANOTIFY_INIT_FLAGS` / `VALID_FANOTIFY_EVENT_F_FLAGS`；`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` 通过；特权环境对比用例未跑"
+  },
+  "suggested_fix": "从 **`linux/fanotify.h`** 汇总 **`VALID_FANOTIFY_INIT_FLAGS`**（含各类 **`FAN_CLASS_*`** 等），对 **`flags & !VALID != 0`** 返回 **`AxError::InvalidInput`**；**`event_f_flags`** 按内核接受的 **`O_*`**/**`FMODE_*`** 子集校验（参考 Linux **`SYSC_fanotify_init`**）。在完整 **fanotify** 语义未实现前，可至少拒绝 **uapi 未定义的高位**，与同目录 **`inotify_init1`** 策略对齐。",
+  "references": ["man 2 fanotify_init", "linux/fanotify.h"]
+}
