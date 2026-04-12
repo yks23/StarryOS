@@ -1,9 +1,12 @@
 {
   "id": "issue-023",
   "title": "get_mempolicy is stub (Ok(0) without writing policy)",
-  "status": "open",
+  "status": "resolved",
   "created_at": "2026-04-12T12:00:00Z",
+  "resolved_at": "2026-04-12T23:30:00Z",
   "severity": "low",
+  "fix_summary": "**`sys_get_mempolicy`**：无 NUMA 策略时向用户 **`policy`** 写入 **`MPOL_DEFAULT`（0）**；若提供 **`nodemask`** 与 **`maxnode>0`**，则按位长 **`maxnode.div_ceil(8)`**（上限 8192 字节）**`vm_write_slice`** 清零。替换原 **`warn` + 空成功** 行为。",
+  "files_changed": ["kernel/src/syscall/task/ctl.rs"],
   "description": "sys_get_mempolicy 打日志后返回 Ok(0)，用户态 mode 可能未初始化，与 NUMA 语义不符。",
   "category": "syscall-stub",
   "affected_syscalls": ["get_mempolicy"],

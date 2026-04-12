@@ -102,13 +102,28 @@ pub fn sys_setresgid(rgid: u32, egid: u32, sgid: u32) -> AxResult<isize> {
 }
 
 pub fn sys_get_mempolicy(
-    _policy: *mut i32,
-    _nodemask: *mut usize,
-    _maxnode: usize,
-    _addr: usize,
-    _flags: usize,
+    policy: *mut i32,
+    nodemask: *mut usize,
+    maxnode: usize,
+    addr: usize,
+    flags: usize,
 ) -> AxResult<isize> {
-    warn!("Dummy get_mempolicy called");
+    debug!(
+        "sys_get_mempolicy <= policy {policy:p}, nodemask {nodemask:p}, maxnode {maxnode}, addr {addr:#x}, flags {flags:#x}"
+    );
+
+    // No per-node NUMA policy in this kernel: report default policy (Linux `MPOL_DEFAULT` == 0).
+    const MPOL_DEFAULT: i32 = 0;
+    if let Some(p) = policy.nullable() {
+        p.vm_write(MPOL_DEFAULT)?;
+    }
+
+    // Zero nodemask bits when a buffer is provided (`maxnode` is the number of bits).
+    if !nodemask.is_null() && maxnode > 0 {
+        let nbytes = maxnode.div_ceil(8).min(8192);
+        vm_write_slice(nodemask as *mut u8, &alloc::vec![0u8; nbytes])?;
+    }
+
     Ok(0)
 }
 
