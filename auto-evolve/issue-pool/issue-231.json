@@ -1,0 +1,27 @@
+{
+  "id": "issue-231",
+  "title": "clock_gettime：输出 `timespec` 未显式拒绝 NULL，与 uname/sysinfo/getrusage 修复后风格不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`sys_clock_gettime`**：在 **`vm_write`** 前 **`ts.is_null()` → `AxError::BadAddress`**（**EFAULT**），与 **issue-230** 及 **`getrusage`** 显式风格一致；**`gettimeofday`/`clock_getres`** 仍 **`nullable()`**（Linux 语义）。",
+  "files_changed": ["kernel/src/syscall/time.rs"],
+  "description": "**`kernel/src/syscall/time.rs`** **`sys_clock_gettime`**（约 **60–77** 行）在解析 **`clock_id`** 后直接 **`ts.vm_write(timespec::from_time_value(now))`**，**未** 对 **`ts`** 做 **`is_null()`** 显式 **`BadAddress`**。\n\n**Linux `clock_gettime(2)`**：**`tp`/`timespec`** 为 **NULL** 时返回 **`EFAULT`**。同文件 **`sys_gettimeofday`**（约 **80–84** 行）对 **`ts`** 使用 **`nullable()`**，**允许** **NULL**（仅不写时间，与 Linux **gettimeofday** 一致）；**`clock_gettime`** **不允许** **NULL** **输出**，应对齐 **`sys_uname`/`sys_sysinfo`/`sys_getrusage`**（**issue-230 verified**）的显式 **NULL** 处理。\n\n**建议**：在 **`vm_write`** 前 **`if ts.is_null() { return Err(AxError::BadAddress); }`**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["clock_gettime"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/time.rs:60-77"],
+    "related_files": ["kernel/src/syscall/sys.rs:154-233", "kernel/src/syscall/time.rs:80-84"],
+    "key_insight": "gettimeofday 允许 NULL；clock_gettime 应拒 NULL"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；`clock_gettime(CLOCK_MONOTONIC, NULL)`。",
+    "expected_output_contains": "",
+    "pass_criteria": "NULL `timespec` → EFAULT/BadAddress。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos：通过（exit 0）"
+  },
+  "suggested_fix": "`if ts.is_null() { return Err(AxError::BadAddress); }` 于 `vm_write` 之前。",
+  "references": ["man 2 clock_gettime", "issue-230"]
+}

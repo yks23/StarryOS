@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-231 resolved（**`clock_gettime`**：**`tp`/`timespec` `NULL` → `BadAddress`**，与 **issue-230** 一致；**`gettimeofday`/`clock_getres`** 仍 **`nullable()`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-230 resolved（**`uname`/`sysinfo`**：输出指针 **`NULL` → `BadAddress`（EFAULT）**，与 **`getrusage`** 显式风格一致；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-229 resolved（**`mprotect`**：**`length == 0` → `InvalidInput`（EINVAL）**，与 **`sys_mmap`**/**Linux** 对齐；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-221 resolved（**`getdents64`**：**`DirBuffer`**：**`NAME_MAX`**、**`d_reclen`**（**`u16::try_from`**）、**`d_off`**（**`i64::try_from`**）与 **`SAFETY`** 注释；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -211,6 +212,7 @@
 | issue-221 | getdents64 dirent64 NAME_MAX/d_reclen/d_off | resolved | 2026-04-12 |
 | issue-229 | mprotect length==0 → EINVAL（对齐 mmap） | resolved | 2026-04-12 |
 | issue-230 | uname/sysinfo 输出 NULL → BadAddress | resolved | 2026-04-12 |
+| issue-231 | clock_gettime tp NULL → BadAddress | resolved | 2026-04-12 |
 | issue-219 | waitpid __WNOTHREAD → Unsupported | resolved | 2026-04-12 |
 | issue-225 | fallocate FALLOC_FL 掩码 + 非零 EOPNOTSUPP | resolved | 2026-04-12 |
 | issue-227 | shmat 无效 shmid 不 unwrap（EINVAL） | resolved | 2026-04-12 |
@@ -403,7 +405,7 @@
 - **`renameat2(2)`**：**`flags`** 掩码、**`NOREPLACE`+`EXCHANGE`** 互斥、**`WHITEOUT`** 须在 **`vm_load_string(old_path/new_path)`** 之前完成（issue-138）。**`flags`** 须为 **`linux_raw_sys::general`** 中 **`RENAME_NOREPLACE|RENAME_EXCHANGE|RENAME_WHITEOUT`** 的子集，否则 **`EINVAL`**；**`WHITEOUT`** 未建模 overlay → **`EINVAL`**。**`RENAME_NOREPLACE`** 且 **`new_dir.lookup_no_follow(new_name)`** 已存在 → **`EEXIST`**。**`RENAME_EXCHANGE`**：两端须存在（否则 **`ENOENT`**）；同目录同名 → **`EINVAL`**；交换以临时名三次 **`Location::rename`**（非崩溃原子）。**`new_path`** 用 **`resolve_parent`**。
 - **`setitimer`/`getitimer`**：**`ITIMER_REAL`** 独占 wall 时钟 **`alarm_task`**（**`ITimer::schedule_wall_alarm`**）；**`ITIMER_VIRTUAL`/`PROF`** 仅在 **`TimeManager::poll`** 中按 **`TimerState::User`/`Kernel`** 推进 **`remained_ns`**，**`set_itimer`** 与周期重载不再为二者注册 wall alarm。**`last_wall_ns`** 在 **`TimeManager::new`** 中初始化为 **`monotonic_time_nanos()`**，避免首次 **`delta`** 近似为开机时长。抢占与内核内 steal 时间仍弱于 Linux（TODO）。
 - **`ioctl`（`kernel/src/file/fs.rs` 的 `File`）**：与 **`Tty`** 驱动已实现的终端/PTY 命令（**`TCGETS`**/**`TCSETS`** 族、**`TIOCGWINSZ`**、**`TIOCGPGRP`**、**`TIOCSCTTY`** 等）在 **`NodeType != CharacterDevice`** 时于转发 **`location().ioctl`** 前返回 **`NotATty`（ENOTTY）**；字符设备仍走 **`Device`**/**`DeviceOps`**（TTY 与其它设备各自处理）。
-- **`clock_gettime` / `clock_getres`**：未实现的 **`clockid_t`** 须 **`EINVAL`**，**勿**对未知 id 回退 **`wall_time()`**。**`clock_id_supported`** 与已实现时钟一致（**REALTIME/REALTIME_COARSE、MONOTONIC/RAW/COARSE、BOOTTIME、CPUTIME_ID** 等）；**`clock_getres`** 对不支持 id 同样 **`EINVAL`**（即使 **`res==NULL`**）。
+- **`clock_gettime` / `clock_getres`**：未实现的 **`clockid_t`** 须 **`EINVAL`**，**勿**对未知 id 回退 **`wall_time()`**。**`clock_id_supported`** 与已实现时钟一致（**REALTIME/REALTIME_COARSE、MONOTONIC/RAW/COARSE、BOOTTIME、CPUTIME_ID** 等）；**`clock_getres`** 对不支持 id 同样 **`EINVAL`**（即使 **`res==NULL`**）。**`clock_gettime`** 的 **`tp`** 必填可写，**`NULL` → `BadAddress`**（issue-231）。**`clock_getres`** 的 **`res`** 与 **`gettimeofday`** 的 **`tv`** 仍 **`nullable()`**（Linux 允许 **NULL** 不写回）。
 - **`nanosleep(2)`**/**`clock_nanosleep(2)`**：**`axtask::future::sleep`** 按**单调**时间推进；**`sleep_impl`** 应用 **`monotonic_time`** 测量 **`elapsed`** 与 **`rem`**。**`clock_nanosleep(CLOCK_MONOTONIC, …)`** 走 **`sleep_impl`**；**`CLOCK_REALTIME`** 且 **`dur` 非零**（相对睡眠或未到时的 **`TIMER_ABSTIME`**）→ **`Unsupported`**（无墙钟驱动睡眠）；**`dur==0`** → **`Ok(0)`**。
 - `bpf` / `userfaultfd`：未实现时返回 **`AxError::Unsupported`（ENOSYS）**，勿再 `sys_dummy_fd`；`perf_event_open` 可返回 **`PermissionDenied`（EPERM）** 以匹配测试与常见无能力场景。**`io_uring_setup`**：桩实现返回 **`anon_inode:[io_uring]`** 的 **`IoUringFd`**；须先 **`add_file_like`** 成功，再 **`vm_write`** **`IoUringParams`**（**`sq_entries`/`cq_entries`** 等）；**`add_file_like`** 失败（如 **EMFILE**）不得改写用户 **`params`**（issue-145）；**`vm_write`** 失败则 **`close_file_like`** 回收 fd。成功写回前仍将 **`sq_off`/`cq_off`/`resv`/`sq_thread_*`** **清零**（无真实 ring 布局，issue-112），勿把用户输入的布局垃圾写回；真 io_uring 需 ring mmap 与提交队列。
 - `fsopen`：无 fs-context 实现时返回 **`NoSuchDevice`（ENODEV）**（或 EINVAL），勿发 `anon_inode:[dummy]`；`fspick`/`open_tree` 可 **`Unsupported`**。`memfd_secret` 在用户态常以两参探测（与 `memfd_create` 同形）时，可 **`sys_memfd_create` 复用** 以获得真实 memfd 路径。已移除 **`sys_dummy_fd`** 分配假 fd 的路径。

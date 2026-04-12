@@ -73,6 +73,10 @@ pub fn sys_clock_gettime(clock_id: __kernel_clockid_t, ts: *mut timespec) -> AxR
             return Err(AxError::InvalidInput);
         }
     };
+    // Linux `clock_gettime(2)`: `tp` must be writable; NULL → EFAULT.
+    if ts.is_null() {
+        return Err(AxError::BadAddress);
+    }
     ts.vm_write(timespec::from_time_value(now))?;
     Ok(0)
 }
