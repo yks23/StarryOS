@@ -211,7 +211,18 @@ pub fn sys_linkat(
         resolve_flags |= AT_SYMLINK_NOFOLLOW;
     }
 
+    // Linux do_linkat: fdget(olddfd/newdfd) before copy_from_user(oldname/newname) where applicable.
+    // Skip olddfd directory check when old_path is NULL + AT_EMPTY_PATH (fd may be a regular file).
+    if old_dirfd != AT_FDCWD && !old_path.is_null() {
+        let _ = Directory::from_fd(old_dirfd)?;
+    }
+
     let old_path = old_path.nullable().map(vm_load_string).transpose()?;
+
+    if new_dirfd != AT_FDCWD {
+        let _ = Directory::from_fd(new_dirfd)?;
+    }
+
     let new_path = vm_load_string(new_path)?;
     debug!(
         "sys_linkat <= old_dirfd: {old_dirfd}, old_path: {old_path:?}, new_dirfd: {new_dirfd}, \
