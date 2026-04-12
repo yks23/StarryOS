@@ -1,0 +1,27 @@
+{
+  "id": "issue-267",
+  "title": "msync：`addr` 未校验页对齐，Linux 在地址未对齐时返回 EINVAL",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_msync` 在 `align_up_4k(length)` 与区间检查前增加 `VirtAddr::from(addr).is_aligned_4k()`，未对齐 → `InvalidInput`（EINVAL），与 Linux/POSIX 一致。",
+  "files_changed": ["kernel/src/syscall/mm/mmap.rs"],
+  "description": "**`kernel/src/syscall/mm/mmap.rs`** **`sys_msync`**（约 **457–483** 行）在 **`length != 0`**、**`MS_ASYNC`/`MS_SYNC` 互斥**、**`flags` 合法** 之后，用 **`VirtAddr::from(addr)`** 与 **`align_up_4k(length)`** 构造范围，仅调用 **`aspace.contains_range`**、**`can_access_range`**，**未** 检查 **`addr`** 是否 **4K 页对齐**。\n\n**`kernel/src/mm/aspace/mod.rs`** 中 **`AddrSpace::validate_region`**（约 **73–80** 行）明确要求 **`start.is_aligned_4k()`** 且 **`is_aligned_4k(size)`**；**`msync`** 路径 **未** 复用该逻辑。\n\n**Linux `msync(2)`**：**`addr`** **必须** 与 **页大小对齐**（**POSIX/Linux** 均要求），否则 **`errno`** 为 **`EINVAL`**。\n\n**当前**：**`msync(0x1001, 0x1000, MS_SYNC)`** 一类调用在 **Starry** 可能 **仍** **进入** **`msync_file_mappings`** 或与 **Linux** **`EINVAL`** **分叉**。\n\n**建议**：在 **`sys_msync`** 入口增加 **`VirtAddr::from(addr).is_aligned_4k()`**（及对 **`length`** 是否与 **`mmap`**/**Linux** 一致的对齐策略），**不对齐** → **`AxError::InvalidInput`**；或 **`validate_region`** 等价封装供 **`msync`/`munmap`** 等共用（注意 **`munmap`** 现有逻辑是否也需对齐）。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["msync"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/mm/mmap.rs:457-483"],
+    "related_files": ["kernel/src/mm/aspace/mod.rs:59-81"],
+    "key_insight": "msync 未页对齐校验，Linux EINVAL"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；用户态对已映射区调用 `msync(页内偏移地址, len, MS_SYNC)` 与 Linux 对照。",
+    "expected_output_contains": "",
+    "pass_criteria": "未对齐 addr → EINVAL，或与 Linux 文档化一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "`sys_msync` 开头 `if !VirtAddr::from(addr).is_aligned_4k() { return Err(InvalidInput); }`（及按需校验 length）。",
+  "references": ["man 2 msync", "kernel/src/syscall/mm/mmap.rs", "kernel/src/mm/aspace/mod.rs"]
+}
