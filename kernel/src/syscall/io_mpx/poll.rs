@@ -114,8 +114,10 @@ pub fn sys_ppoll(
     sigmask: UserConstPtr<SignalSet>,
     sigsetsize: usize,
 ) -> AxResult<isize> {
-    check_sigset_size(sigsetsize)?;
+    // Linux do_sys_ppoll: copy/validate `ufds` before `sigsetsize`/sigmask path (EFAULT on bad `fds`
+    // before EINVAL on bad `sigsetsize`; issue-334; io_mpx ordering theme with issue-333).
     let fds = fds.get_as_mut_slice(nfds.try_into().map_err(|_| AxError::InvalidInput)?)?;
+    check_sigset_size(sigsetsize)?;
     let timeout = if timeout.is_null() {
         None
     } else {
