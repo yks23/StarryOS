@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-378 resolved（**`lseek`**：**`SEEK_CUR`/`SEEK_END`** **本地** **`c_int`** **常量**；**`sys_lseek` `match`** **具名** **替代** **`1`/`2`**；**`fs/io.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-377 resolved（**`splice`**：**`len==0`** **→** **`Ok(0)`** **先于** **`has_pipe`** **/`EINVAL`**；**对齐** **`do_splice` `!len`**；**`fs/io.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-376 resolved（**`clone3`**：**`args==NULL`** **→** **`BadAddress`** **先于** **`size < MIN_CLONE_ARGS_SIZE`** **→** **`EINVAL`**；**`clone3.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-375 resolved（**`get_robust_list`**：**`head`/`size` `NULL`/`check_access`** **先于** **`get_task`** **（** **`EFAULT`** **先于** **`ESRCH`/`EPERM`** **）**；**`futex.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）

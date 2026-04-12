@@ -1,0 +1,32 @@
+{
+  "id": "issue-378",
+  "title": "`lseek(2)`：`sys_lseek` 对 `whence == SEEK_CUR`/`SEEK_END` 使用字面量 `1`/`2`，与同文件 `SEEK_SET`/`SEEK_DATA`/`SEEK_HOLE` 常量风格不一致",
+  "status": "resolved",
+  "created_at": "2026-04-13T18:00:00Z",
+  "resolved_at": "2026-04-13T19:00:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/fs/io.rs`** **`sys_lseek`** **（** **约** **127–146** **行** **）** **：** **文件** **顶部** **为** **`SEEK_SET`/`SEEK_DATA`/`SEEK_HOLE`** **定义** **了** **本地** **`c_int`** **常量** **（** **约** **46–49** **行** **）** **，** **`match whence`** **中** **对** **`SEEK_SET`** **使用** **`SEEK_SET`** **，** **对** **`SEEK_DATA`/`SEEK_HOLE`** **使用** **具名** **常量** **。** **但** **`SeekFrom::Current`/`End`** **分支** **仍** **写** **为** **字面量** **`1`** **与** **`2`** **（** **即** **隐含** **`SEEK_CUR`/`SEEK_END`** **）** **，** **未** **与** **`SEEK_SET`** **并列** **导出** **为** **命名** **常量** **。** **POSIX/Linux** **`SEEK_*`** **数值** **固定** **，** **当前** **行为** **正确** **；** **维护** **上** **易** **与** **Data/Hole** **分支** **混读** **，** **且** **若** **未来** **从** **`linux_raw_sys::general`** **统一** **引入** **`SEEK_CUR`/`SEEK_END`** **时** **易** **漏** **改** **。** **与** **issue-272** **`SEEK_SET`** **负** **`offset`** **语义** **正交** **。**\n\n**建议** **：** **在** **`SEEK_SET`** **旁** **增加** **`const SEEK_CUR: c_int = 1;`** **、** **`const SEEK_END: c_int = 2;`** **（** **或** **`use`** **`linux_raw_sys::general::{SEEK_CUR, SEEK_END}`** **若** **绑定** **暴露** **）** **，** **`match`** **中** **改用** **具名** **常量** **。**",
+  "category": "maintainability",
+  "affected_syscalls": ["lseek"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/io.rs:46-49", "kernel/src/syscall/fs/io.rs:127-146"],
+    "related_files": [],
+    "key_insight": "SEEK_CUR/END as raw 1/2 vs named SEEK_SET/DATA/HOLE constants"
+  },
+  "fix_summary": "**`io.rs`**：**`const SEEK_CUR`/`SEEK_END`**（**`c_int`** **0..4** **与** **`SEEK_SET`/`DATA`/`HOLE`** **并列**）；**`sys_lseek` `match`** **替换** **字面量** **`1`/`2`**。**issue-378**。**",
+  "files_changed": [
+    "kernel/src/syscall/fs/io.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-378.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；行为无变化预期，仅符号与可读性。",
+    "expected_output_contains": "",
+    "pass_criteria": "`match whence` 中 SEEK_CUR/SEEK_END 与 SEEK_SET 等一致使用具名常量或统一 uapi 导入。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `io.rs` 顶部补充 `SEEK_CUR`/`SEEK_END` 常量（或 `linux_raw_sys` 导入），并替换 `match` 中的 `1`/`2`。",
+  "references": ["man 2 lseek", "kernel/src/syscall/fs/io.rs"]
+}

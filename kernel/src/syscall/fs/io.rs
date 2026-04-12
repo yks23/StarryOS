@@ -43,8 +43,10 @@ const FALLOC_FL_KNOWN_MASK: u32 = FALLOC_FL_KEEP_SIZE
     | FALLOC_FL_UNSHARE_RANGE
     | FALLOC_FL_WRITE_ZEROES;
 
-/// `lseek(2)` / `llseek` — not always exposed next to `SEEK_SET` in all libc headers.
+/// `lseek(2)` / `llseek` — POSIX `SEEK_*` (`whence`); not always exposed next to `SEEK_SET` in all libc headers.
 const SEEK_SET: c_int = 0;
+const SEEK_CUR: c_int = 1;
+const SEEK_END: c_int = 2;
 const SEEK_DATA: c_int = 3;
 const SEEK_HOLE: c_int = 4;
 
@@ -138,8 +140,8 @@ pub fn sys_lseek(fd: c_int, offset: __kernel_off_t, whence: c_int) -> AxResult<i
     }
     let pos = match whence {
         SEEK_SET => SeekFrom::Start(offset as _),
-        1 => SeekFrom::Current(offset as _),
-        2 => SeekFrom::End(offset as _),
+        SEEK_CUR => SeekFrom::Current(offset as _),
+        SEEK_END => SeekFrom::End(offset as _),
         _ => return Err(AxError::InvalidInput),
     };
     let off = f.inner().seek(pos)?;
