@@ -27,14 +27,17 @@ pub enum CMsg {
     Rights { fds: Vec<Arc<dyn FileLike>> },
 }
 impl CMsg {
-    pub fn parse(hdr: &cmsghdr) -> AxResult<Self> {
+    /// Parse one ancillary message. `hdr` must be a **kernel snapshot** of the user `cmsghdr`
+    /// (see `sendmsg`); `cmsg_user_ptr` is the user address of that header so payload bytes are
+    /// read from the correct mapping (do not derive payload pointer from `hdr`'s stack address).
+    pub fn parse(hdr: &cmsghdr, cmsg_user_ptr: usize) -> AxResult<Self> {
         if hdr.cmsg_len < size_of::<cmsghdr>() {
             return Err(AxError::InvalidInput);
         }
 
-        let data =
-            UserConstPtr::<u8>::from((hdr as *const cmsghdr as usize) + size_of::<cmsghdr>())
-                .get_as_slice(hdr.cmsg_len - size_of::<cmsghdr>())?;
+        let payload_len = hdr.cmsg_len - size_of::<cmsghdr>();
+        let data = UserConstPtr::<u8>::from(cmsg_user_ptr + size_of::<cmsghdr>())
+            .get_as_slice(payload_len)?;
         match (hdr.cmsg_level as u32, hdr.cmsg_type as u32) {
             (SOL_SOCKET, SCM_RIGHTS) => {
                 if data.len() % size_of::<i32>() != 0 {

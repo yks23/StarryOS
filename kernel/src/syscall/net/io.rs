@@ -126,7 +126,9 @@ pub fn sys_sendmsg(fd: i32, msg: UserConstPtr<msghdr>, flags: u32) -> AxResult<i
             if hdr_end > ptr_end {
                 break;
             }
-            let hdr = UserConstPtr::<cmsghdr>::from(ptr).get_as_ref()?;
+            // Snapshot header in kernel: stepping and `CMsg::parse` use the same `cmsg_len`
+            // (Linux copies ancillary headers before parsing; avoids TOCTOU on user `cmsg_len`).
+            let hdr = *UserConstPtr::<cmsghdr>::from(ptr).get_as_ref()?;
             if hdr.cmsg_len < size_of::<cmsghdr>() {
                 return Err(AxError::InvalidInput);
             }
@@ -137,7 +139,7 @@ pub fn sys_sendmsg(fd: i32, msg: UserConstPtr<msghdr>, flags: u32) -> AxResult<i
             if next > ptr_end {
                 return Err(AxError::InvalidInput);
             }
-            cmsg.push(Box::new(CMsg::parse(hdr)?) as CMsgData);
+            cmsg.push(Box::new(CMsg::parse(&hdr, ptr)?) as CMsgData);
             ptr += step;
         }
     }
