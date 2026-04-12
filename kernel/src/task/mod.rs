@@ -279,6 +279,12 @@ pub struct ProcessData {
     /// Supplementary group IDs (`getgroups` / `setgroups`); excludes primary `rgid`.
     supplementary_gids: Mutex<Vec<u32>>,
 
+    /// Linux capability sets (`capget` / `capset`), version-3 lower 32 bits each.
+    /// Default all bits set to match prior stub behavior; `capset` can clear.
+    cap_effective: AtomicU32,
+    cap_permitted: AtomicU32,
+    cap_inheritable: AtomicU32,
+
     /// Process nice (`getpriority` / `setpriority`, range -20..=19 on Linux; default 0).
     nice: AtomicI32,
 }
@@ -327,6 +333,10 @@ impl ProcessData {
 
             supplementary_gids: Mutex::new(Vec::new()),
 
+            cap_effective: AtomicU32::new(u32::MAX),
+            cap_permitted: AtomicU32::new(u32::MAX),
+            cap_inheritable: AtomicU32::new(u32::MAX),
+
             nice: AtomicI32::new(0),
         })
     }
@@ -348,6 +358,13 @@ impl ProcessData {
 
         self.nice
             .store(parent.nice.load(Ordering::SeqCst), Ordering::SeqCst);
+
+        self.cap_effective
+            .store(parent.cap_effective.load(o), o);
+        self.cap_permitted
+            .store(parent.cap_permitted.load(o), o);
+        self.cap_inheritable
+            .store(parent.cap_inheritable.load(o), o);
     }
 
     #[inline]
@@ -493,5 +510,37 @@ impl ProcessData {
     /// Set the umask and return the old value.
     pub fn replace_umask(&self, umask: u32) -> u32 {
         self.umask.swap(umask, Ordering::SeqCst)
+    }
+
+    /// Returns `(effective, permitted, inheritable)` capability masks (lower 32 bits).
+    pub fn get_capabilities(&self) -> (u32, u32, u32) {
+        let o = Ordering::SeqCst;
+        (
+            self.cap_effective.load(o),
+            self.cap_permitted.load(o),
+            self.cap_inheritable.load(o),
+        )
+    }
+
+    /// Applies `capset(2)` data for this process. Enforces `effective`/`inheritable` ⊆ `permitted`.
+    /// Requires effective uid 0 or `CAP_SETPCAP` in the current effective set.
+    pub fn set_capabilities(&self, eff: u32, perm: u32, inh: u32) -> AxResult<()> {
+        const CAP_SETPCAP: u32 = 1 << 8;
+
+        if eff & !perm != 0 || inh & !perm != 0 {
+            return Err(AxError::InvalidInput);
+        }
+
+        let euid = self.euid.load(Ordering::SeqCst);
+        let cur_eff = self.cap_effective.load(Ordering::SeqCst);
+        if euid != 0 && (cur_eff & CAP_SETPCAP) == 0 {
+            return Err(AxError::PermissionDenied);
+        }
+
+        let o = Ordering::SeqCst;
+        self.cap_effective.store(eff, o);
+        self.cap_permitted.store(perm, o);
+        self.cap_inheritable.store(inh, o);
+        Ok(())
     }
 }

@@ -1,12 +1,18 @@
 {
   "id": "issue-021",
   "title": "capget reports all caps max; capset is no-op",
-  "status": "open",
+  "status": "resolved",
   "created_at": "2026-04-12T12:00:00Z",
+  "resolved_at": "2026-04-13T00:00:00Z",
   "severity": "medium",
   "description": "capget 写 u32::MAX；capset 校验 header 后直接 Ok(0)，不更新能力集，安全策略形同虚设。",
   "category": "syscall-stub",
   "affected_syscalls": ["capget", "capset"],
+  "fix_summary": "在 **`ProcessData`** 中增加 **`cap_effective` / `cap_permitted` / `cap_inheritable`**（**`AtomicU32`**，默认 **`u32::MAX`** 与旧桩一致）。**`fork`** 经 **`copy_credentials_from`** 继承。**`sys_capget`** 按 header 解析目标进程、限制为当前进程（**`Arc::ptr_eq`**），写回真实三域。**`sys_capset`** 从用户读 **`__user_cap_data_struct`**，校验 **`effective`/`inheritable` ⊆ `permitted`**；仅 **`euid==0`** 或当前 **`effective`** 含 **`CAP_SETPCAP`**（bit 8）时可改，否则 **`EPERM`**。",
+  "files_changed": [
+    "kernel/src/task/mod.rs",
+    "kernel/src/syscall/task/ctl.rs"
+  ],
   "source_context": {
     "primary_files": ["kernel/src/syscall/task/ctl.rs:27-47"],
     "related_files": [],
@@ -18,7 +24,7 @@
     "run_method": "运行 /bin/test_cap_stub；若 capset EPERM 则测试 PASS 跳过",
     "expected_output_contains": "SUMMARY",
     "pass_criteria": "capset 清零后 capget 全 0",
-    "last_result": "待运行"
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu 通过；QEMU 实跑待 rootfs"
   },
   "suggested_fix": "在进程结构存储 capability 集合并实现真实 capset。",
   "references": ["man 2 capget"]

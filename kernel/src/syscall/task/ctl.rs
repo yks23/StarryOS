@@ -1,3 +1,4 @@
+use alloc::sync::Arc;
 use core::ffi::c_char;
 
 use axerrno::{AxError, AxResult};
@@ -7,12 +8,12 @@ use starry_vm::{VmMutPtr, VmPtr, vm_write_slice};
 
 use crate::{
     mm::vm_load_string,
-    task::{AsThread, CRED_NO_CHANGE, get_process_data},
+    task::{AsThread, CRED_NO_CHANGE, ProcessData, get_process_data},
 };
 
 const CAPABILITY_VERSION_3: u32 = 0x20080522;
 
-fn validate_cap_header(header_ptr: *mut __user_cap_header_struct) -> AxResult<()> {
+fn read_cap_header(header_ptr: *mut __user_cap_header_struct) -> AxResult<__user_cap_header_struct> {
     // FIXME: AnyBitPattern
     let mut header = unsafe { header_ptr.vm_read_uninit()?.assume_init() };
     if header.version != CAPABILITY_VERSION_3 {
@@ -20,7 +21,25 @@ fn validate_cap_header(header_ptr: *mut __user_cap_header_struct) -> AxResult<()
         header_ptr.vm_write(header)?;
         return Err(AxError::InvalidInput);
     }
-    let _ = get_process_data(header.pid as u32)?;
+    Ok(header)
+}
+
+fn resolve_cap_target(header: &__user_cap_header_struct) -> AxResult<Arc<ProcessData>> {
+    let pid = if header.pid == 0 {
+        0u32
+    } else if header.pid > 0 {
+        header.pid as u32
+    } else {
+        return Err(AxError::InvalidInput);
+    };
+    get_process_data(pid)
+}
+
+fn ensure_same_process_for_cap(target: &Arc<ProcessData>) -> AxResult<()> {
+    let curr = current().as_thread().proc_data.clone();
+    if !Arc::ptr_eq(target, &curr) {
+        return Err(AxError::PermissionDenied);
+    }
     Ok(())
 }
 
@@ -28,22 +47,27 @@ pub fn sys_capget(
     header: *mut __user_cap_header_struct,
     data: *mut __user_cap_data_struct,
 ) -> AxResult<isize> {
-    validate_cap_header(header)?;
-
+    let header = read_cap_header(header)?;
+    let target = resolve_cap_target(&header)?;
+    ensure_same_process_for_cap(&target)?;
+    let (e, p, i) = target.get_capabilities();
     data.vm_write(__user_cap_data_struct {
-        effective: u32::MAX,
-        permitted: u32::MAX,
-        inheritable: u32::MAX,
+        effective: e,
+        permitted: p,
+        inheritable: i,
     })?;
     Ok(0)
 }
 
 pub fn sys_capset(
     header: *mut __user_cap_header_struct,
-    _data: *mut __user_cap_data_struct,
+    data: *mut __user_cap_data_struct,
 ) -> AxResult<isize> {
-    validate_cap_header(header)?;
-
+    let header = read_cap_header(header)?;
+    let target = resolve_cap_target(&header)?;
+    ensure_same_process_for_cap(&target)?;
+    let cap_data = unsafe { data.vm_read_uninit()?.assume_init() };
+    target.set_capabilities(cap_data.effective, cap_data.permitted, cap_data.inheritable)?;
     Ok(0)
 }
 
