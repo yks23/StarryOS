@@ -1,0 +1,27 @@
+{
+  "id": "issue-271",
+  "title": "mlock/mlock2：`addr` 未校验页对齐，Linux/POSIX 在地址未对齐时返回 EINVAL",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_mlock2`（`sys_mlock` 委托）在 `align_up_4k(length)` 与区间检查前增加 `VirtAddr::from(addr).is_aligned_4k()`，未对齐 → `InvalidInput`（EINVAL）。",
+  "files_changed": ["kernel/src/syscall/mm/mmap.rs"],
+  "description": "**`kernel/src/syscall/mm/mmap.rs`** **`sys_mlock`**/**`sys_mlock2`**（约 **503–524** 行）在 **`flags`/`length`** 校验后，将 **`length`** **`align_up_4k`**，以 **`VirtAddr::from(addr)`** 调用 **`contains_range`**/**`can_access_range`**，**未** 检查 **`addr`** 是否 **4K 页对齐**。\n\n**Linux `mlock(2)`/`mlock2(2)`** 与 **POSIX**：**`addr`** **必须** **为** **页大小整数倍**，否则 **`errno`** 为 **`EINVAL`**。\n\n**对照**：同仓库 **`sys_mincore`**（**`kernel/src/syscall/mm/mincore.rs`**）已对 **`addr`** 做 **`is_aligned(PAGE_SIZE_4K)`**；**`sys_msync`/`sys_munmap`/`sys_mprotect`/`sys_madvise`** 对齐问题见 **issue-267/268/270**。\n\n**建议**：在 **`sys_mlock2`** 入口（**`sys_mlock`** 经此）于 **`align_up_4k(length)`** 之前增加 **`if !VirtAddr::from(addr).is_aligned_4k() { return Err(InvalidInput); }`**，或抽取共用 **`require_page_aligned_addr`**。\n\n**注意**：**`length==0`** 当前 **`InvalidInput`**；**Linux** **`mlock`** **`len==0`** **行为** 以 **手册/内核** 为准，与 **`addr`** 对齐校验 **独立**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["mlock", "mlock2"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/mm/mmap.rs:503-524"],
+    "related_files": ["kernel/src/syscall/mm/mincore.rs:46-52"],
+    "key_insight": "mlock 缺页对齐，与 mincore/msync 不一致"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；未对齐 `addr` 调用 `mlock`/`mlock2` 与 Linux 对照。",
+    "expected_output_contains": "",
+    "pass_criteria": "未对齐 addr → EINVAL，或与 Linux 一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "与 `sys_msync` 相同：入口 `VirtAddr::from(addr).is_aligned_4k()`。",
+  "references": ["man 2 mlock", "man 2 mlock2", "kernel/src/syscall/mm/mmap.rs"]
+}

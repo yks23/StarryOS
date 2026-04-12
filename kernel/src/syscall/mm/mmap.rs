@@ -512,8 +512,12 @@ pub fn sys_mlock2(addr: usize, length: usize, flags: u32) -> AxResult<isize> {
     if length == 0 {
         return Err(AxError::InvalidInput);
     }
-    let length = align_up_4k(length);
     let start = VirtAddr::from(addr);
+    // Linux/POSIX: `addr` must be page-aligned (issue-271).
+    if !start.is_aligned_4k() {
+        return Err(AxError::InvalidInput);
+    }
+    let length = align_up_4k(length);
     let curr = current();
     let aspace = curr.as_thread().proc_data.aspace.read();
     if !aspace.contains_range(start, length)
