@@ -269,6 +269,11 @@ impl SocketAddrExt for SocketAddrEx {
     }
 
     fn family(&self) -> u16 {
-        AF_INET as u16
+        match self {
+            SocketAddrEx::Ip(ip) => ip.family(),
+            SocketAddrEx::Unix(unix) => unix.family(),
+            #[cfg(feature = "vsock")]
+            SocketAddrEx::Vsock(v) => v.family(),
+        }
     }
 }
