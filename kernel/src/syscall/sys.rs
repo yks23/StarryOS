@@ -452,7 +452,8 @@ pub fn sys_riscv_flush_icache(start: usize, end: usize, flags: usize) -> AxResul
             return Ok(0);
         }
         let len = end - start;
-        crate::mm::check_access(start, len).map_err(|_| AxError::InvalidInput)?;
+        // User range probe: align with `access_ok`/`EFAULT` (issue-385), not EINVAL.
+        crate::mm::check_access(start, len).map_err(|_| AxError::BadAddress)?;
     }
     // Linux: `flags==0` → `flush_icache_mm` (process-wide); `LOCAL` → `flush_icache_range`.
     // StarryOS: no `flush_icache_mm` walk / cross-hart IPI; `fence.i` serializes this hart's
