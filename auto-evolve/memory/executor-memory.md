@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-268 resolved（**`munmap`**：**`addr`** 须 **`is_aligned_4k()`**，否则 **`InvalidInput`（EINVAL）**；**`mmap.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-267 resolved（**`msync`**：**`addr`** 须 **`is_aligned_4k()`**，否则 **`InvalidInput`（EINVAL）**；**`mmap.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-266 resolved（**`sendto`/`sendmsg`**：**`SENDMSG_FLAGS_MASK`** 不再含 **`MSG_WAITALL`**/**`MSG_TRUNC`**（仅 **`recv`** 语义，**`send`** 与 Linux 一致 **`EINVAL`**）；**`net/io.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-265 resolved（**`mremap`**：派发 **`uctx.arg4()`** 为第五参 **`new_addr`**；**`MREMAP_FIXED`** 须 **`MREMAP_MAYMOVE`** + 页对齐 **`new_addr`**，**`AddrSpace::mremap_fixed`**（源/目的 **不相交**）搬迁；**`MREMAP_DONTUNMAP`** → **`OperationNotSupported`**；**`mmap.rs`/`mod.rs`/`aspace/mod.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -285,6 +286,7 @@
 | issue-265 | mremap 五参 + MREMAP_FIXED 搬迁；DONTUNMAP 未支持 | resolved | 2026-04-12 |
 | issue-266 | send 掩码剔除 MSG_WAITALL/TRUNC（recv-only） | resolved | 2026-04-12 |
 | issue-267 | msync addr 须页对齐 EINVAL | resolved | 2026-04-12 |
+| issue-268 | munmap addr 须页对齐 EINVAL | resolved | 2026-04-12 |
 | issue-219 | waitpid __WNOTHREAD → Unsupported | resolved | 2026-04-12 |
 | issue-225 | fallocate FALLOC_FL 掩码 + 非零 EOPNOTSUPP | resolved | 2026-04-12 |
 | issue-227 | shmat 无效 shmid 不 unwrap（EINVAL） | resolved | 2026-04-12 |
@@ -451,7 +453,7 @@
 - timerfd：`TimerFd` 实现 `FileLike` + `Pollable`；到期逻辑在 `process_expirations` 中根据时钟纳秒与 `next_deadline_nanos` 比较；通过 `axtask::register_timer_callback`（首次创建时注册）在每次内核 timer tick 中扫描弱引用列表并 `wake` `PollSet`；创建 fd 用 `add_file_like`（与 eventfd2 相同），勿对 `Arc<TimerFd>` 误用 `add_to_fd_table(self)`。**`timerfd_settime`**：**`new_value.is_null()` → `InvalidInput`**。**`timerfd_gettime`**：**`curr_value.is_null()` → `BadAddress`**（Linux **EFAULT**），在 **`from_fd`** 之后、**`gettime`/`vm_write`** 之前校验，避免先算定时器再因用户指针失败。
 - **`mmap(2)` `flags`**：先 **`flags & !ALLOWED_MAP_FLAGS`**（**`MAP_TYPE|MAP_FIXED|MAP_ANONYMOUS|…|MAP_DROPPABLE|(MAP_HUGE_MASK<<MAP_HUGE_SHIFT)`** 等 uapi 位），非零 → **`InvalidInput`**；**`MmapFlags::from_bits(flags)`**，**`None`** 时 **`MAP_SHARED_VALIDATE` 类型 → `OperationNotSupported`**，否则 **`InvalidInput`**；勿在未知/非法组合上 **`from_bits_truncate`**。合法 **`MAP_HUGE_*`** 等须在 **`MmapFlags`** 中声明以便 **`from_bits`** 成功。
 - **`mmap(2)` `MAP_ANONYMOUS`/`fd`**：与 Linux 2.6.12+ 一致，**`MAP_ANONYMOUS`** 时 **`fd` 被忽略**（匿名路径不 **`File::from_fd`**），**`offset` 须为 0**；无 **`MAP_ANONYMOUS`** 时 **`fd <= 0`** → **`InvalidInput`**（issue-264）。
-- **`mprotect(2)`**：**`length == 0`** → **`InvalidInput`**（**EINVAL**），与 **`sys_mmap`** 对零长度一致（issue-229）。**`munmap(2)`**：**`length == 0`** → **`InvalidInput`**（**EINVAL**）（issue-234）。
+- **`mprotect(2)`**：**`length == 0`** → **`InvalidInput`**（**EINVAL**），与 **`sys_mmap`** 对零长度一致（issue-229）。**`munmap(2)`**：**`length == 0`** → **`InvalidInput`**（**EINVAL**）（issue-234）；**`addr`** 须 **4K 页对齐**，否则 **`EINVAL`**（issue-268）。
 - **`brk(2)`**：非零 **`addr`** 须 **4K 页对齐**（**`VirtAddr::is_aligned(PAGE_SIZE_4K)`**），否则 **`InvalidInput`（EINVAL）**；成功路径 **`set_heap_top`/`return`** 均为对齐地址（issue-253；**`USER_HEAP_BASE`/`heap_limit`** 等仍见 issue-089）。
 - **`openat(2)`/`open(2)`**（**`fs/fd_ops.rs`**）：**`validate_open_flags`** 先于 **`flags_to_options`**；若 **`O_PATH`**，**`flags`** 须为 Linux **`O_PATH_FLAGS`**（**`O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC|O_PATH`**）子集，否则 **`InvalidInput`（EINVAL）**（**`fs/open.c` `build_open_flags`**，issue-259；含 **`O_PATH|O_CREAT`** 等）。
 - **`pipe2`**：**`flags`** 仅允许 **`O_CLOEXEC`/`O_NONBLOCK`**（**`PipeFlags`**）；用 **`from_bits(...).ok_or(InvalidInput)`**，勿 **`from_bits_truncate`**（与 **`eventfd2`/`epoll_create1`** 一致）。**`add_to_fd_table`** 成功后若 **`fds.vm_write`** 失败（**EFAULT** 等），须 **`close_file_like`** 已安装的读/写 **fd**，勿留孤儿表项（issue-148）；第二端分配失败时仍应关闭已装读端，勿对 **`close_file_like`** **`unwrap`**。

@@ -307,10 +307,14 @@ pub fn sys_munmap(addr: usize, length: usize) -> AxResult<isize> {
     if length == 0 {
         return Err(AxError::InvalidInput);
     }
+    let start_addr = VirtAddr::from(addr);
+    // Linux/POSIX: `addr` must be page-aligned (issue-268).
+    if !start_addr.is_aligned_4k() {
+        return Err(AxError::InvalidInput);
+    }
     let curr = current();
     let mut aspace = curr.as_thread().proc_data.aspace.write();
     let length = align_up_4k(length);
-    let start_addr = VirtAddr::from(addr);
     aspace.unmap(start_addr, length)?;
     Ok(0)
 }
