@@ -182,7 +182,8 @@ impl CloneArgs {
 
         let tid = new_task.id().as_u64() as Pid;
         if flags.contains(CloneFlags::PARENT_SETTID) && parent_tid != 0 {
-            (parent_tid as *mut Pid).vm_write(tid).ok();
+            // Before fork/ProcessData/spawn: align with CLONE_PIDFD and Linux (EFAULT → syscall fails).
+            (parent_tid as *mut Pid).vm_write(tid)?;
         }
 
         let new_proc_data = if flags.contains(CloneFlags::THREAD) {

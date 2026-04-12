@@ -1,0 +1,30 @@
+{
+  "id": "issue-094",
+  "title": "clone do_clone 对 CLONE_PARENT_SETTID 的 parent_tid vm_write 使用 .ok() 吞错，无效用户指针仍返回子 tid",
+  "status": "resolved",
+  "created_at": "2026-04-13T16:00:00Z",
+  "resolved_at": "2026-04-13T17:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`CloneArgs::do_clone`**：**`CLONE_PARENT_SETTID`** 时对 **`parent_tid`**的 **`vm_write(tid)`** 由 **`.ok()`** 改为 **`?`**，与 **`CLONE_PIDFD`** 一致；写入失败在 **`fork`/`ProcessData`/`spawn_task`** 之前返回，**`new_task`** 丢弃，不暴露子 **tid**。",
+  "files_changed": ["kernel/src/syscall/task/clone.rs"],
+  "category": "syscall-semantic",
+  "affected_syscalls": ["clone", "clone3"],
+  "source_context": {
+    "primary_files": [
+      "kernel/src/syscall/task/clone.rs:184-186",
+      "kernel/src/syscall/task/clone.rs:268-277"
+    ],
+    "related_files": [],
+    "key_insight": "`PARENT_SETTID`：`vm_write(...).ok()`；`PIDFD`：失败则 `Err`"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "**`clone(..., CLONE_PARENT_SETTID, ..., parent_tid=无效地址)`**；Linux 期望失败 **`EFAULT`**；Starry 若仍返回 **子 tid** 则记偏差。",
+    "expected_output_contains": "",
+    "pass_criteria": "**`vm_write(parent_tid)`** **`?`** 传播错误，或在失败路径撤销已创建子任务；与 **Linux** 一致。",
+    "last_result": "2026-04-13：**`vm_write` `?`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** PASS"
+  },
+  "suggested_fix": "将 **`.ok()`** 改为 **`?`**（并在失败时 **回收/不 spawn** 子任务，若已在 **`spawn_task` 之前`则勿提交任务**）；与 **`PIDFD`**分支对齐。",
+  "references": ["man 2 clone", "Linux kernel copy_thread"]
+}
