@@ -157,8 +157,10 @@ pub fn sys_getsockopt(
         val.cast().get_as_mut()
     }
 
-    let socket = Socket::from_fd(fd)?;
+    // Linux `do_getsockopt` often touches `optlen` before `sockfd_lookup`; bad `optlen` → EFAULT
+    // before `EBADF` on bad `fd` (issue-347; supersedes from_fd-first ordering, issue-122).
     let optlen = optlen.get_as_mut()?;
+    let socket = Socket::from_fd(fd)?;
     // `TCP_INFO`: validate length first; only set `*optlen` after a successful fill (issue-167).
     // Pass a real `&mut [u8]` so axnet cannot return Ok(0) without writing `struct tcp_info` (issue-191).
     if level == PROTO_TCP && optname == TCP_INFO {
