@@ -520,15 +520,20 @@ def count_open_issues() -> int:
 # ── Scheduler ─────────────────────────────────────────────────
 
 class Scheduler:
-    """调度内核：executor 按优先级连续修复，debugger 按需唤醒。
+    """调度内核：executor 按优先级连续修复，debugger 按需唤醒/自动转 executor。
 
     调度策略：
     - executor: 手动消息优先 → 否则自动取最高优先级 open issue
-    - debugger: 手动消息优先 → open issue < 10 时唤醒 → 每 30 分钟唤醒
+    - debugger:
+      - 手动消息优先
+      - open issue < DEBUGGER_MIN_ISSUES 时唤醒发现新问题
+      - open issue > DEBUGGER_AS_EXECUTOR_THRESHOLD 时转为 executor 帮忙消化
+      - 每 30 分钟定期唤醒
     """
 
-    DEBUGGER_MIN_ISSUES = 10
-    DEBUGGER_WAKE_INTERVAL = 30 * 60  # 30 分钟
+    DEBUGGER_MIN_ISSUES = 10        # 低于此数唤醒 debugger 找新问题
+    DEBUGGER_AS_EXECUTOR_THRESHOLD = 30  # 高于此数 debugger 转为 executor
+    DEBUGGER_WAKE_INTERVAL = 30 * 60     # 30 分钟定期唤醒
 
     def __init__(self):
         self.kernel_state = KernelState.load()
@@ -581,41 +586,88 @@ class Scheduler:
         )
         self.executor.send_message(prompt)
 
-    def _should_wake_debugger(self) -> bool:
-        """判断是否需要唤醒 debugger。"""
-        # 有手动消息，必须唤醒
+    def _debugger_mode(self) -> str:
+        """决定 debugger 当前应该做什么。返回 'sleep'/'debug'/'execute'/'manual'。"""
         if queue_size("debugger") > 0:
-            return True
+            return "manual"
 
         open_count = count_open_issues()
 
-        # open issue 数量 < 10，唤醒
-        if open_count < self.DEBUGGER_MIN_ISSUES:
-            print(f"[kernel] debugger: open issues = {open_count} < {self.DEBUGGER_MIN_ISSUES}，唤醒")
-            return True
+        # 积压太多 → 转为 executor 帮忙消化
+        if open_count > self.DEBUGGER_AS_EXECUTOR_THRESHOLD:
+            return "execute"
 
-        # 每 30 分钟唤醒一次
+        # 问题太少 → 找新问题
+        if open_count < self.DEBUGGER_MIN_ISSUES:
+            return "debug"
+
+        # 定期唤醒
         now = time.time()
         if now - self._last_debugger_wake >= self.DEBUGGER_WAKE_INTERVAL:
-            print(f"[kernel] debugger: 30 分钟定期唤醒")
+            # 积压中等 → 优先帮忙消化
+            if open_count >= self.DEBUGGER_MIN_ISSUES:
+                return "execute"
+            return "debug"
+
+        return "sleep"
+
+    def _run_debugger_as_executor(self):
+        """debugger 临时转为 executor，帮忙消化积压 issue。"""
+        issue = pick_next_issue()
+        if not issue:
+            return
+
+        issue_id = issue.get("id", "?")
+        severity = issue.get("severity", "?")
+        title = issue.get("title", "?")[:60]
+        open_count = count_open_issues()
+        print(f"[kernel] debugger→executor: 积压 {open_count} 个，帮忙处理 {issue_id} [{severity}]")
+
+        issue_content = json.dumps(issue, indent=2, ensure_ascii=False)
+        prompt = (
+            f"当前问题池积压较多（{open_count} 个 open），你暂时切换为 executor 角色帮忙消化。\n\n"
+            f"请处理以下问题（优先级: {severity}）：\n\n"
+            f"```json\n{issue_content}\n```\n\n"
+            f"请按照 auto-evolve/skill-executor 中定义的工作流程执行：\n"
+            f"1. 将 status 改为 in-progress\n"
+            f"2. 阅读 source_context 定位代码\n"
+            f"3. 实施修复（修改 kernel/src/ 下的源码）\n"
+            f"4. 运行 cargo clippy --target riscv64gc-unknown-none-elf -F qemu\n"
+            f"5. 编译通过后将 status 改为 resolved\n"
+            f"6. git add && git commit 你的改动"
+        )
+        self.debugger.send_message(prompt)
+        self._last_debugger_wake = time.time()
+
+    def _run_debugger_once(self):
+        """debugger 单次执行：手动消息 > 转 executor > 自动巡检。"""
+        mode = self._debugger_mode()
+
+        if mode == "sleep":
+            return False  # 不执行，返回 False 让循环 sleep
+
+        if mode == "manual":
+            msg = dequeue_message("debugger")
+            if msg:
+                prio_label = "手动" if msg["type"] in ("manual", "file_drop") else "自动"
+                print(f"[kernel] debugger: 处理{prio_label}消息")
+                self.debugger.send_message(msg["content"])
+                self._last_debugger_wake = time.time()
+            return True
+
+        if mode == "execute":
+            self._run_debugger_as_executor()
+            return True
+
+        if mode == "debug":
+            open_count = count_open_issues()
+            print(f"[kernel] debugger: open={open_count}，自动巡检...")
+            prompt = generate_auto_prompt_debugger()
+            self.debugger.send_message(prompt)
+            self._last_debugger_wake = time.time()
             return True
 
         return False
-
-    def _run_debugger_once(self):
-        """debugger 单次执行：手动消息 > 自动巡检。"""
-        msg = dequeue_message("debugger")
-        if msg:
-            prio_label = "手动" if msg["type"] in ("manual", "file_drop") else "自动"
-            print(f"[kernel] debugger: 处理{prio_label}消息")
-            self.debugger.send_message(msg["content"])
-            self._last_debugger_wake = time.time()
-            return
-
-        prompt = generate_auto_prompt_debugger()
-        print(f"[kernel] debugger: 自动巡检...")
-        self.debugger.send_message(prompt)
-        self._last_debugger_wake = time.time()
 
     def _executor_loop(self):
         """executor 工作线程：连续取 issue 并修复。"""
@@ -635,22 +687,25 @@ class Scheduler:
             time.sleep(3)
 
     def _debugger_loop(self):
-        """debugger 工作线程：按需唤醒。"""
-        print("[kernel] debugger 工作线程启动（按需唤醒模式）")
+        """debugger 工作线程：按需唤醒，积压时自动转 executor。"""
+        print("[kernel] debugger 工作线程启动（自适应模式）")
         while self._running:
             if self.debugger.is_stopped():
                 time.sleep(5)
                 continue
-            if self._should_wake_debugger():
-                try:
-                    self._run_debugger_once()
-                except Exception as e:
-                    print(f"[kernel] debugger error: {e}")
-                    self.debugger.state.error = str(e)[:200]
-                    time.sleep(10)
+            try:
+                did_work = self._run_debugger_once()
+            except Exception as e:
+                print(f"[kernel] debugger error: {e}")
+                self.debugger.state.error = str(e)[:200]
+                did_work = False
+                time.sleep(10)
+            if did_work:
                 self.kernel_state.issue_stats = scan_issues()
                 self.kernel_state.save()
-            time.sleep(10)
+                time.sleep(3)
+            else:
+                time.sleep(10)
 
     def start_agent(self, name: str):
         agent = self.debugger if name == "debugger" else self.executor
@@ -669,6 +724,7 @@ class Scheduler:
         print("[kernel] Auto-Evolve 调度内核启动")
         print(f"[kernel] Issue pool: {count_open_issues()} open issues")
         print(f"[kernel] Debugger 唤醒阈值: open < {self.DEBUGGER_MIN_ISSUES}")
+        print(f"[kernel] Debugger 转 executor: open > {self.DEBUGGER_AS_EXECUTOR_THRESHOLD}")
         print(f"[kernel] Debugger 定期唤醒: 每 {self.DEBUGGER_WAKE_INTERVAL//60} 分钟")
         print("[kernel] ═══════════════════════════════════════")
 
@@ -693,12 +749,15 @@ class Scheduler:
             self.kernel_state.save()
 
             stats = self.kernel_state.issue_stats
+            dbg_mode = self._debugger_mode()
+            pool_total = sum(1 for _ in ISSUE_POOL.glob("issue-*.json"))
+            archive_total = sum(1 for _ in ISSUE_ARCHIVE.glob("issue-*.json"))
             print(
                 f"[kernel] tick | "
-                f"executor={self.executor.state.status.value} "
-                f"debugger={self.debugger.state.status.value} | "
-                f"open={stats['open']} progress={stats['in_progress']} "
-                f"resolved={stats['resolved']} verified={stats['verified']}"
+                f"exe={self.executor.state.status.value} "
+                f"dbg={self.debugger.state.status.value}({dbg_mode}) | "
+                f"pool={pool_total} archive={archive_total} | "
+                f"open={stats['open']} resolved={stats['resolved']} verified={stats['verified']}"
             )
             time.sleep(self._tick_interval)
 
