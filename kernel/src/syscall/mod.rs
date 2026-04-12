@@ -232,6 +232,10 @@ pub fn handle_syscall(uctx: &mut UserContext) {
             uctx.arg3().into(),
             uctx.arg4() as _,
         ),
+        // Legacy `select(2)` syscall number exists only on ABIs where `syscalls::Sysno` defines
+        // `Sysno::select` (x86/x86_64). Linux riscv64/aarch64 have no separate `__NR_select`; libc
+        // implements `select(2)` via `__NR_pselect6` → `sys_pselect6` below (issue-295; symmetric
+        // to poll/ppoll, issue-291).
         #[cfg(target_arch = "x86_64")]
         Sysno::select => sys_select(
             uctx.arg0() as _,

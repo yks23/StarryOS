@@ -1,0 +1,27 @@
+{
+  "id": "issue-295",
+  "title": "`select(2)` 仅 `x86_64` 分发；`io_mpx` 中 `poll` 已有 issue-291 ABI 注释，`select` 前缺少对称说明",
+  "status": "resolved",
+  "created_at": "2026-04-12T18:05:00Z",
+  "severity": "low",
+  "fix_summary": "在 `mod.rs` 中 `Sysno::select` 的 `#[cfg(target_arch = \"x86_64\")]` 块前增加与 `poll` 段同风格的注释：riscv64/aarch64 无独立 `__NR_select` 与 `Sysno::select`，libc `select(2)` 经 `pselect6` → `sys_pselect6`。`executor-memory` 的 poll/ppoll 条目中补充 `select`/`pselect6` 与 issue-295。",
+  "files_changed": ["kernel/src/syscall/mod.rs", "auto-evolve/memory/executor-memory.md"],
+  "description": "**`kernel/src/syscall/mod.rs`** **`io_mpx`** **段** **`Sysno::select`** **置于** **`#[cfg(target_arch = \"x86_64\")]`** **（** **约** **235–242** **行** **）** **，** **与** **`Sysno::poll`** **（** **issue-291** **）** **同属** **legacy** **多** **路** **复用** **号** **。** **`syscalls`** **crate** **在** **`riscv64`** **等** **ABI** **上** **通常** **无** **独立** **`Sysno::select`** **；** **glibc/musl** **`select(2)`** **经** **`__NR_pselect6`** **→** **已** **实现** **的** **`sys_pselect6`** **（** **同** **段** **243–250** **行** **）** **。**\n\n**`poll`** **分支** **上方** **已有** **多** **行** **注释** **解释** **为何** **仅** **x86** **暴露** **`Sysno::poll`** **及** **riscv** **走** **`ppoll`** **；** **`select`** **分支** **前** **无** **同级** **说明** **，** **读者** **易** **误判** **为** **遗漏** **实现** **而非** **ABI** **与** **libc** **路由** **差异** **。**\n\n**建议**：在 **`Sysno::select`** **`#[cfg]`** **块** **前** **补充** **与** **`poll`** **对称** **的** **简短** **注释** **（** **或** **在** **`executor-memory`** **中** **单列** **`select`/`pselect6`** **）** **，** **明确** **非** **x86** **目标** **上** **`select(2)`** **用户态** **入口** **与** **`pselect6`** **的** **关系** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["select", "pselect6"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/mod.rs:222-250"],
+    "related_files": ["kernel/src/syscall/io_mpx/select.rs", "auto-evolve/memory/executor-memory.md"],
+    "key_insight": "select 仅 x86_64 注册；riscv 无 Sysno::select，libc 走 pselect6；poll 有注释而 select 无"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 `syscalls` riscv64 `Sysno` 与 Linux `__NR_*`。",
+    "expected_output_contains": "",
+    "pass_criteria": "`mod.rs` 或 executor 文档对 `select`/`pselect6` 与 x86-only `Sysno::select` 的关系有明确说明，或经评审认为无需补充。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `Sysno::select` 分支前增加与 `poll` 段风格一致的 ABI/路由说明注释。",
+  "references": ["man 2 select", "man 2 pselect", "kernel/src/syscall/mod.rs", "issue-291"]
+}

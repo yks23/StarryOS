@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-295 resolved（**`select(2)`**：**`mod.rs`** **`Sysno::select`** 仅 **x86_64** 注释与 **issue-291** **`poll`** 对称；**riscv64** **`libc`** **`select`** 走 **`pselect6`** → **`sys_pselect6`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-294 resolved（**`sendto`**：**`send_impl`** **`Socket::from_fd`** 先于 **`SENDMSG_FLAGS_MASK`**，与 **`sys_sendmsg`**/**`__sys_sendto`** **sockfd_lookup** 顺序一致；**`net/io.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-293 resolved（**`recvfrom`/`recvmsg`**：**`Socket::from_fd`** 先于 **`validate_recvmsg_flags`**，非法 **fd** 时 **EBADF** 先于 **flags** 的 **EINVAL/EOPNOTSUPP**；**`net/io.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-292 resolved（**`renameat`** **riscv64**：**`syscalls::Sysno`** **无** **`renameat`**（musl 仅 **`__NR_renameat2`**）；**`renameat(2)`** 由 **libc** 走 **`renameat2(..., 0)`** → **`sys_renameat2`**；**`mod.rs`** **`cfg(not(riscv64))`** 注释说明；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -318,6 +319,7 @@
 | issue-271 | mlock/mlock2 addr 须页对齐 EINVAL | resolved | 2026-04-12 |
 | issue-272 | lseek SEEK_SET 负 offset EINVAL | resolved | 2026-04-12 |
 | issue-273 | prlimit64 跨 pid 权限 EPERM | resolved | 2026-04-12 |
+| issue-295 | select x86-only 注释对称 poll；riscv libc 走 pselect6 | resolved | 2026-04-13 |
 | issue-294 | sendto send_impl from_fd 先于 SENDMSG_FLAGS_MASK | resolved | 2026-04-13 |
 | issue-293 | recvfrom/recvmsg from_fd 先于 validate_recvmsg_flags | resolved | 2026-04-13 |
 | issue-292 | renameat riscv64：无 Sysno::renameat，libc 走 renameat2 | resolved | 2026-04-13 |
@@ -509,7 +511,7 @@
 - **`brk(2)`**：非零 **`addr`** 须 **4K 页对齐**（**`VirtAddr::is_aligned(PAGE_SIZE_4K)`**），否则 **`InvalidInput`（EINVAL）**；成功路径 **`set_heap_top`/`return`** 均为对齐地址（issue-253；**`USER_HEAP_BASE`/`heap_limit`** 等仍见 issue-089）。
 - **`openat(2)`/`open(2)`**（**`fs/fd_ops.rs`**）：**`validate_open_flags`** 先于 **`flags_to_options`**；若 **`O_PATH`**，**`flags`** 须为 Linux **`O_PATH_FLAGS`**（**`O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC|O_PATH`**）子集，否则 **`InvalidInput`（EINVAL）**（**`fs/open.c` `build_open_flags`**，issue-259；含 **`O_PATH|O_CREAT`** 等）。
 - **`pipe2`**：**`flags`** 仅允许 **`O_CLOEXEC`/`O_NONBLOCK`**（**`PipeFlags`**）；用 **`from_bits(...).ok_or(InvalidInput)`**，勿 **`from_bits_truncate`**（与 **`eventfd2`/`epoll_create1`** 一致）。**`UserPtr::from(fds).get_as_mut()`** 先于 **`Pipe::new`**/**`add_to_fd_table`**（issue-289，与 issue-286 **`socketpair`** 输出顺序同类）。**`add_to_fd_table`** 成功后若 **`fds.vm_write`** 失败（**EFAULT** 等），须 **`close_file_like`** 已安装的读/写 **fd**，勿留孤儿表项（issue-148）；第二端分配失败时仍应关闭已装读端，勿对 **`close_file_like`** **`unwrap`**。
-- **`poll(2)`/`ppoll(2)`**：**`pollfd.fd < 0`** 的条目被忽略，**`revents`** 须置 **0**（勿保留陈旧位）。Linux **riscv64**/**aarch64** 等 **无** 独立 **`poll`** 系统调用号（**`syscalls::Sysno`** **亦无** **`poll`**；**`mod.rs`** 中 **`Sysno::poll`** 仅 **`#[cfg(target_arch = "x86_64")]`**）；**glibc**/**musl** 的 **`poll(2)`** 走 **`__NR_ppoll`** → **`sys_ppoll`**；与上游 **Linux** 一致（issue-291）。**`select`**/**`pipe`** 等 legacy 号同理 **仅** **x86** **ABI** 有 **`Sysno::select`/`Sysno::pipe`**。
+- **`poll(2)`/`ppoll(2)`**：**`pollfd.fd < 0`** 的条目被忽略，**`revents`** 须置 **0**（勿保留陈旧位）。Linux **riscv64**/**aarch64** 等 **无** 独立 **`poll`** 系统调用号（**`syscalls::Sysno`** **亦无** **`poll`**；**`mod.rs`** 中 **`Sysno::poll`** 仅 **`#[cfg(target_arch = "x86_64")]`**）；**glibc**/**musl** 的 **`poll(2)`** 走 **`__NR_ppoll`** → **`sys_ppoll`**（issue-291）。**`select(2)`/`pselect6(2)`**：**riscv64** 等 **无** **`Sysno::select`**；**`libc`** **`select(2)`** 走 **`__NR_pselect6`** → **`sys_pselect6`**；**`mod.rs`** **`Sysno::select`** 仅 **x86_64**（**`io_mpx`** 段注释与 **poll** 对称，issue-295）。**`pipe(2)`** legacy 号同理 **仅** **x86** **ABI** 有 **`Sysno::pipe`**。
 - **`epoll_ctl(2)`**：**`fd == epfd` → `InvalidInput`**（**EINVAL**），勿将 epoll 实例加入自身（issue-240）。**`EPOLL_CTL_ADD`/`MOD`** 须先 **`get_file_like(fd)`**（无效目标 fd → **EBADF**），再 **`event.get_as_ref`**/**`parse_event`**（**EFAULT**/**EINVAL** 类），与 Linux 顺序一致（issue-144）；**`events`** 未知位等仍按 issue-078 **`KNOWN_EPOLL_EVENTS_MASK`**。**`EPOLL_CTL_DEL`** 不读 **`event`**。
 - **`readlink(2)`/`readlinkat(2)`**：**`bufsiz`**（**`size`**）须 **> 0**，否则 **`InvalidInput`**（**EINVAL**），须在 **`vm_load_string(path)`** 与 **`resolve_no_follow`/`read_link`** 之前校验（issue-140）；勿对 **`size==0`** 返回成功 **0**。**`size>0`** 时 **`buf == NULL`** → **`BadAddress`（EFAULT）**，先于 **`vm_load_string`**（issue-282；与 issue-281 同类）。
 - **`linkat(2)`**：**`flags`** 仅允许 **`AT_EMPTY_PATH | AT_SYMLINK_FOLLOW`**（与 Linux **`VALID_LINKAT_FLAGS`**），否则 **`EINVAL`**；上述与 **`resolve_flags`**（**`FOLLOW` ↔ `NOFOLLOW`** 映射）须在 **`vm_load_string(old_path/new_path)`** 之前完成（issue-137，非法 flags 先 **EINVAL**）。**`resolve_at`** 仍用 **`AT_SYMLINK_NOFOLLOW`** 表示「不 follow」。
