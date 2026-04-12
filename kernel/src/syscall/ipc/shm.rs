@@ -1,6 +1,6 @@
 use alloc::{collections::btree_map::BTreeMap, sync::Arc, vec::Vec};
 
-use axerrno::{AxError, AxResult};
+use axerrno::{AxError, AxResult, LinuxError};
 use axhal::{
     paging::{MappingFlags, PageSize},
     time::monotonic_time_nanos,
@@ -11,7 +11,7 @@ use linux_raw_sys::{ctypes::c_ushort, general::*};
 use memory_addr::{MemoryAddr, PAGE_SIZE_4K, VirtAddr, VirtAddrRange};
 use starry_process::Pid;
 
-use super::{IPC_PRIVATE, IPC_RMID, IPC_SET, IPC_STAT, IpcPerm, next_ipc_id};
+use super::{IPC_CREAT, IPC_EXCL, IPC_PRIVATE, IPC_RMID, IPC_SET, IPC_STAT, IpcPerm, next_ipc_id};
 use crate::{
     mm::{AddrSpace, Backend, SharedPages, UserPtr},
     task::AsThread,
@@ -406,13 +406,22 @@ pub fn sys_shmget(key: i32, size: usize, shmflg: usize) -> AxResult<isize> {
     let mut shm_manager = SHM_MANAGER.lock();
 
     if key != IPC_PRIVATE {
-        // This process has already created a shared memory segment with the same key
         if let Some(shmid) = shm_manager.get_shmid_by_key(key) {
             let shm_inner = shm_manager
                 .get_inner_by_shmid(shmid)
                 .ok_or(AxError::InvalidInput)?;
             let mut shm_inner = shm_inner.lock();
+            // Linux `ipcget`: existing id + `IPC_CREAT | IPC_EXCL` → `EEXIST` (same theme as `msgget`,
+            // issue-382).
+            let flg = shmflg as i32;
+            if (flg & IPC_EXCL) != 0 && (flg & IPC_CREAT) != 0 {
+                return Err(AxError::from(LinuxError::EEXIST));
+            }
             return shm_inner.try_update(size, mapping_flags, cur_pid);
+        }
+        // No segment for this key: require `IPC_CREAT`, else `ENOENT` (Linux `shmget`, issue-382).
+        if (shmflg as i32 & IPC_CREAT) == 0 {
+            return Err(AxError::from(LinuxError::ENOENT));
         }
     }
 

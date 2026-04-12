@@ -1,0 +1,27 @@
+{
+  "id": "issue-382",
+  "title": "`shmget(2)`：非 `IPC_PRIVATE` 且 key 无对应段时未检查 `IPC_CREAT`，直接新建段；与 Linux `ENOENT`（未指定创建）不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T20:30:00Z",
+  "severity": "medium",
+  "description": "`kernel/src/syscall/ipc/shm.rs` `sys_shmget`（约 393–438 行）：当 `key != IPC_PRIVATE` 且 `get_shmid_by_key` 未命中时直接走新建 `shm_inner` 分支，未判断 `(shmflg & IPC_CREAT) == 0`。Linux `shmget(2)`：无段且未指定 `IPC_CREAT` → `ENOENT`。同仓库 `msgget`（`ipc/msg.rs` 约 510–512 行）已在创建前显式 `IPC_CREAT` 门控。\n\n连带：未实现 `IPC_EXCL` 与 `IPC_CREAT` 组合时段已存在的 `EEXIST`，可与 `msgget` 对称逻辑对照。\n\n建议：在落入新建路径前若 `(shmflg & IPC_CREAT) == 0` 则 `ENOENT`（如 `AxError::from(LinuxError::ENOENT)`）；再按需补 `IPC_EXCL`/`EEXIST`。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["shmget"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/ipc/shm.rs:393-438"],
+    "related_files": ["kernel/src/syscall/ipc/msg.rs:495-531", "kernel/src/syscall/ipc/mod.rs"],
+    "key_insight": "非 `IPC_PRIVATE` 且无段：`!IPC_CREAT` → `ENOENT`；已存在 key且 `IPC_CREAT|IPC_EXCL` → `EEXIST`"
+  },
+  "fix_summary": "`sys_shmget`：`key != IPC_PRIVATE` 且 key 无段时若无 `IPC_CREAT` 返回 `ENOENT`；命中已存在段且 `IPC_CREAT|IPC_EXCL` 时返回 `EEXIST`（与 `msgget`/Linux `ipcget` 对齐，issue-382）。",
+  "files_changed": ["kernel/src/syscall/ipc/shm.rs"],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：`shmget(non_private_key, size, perms_without_IPC_CREAT)` 在无段时对照 Linux `ENOENT`。",
+    "expected_output_contains": "",
+    "pass_criteria": "无段且无 `IPC_CREAT` 时返回与 Linux一致的 `ENOENT`，或文档化差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（仓库既有警告）"
+  },
+  "suggested_fix": "在 `sys_shmget` 新建分支前加入 `(shmflg & IPC_CREAT) == 0` → `ENOENT`；按需补齐 `IPC_EXCL`/`EEXIST`。",
+  "references": ["man 2 shmget", "kernel/src/syscall/ipc/shm.rs", "kernel/src/syscall/ipc/msg.rs", "issue-381", "issue-310"]
+}

@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-382 resolved（**`shmget`**：**非** **`IPC_PRIVATE`** **无** **段** **且** **`!IPC_CREAT`** **→** **`ENOENT`**；**已** **存在** **key** **且** **`IPC_CREAT|IPC_EXCL`** **→** **`EEXIST`**；**`shm.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-381 resolved（**`shmget`**：**已存在** **key** **允许** **`size==0`**；**`try_update`** **仅** **`size > shm_segsz`** **→** **`EINVAL`**；**新建** **路径** **仍** **`size==0`** **→** **`EINVAL`**；**`shm.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-380 resolved（**`sched_setscheduler`**：**`param==NULL`** **→** **`BadAddress`（EFAULT）**；**`sched_resolve_task`（ESRCH）** **先于** **NULL** **检查**；**`schedule.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-14：issue-379 resolved（**`splice`**：**pipe** **`fd`** **+ 非空** **`off_in`/`off_out`** **→** **`InvalidInput`（EINVAL）** **先于** **`File::from_fd`/`BrokenPipe`**；**`io.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
