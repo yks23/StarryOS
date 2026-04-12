@@ -1,4 +1,4 @@
-use axerrno::AxResult;
+use axerrno::{AxError, AxResult};
 use axhal::paging::{MappingFlags, PageSize};
 use axtask::current;
 use memory_addr::{VirtAddr, align_up_4k};
@@ -19,8 +19,13 @@ pub fn sys_brk(addr: usize) -> AxResult<isize> {
         return Ok(current_top as isize);
     }
 
-    if addr < USER_HEAP_BASE || addr > heap_limit {
-        return Ok(current_top as isize);
+    // Linux rejects invalid program-break requests with errno (e.g. EINVAL/ENOMEM);
+    // do not return Ok(old_break) which looks like success to naive callers.
+    if addr < USER_HEAP_BASE {
+        return Err(AxError::InvalidInput);
+    }
+    if addr > heap_limit {
+        return Err(AxError::NoMemory);
     }
 
     let new_top_aligned = align_up_4k(addr);
@@ -34,34 +39,22 @@ pub fn sys_brk(addr: usize) -> AxResult<isize> {
         let expand_start = VirtAddr::from(initial_heap_end.max(current_top_aligned));
         let expand_size = new_top_aligned.saturating_sub(expand_start.as_usize());
 
-        if expand_size > 0
-            && proc_data
-                .aspace
-                .write()
-                .map(
-                    expand_start,
-                    expand_size,
-                    MappingFlags::READ | MappingFlags::WRITE | MappingFlags::USER,
-                    false,
-                    Backend::new_alloc(expand_start, PageSize::Size4K),
-                )
-                .is_err()
-        {
-            return Ok(current_top as isize);
+        if expand_size > 0 {
+            proc_data.aspace.write().map(
+                expand_start,
+                expand_size,
+                MappingFlags::READ | MappingFlags::WRITE | MappingFlags::USER,
+                false,
+                Backend::new_alloc(expand_start, PageSize::Size4K),
+            )?;
         }
     } else if new_top_aligned < current_top_aligned {
         // Only unmap pages beyond the initially mapped heap region.
         let shrink_start = VirtAddr::from(initial_heap_end.max(new_top_aligned));
         let shrink_size = current_top_aligned.saturating_sub(shrink_start.as_usize());
 
-        if shrink_size > 0
-            && proc_data
-                .aspace
-                .write()
-                .unmap(shrink_start, shrink_size)
-                .is_err()
-        {
-            return Ok(current_top as isize);
+        if shrink_size > 0 {
+            proc_data.aspace.write().unmap(shrink_start, shrink_size)?;
         }
     }
 
