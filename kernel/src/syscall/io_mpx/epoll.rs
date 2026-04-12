@@ -106,10 +106,13 @@ fn do_epoll_wait(
     sigmask: UserConstPtr<SignalSet>,
     sigsetsize: usize,
 ) -> AxResult<isize> {
-    check_sigset_size(sigsetsize)?;
     debug!("sys_epoll_wait <= epfd: {epfd}, maxevents: {maxevents}, timeout: {timeout:?}");
 
+    // Linux `do_epoll_pwait`: `fget(epfd)` (EBADF) before `copy_sigset_from_user` / `sigsetsize`
+    // validation (EINVAL); matches issue-334 `ppoll` / issue-338 `rt_sigtimedwait` ordering theme.
     let epoll = Epoll::from_fd(epfd)?;
+
+    check_sigset_size(sigsetsize)?;
 
     if maxevents <= 0 {
         return Err(AxError::InvalidInput);
