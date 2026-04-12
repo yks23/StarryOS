@@ -24,7 +24,8 @@ pub struct Clone3Args {
     pub cgroup: u64,
 }
 
-const MIN_CLONE_ARGS_SIZE: usize = core::mem::size_of::<u64>() * 8;
+/// Linux `clone3(2)`: `args_size` must be ≥ `sizeof(struct clone_args)` (uapi `clone_args` is 11×`u64`).
+const MIN_CLONE_ARGS_SIZE: usize = mem::size_of::<Clone3Args>();
 
 impl TryFrom<Clone3Args> for CloneArgs {
     type Error = axerrno::AxError;

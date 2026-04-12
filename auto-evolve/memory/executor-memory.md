@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-238 resolved（**`clone3`**：**`MIN_CLONE_ARGS_SIZE = size_of::<Clone3Args>()`**（**88**），过短 **`size` → EINVAL**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-237 resolved（**`io_uring_setup`**：**`params==NULL` → `BadAddress`（EFAULT）**，非 **EINVAL**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-236 resolved（**`splice`**：**`fd_in == fd_out` → `InvalidInput`（EINVAL）**，与 Linux/**issue-235** 对称；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-235 resolved（**`sendfile`**：**`in_fd == out_fd` → `InvalidInput`（EINVAL）**，与 Linux 一致；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -225,6 +226,7 @@
 | issue-235 | sendfile in_fd==out_fd → EINVAL | resolved | 2026-04-12 |
 | issue-236 | splice fd_in==fd_out → EINVAL | resolved | 2026-04-12 |
 | issue-237 | io_uring_setup params NULL → BadAddress | resolved | 2026-04-12 |
+| issue-238 | clone3 args_size 下限 sizeof(Clone3Args) | resolved | 2026-04-12 |
 | issue-219 | waitpid __WNOTHREAD → Unsupported | resolved | 2026-04-12 |
 | issue-225 | fallocate FALLOC_FL 掩码 + 非零 EOPNOTSUPP | resolved | 2026-04-12 |
 | issue-227 | shmat 无效 shmid 不 unwrap（EINVAL） | resolved | 2026-04-12 |
@@ -429,6 +431,7 @@
 - `fcntl` 记录锁（`F_SETLK`/`F_SETLKW`/`F_GETLK` 及 `F_OFD_*` 同路径）：**`sys_fcntl`** 须先 **`get_file_like(fd)`** 再读/写用户 **`flock64`**（**`EBADF`** 先于 **EFAULT**，issue-136）；**`record_lock`** 内仍会 **`inode_key`/`get_file_like`**。仅对普通 **`File`** fd；**`flock64`** 区间经 SEEK_SET/CUR/END 解析；写锁与读/写冲突、读锁仅与写冲突；同进程占位前先对重叠区间解锁再插入；**`F_SETLK`** 冲突返回 **`WouldBlock`**；**`close_file_like`** 调用 **`record_lock::release_fd`** 清除该 fd 登记锁。
 - 作业控制：`ProcessData::jobctl` 记录 `stop_sig` / `stop_wait_pending` / `continued_wait_pending`；`SignalOSAction::Stop` 不再 `do_exit`，而是唤醒父 `child_exit_event` 并在内核循环中等待 `SIGCONT`（循环内调用 `check_signals` 以处理入队信号）；`Continue` 清除停止并在曾停止时置 `continued_wait_pending`；`waitpid` 对 `WUNTRACED` 或 **options==0** 写 `(sig<<8)|0x7f`，对 `WCONTINUED` 或 **options==0** 写 `0xffff`。
 - **`waitpid(2)`/`wait4(2)`**：**`options`** 须为 **`WaitOptions::from_bits`** 可解析的 **`WNOHANG|WUNTRACED|WEXITED|WCONTINUED|WNOWAIT|__WNOTHREAD|__WALL|__WCLONE`** 子集（与 **`linux_raw_sys::general`** 一致），否则 **`InvalidInput`（EINVAL）**；勿 **`from_bits_truncate`**。**`__WNOTHREAD`** 置位 → **`Unsupported`（ENOSYS）**，因未记录 fork/clone 父线程（issue-219）。**`WALL`/`WCLONE`** 与 **`ProcessData::is_clone_child`** 过滤（issue-087）。
+- **`clone3(2)`**：**`args_size`** 须 **≥ `sizeof(Clone3Args)`**（**`MIN_CLONE_ARGS_SIZE = mem::size_of::<Clone3Args>()`**，与 uapi **`struct clone_args`** 同步，issue-238）；**`size` 大于结构体**时仅读前 **`sizeof`** 字节（**issue-096**）。
 - 地址空间并发：`ProcessData.aspace` 为 `Arc<RwLock<AddrSpace>>`；修改页表（缺页 populate、mmap 等）用 `write()`；纯查询（如 mincore、`mremap` 查 VMA、futex 地址解析、部分 `can_access_range`）用 `read()`。缺页仍会写锁直至支持按页或 per-VMA 锁。
 - 进程凭证：`ProcessData` 中 **`ruid/euid/suid`** 与 **`rgid/egid/sgid`**（`AtomicU32`）；`getuid`→`ruid`，`geteuid`→`euid`，gid 同理；**`get_resuid`/`get_resgid`** 供 **`getresuid(2)`/`getresgid(2)`** 一次读三组；`setuid`/`setgid` 为三 ID 同步设置；`setresuid`/`setresgid` 中 **`CRED_NO_CHANGE`=`u32::MAX`** 表示不改；**`euid==0`（或 `egid==0`）** 视为特权可任意改，否则新值须属于当前 `{r,e,s}` 之一否则 **`PermissionDenied`**。`clone` 新建进程在 `ProcessData::new` 后 **`copy_credentials_from`** 父 `ProcessData`。完整 Linux 能力集与 setfsuid 等仍未建模。
 - 补充组：**`supplementary_gids`**（`Mutex<Vec<u32>>`，上限 **`SUPP_GROUPS_MAX`**）；`getgroups` 仅列补充组不含主 `rgid`；`setgroups` 需 **`euid==0`**；`getgroups(0,…)` 返回个数。**`seccomp(2)`** 未实现时 **`Unsupported`（ENOSYS）**。**`prctl(PR_SET_SECCOMP)`**：**`arg2`>2**（非 **`SECCOMP_MODE_*`**）→ **`EINVAL`**；mode **0/1/2** 未实现 → **`Unsupported`**。**`prctl(PR_MCE_KILL)`**：**`arg2`** 须 **`CLEAR`/`SET`**；**`SET`** 时 **`arg3`**≤**`DEFAULT`**，否则 **`EINVAL`**；合法组合未实现 → **`Unsupported`**。

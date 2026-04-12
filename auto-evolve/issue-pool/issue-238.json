@@ -1,0 +1,27 @@
+{
+  "id": "issue-238",
+  "title": "clone3：`size` 下限为 64，小于 `Clone3Args`/Linux `struct clone_args`（88 字节）",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`MIN_CLONE_ARGS_SIZE`** 改为 **`mem::size_of::<Clone3Args>()`**（**88**，**11×u64**），**`size < sizeof` → `InvalidInput`**，与 Linux **`clone3(2)`**/**`struct clone_args`** 一致；**`size > sizeof`** 仍只读前 **`sizeof`** 字节。",
+  "files_changed": ["kernel/src/syscall/task/clone3.rs"],
+  "description": "**`kernel/src/syscall/task/clone3.rs`** **`sys_clone3`**（约 **71–98** 行）用 **`MIN_CLONE_ARGS_SIZE`**（**`size_of::<u64>() * 8` = 64**）作为 **`size`** 最小值，而 **`[[repr(C)] Clone3Args]`** 含 **11** 个 **`u64`** 字段（**`flags` … `cgroup`**），**`core::mem::size_of::<Clone3Args>() == 88`**。\n\n**Linux `clone3(2)`** / **`kernel_clone`**：用户 **`args_size`** 必须 **≥ `sizeof(struct clone_args)`**（当前 **uapi** 为 **88** 字节），否则 **`EINVAL`**。当前 **`64 ≤ size < 88`** 时**通过**校验，仅从用户拷贝 **`read_len = min(size, 88)`** 字节，**尾部字段**（**`set_tid`**/**`set_tid_size`**/**`cgroup`** 等）**被零填充**，与 **Linux** 拒绝「过短 **`size`**」的语义不一致。\n\n**建议**：**`if size < size_of::<Clone3Args>() { return Err(...); }`**（与结构体定义同步），或 **`MIN_CLONE_ARGS_SIZE = size_of::<Clone3Args>()`**；保留 **`size > sizeof`** 时仅读前 **`sizeof`** 字节的注释逻辑。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["clone3"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/clone3.rs:27-98"],
+    "related_files": ["kernel/src/syscall/task/clone.rs"],
+    "key_insight": "MIN_CLONE_ARGS_SIZE=64 与 11×u64 结构体不一致"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；`clone3(buf, 64)` 与 `sizeof(struct clone_args)`。",
+    "expected_output_contains": "",
+    "pass_criteria": "`size < 88`（或当前 `sizeof(Clone3Args)`）→ EINVAL，与 Linux 一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos：通过（exit 0）"
+  },
+  "suggested_fix": "`const MIN_CLONE_ARGS_SIZE: usize = core::mem::size_of::<Clone3Args>();`（或 `assert_eq!` 与 Linux uapi）。",
+  "references": ["man 2 clone3", "Linux struct clone_args"]
+}
