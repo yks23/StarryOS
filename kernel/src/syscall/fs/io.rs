@@ -20,6 +20,36 @@ const SPLICE_F_MASK: u32 = SPLICE_F_MOVE | SPLICE_F_NONBLOCK | SPLICE_F_MORE | S
 const COPY_FILE_RANGE_COMPRESS: u32 = 1 << 0;
 const COPY_FILE_RANGE_DEDUPE: u32 = 1 << 2;
 const COPY_FILE_RANGE_MASK: u32 = COPY_FILE_RANGE_COMPRESS | COPY_FILE_RANGE_DEDUPE;
+
+/// `lseek(2)` / `llseek` — not always exposed next to `SEEK_SET` in all libc headers.
+const SEEK_DATA: c_int = 3;
+const SEEK_HOLE: c_int = 4;
+
+/// Linux `SEEK_DATA` / `SEEK_HOLE` for a **dense** file (no tracked internal holes).
+///
+/// Starry does not yet expose per-file extent/hole maps (e.g. after `FALLOC_FL_PUNCH_HOLE`);
+/// we treat `[0, size)` as data and `[size, ∞)` as hole, matching Linux for non-sparse files.
+fn lseek_data_hole_dense(f: &File, offset: __kernel_off_t, seek_data: bool) -> AxResult<u64> {
+    let size = f.inner().location().metadata()?.size;
+    let off = offset;
+    if off < 0 {
+        return Err(AxError::InvalidInput);
+    }
+    let off_u = off as u64;
+    if seek_data {
+        if off_u < size {
+            Ok(off_u)
+        } else if off_u == size {
+            Err(LinuxError::ENXIO.into())
+        } else {
+            Err(AxError::InvalidInput)
+        }
+    } else if off_u < size {
+        Ok(size)
+    } else {
+        Ok(off_u)
+    }
+}
 use starry_vm::{VmMutPtr, VmPtr};
 
 use crate::{
@@ -73,13 +103,19 @@ pub fn sys_writev(fd: i32, iov: *const IoVec, iovcnt: usize) -> AxResult<isize> 
 
 pub fn sys_lseek(fd: c_int, offset: __kernel_off_t, whence: c_int) -> AxResult<isize> {
     debug!("sys_lseek <= {fd} {offset} {whence}");
+    let f = File::from_fd(fd)?;
+    if whence == SEEK_DATA || whence == SEEK_HOLE {
+        let pos = lseek_data_hole_dense(&f, offset, whence == SEEK_DATA)?;
+        let off = f.inner().seek(SeekFrom::Start(pos))?;
+        return Ok(off as _);
+    }
     let pos = match whence {
         0 => SeekFrom::Start(offset as _),
         1 => SeekFrom::Current(offset as _),
         2 => SeekFrom::End(offset as _),
         _ => return Err(AxError::InvalidInput),
     };
-    let off = File::from_fd(fd)?.inner().seek(pos)?;
+    let off = f.inner().seek(pos)?;
     Ok(off as _)
 }
 
