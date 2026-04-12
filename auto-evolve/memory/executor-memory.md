@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-140 resolved（**`readlink`**/**`readlinkat`**：**`bufsiz==0`** → **`InvalidInput`**（**EINVAL**），在 **`vm_load_string(path)`** 与 VFS 解析前；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-139 resolved（**`fchownat`**/**`fchmodat`**：**`VALID_FCHOWNAT_FLAGS`**/**`VALID_FCHMODAT_FLAGS`** 先于 **`vm_load_string(path)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-138 resolved（**`unlinkat`**/**`renameat2`**：**`flags`** / **`RENAME_*`** 校验先于 **`vm_load_string`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-137 resolved（**`linkat`**：**`VALID_LINKAT_FLAGS`** + **`resolve_flags`** 先于 **`vm_load_string`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -120,6 +121,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-140 | readlinkat bufsiz==0 → EINVAL | resolved | 2026-04-12 |
 | issue-139 | fchownat/fchmodat flags 先于 vm_load_string | resolved | 2026-04-12 |
 | issue-138 | unlinkat/renameat2 flags 先于路径 | resolved | 2026-04-12 |
 | issue-137 | linkat flags 先于 vm_load_string | resolved | 2026-04-12 |
@@ -265,6 +267,7 @@
 - **`mmap(2)` `flags`**：先 **`flags & !ALLOWED_MAP_FLAGS`**（**`MAP_TYPE|MAP_FIXED|MAP_ANONYMOUS|…|MAP_DROPPABLE|(MAP_HUGE_MASK<<MAP_HUGE_SHIFT)`** 等 uapi 位），非零 → **`InvalidInput`**；**`MmapFlags::from_bits(flags)`**，**`None`** 时 **`MAP_SHARED_VALIDATE` 类型 → `OperationNotSupported`**，否则 **`InvalidInput`**；勿在未知/非法组合上 **`from_bits_truncate`**。合法 **`MAP_HUGE_*`** 等须在 **`MmapFlags`** 中声明以便 **`from_bits`** 成功。
 - **`pipe2`**：**`flags`** 仅允许 **`O_CLOEXEC`/`O_NONBLOCK`**（**`PipeFlags`**）；用 **`from_bits(...).ok_or(InvalidInput)`**，勿 **`from_bits_truncate`**（与 **`eventfd2`/`epoll_create1`** 一致）。
 - **`poll(2)`/`ppoll(2)`**：**`pollfd.fd < 0`** 的条目被忽略，**`revents`** 须置 **0**（勿保留陈旧位）。
+- **`readlink(2)`/`readlinkat(2)`**：**`bufsiz`**（**`size`**）须 **> 0**，否则 **`InvalidInput`**（**EINVAL**），须在 **`vm_load_string(path)`** 与 **`resolve_no_follow`/`read_link`** 之前校验（issue-140）；勿对 **`size==0`** 返回成功 **0**。
 - **`linkat(2)`**：**`flags`** 仅允许 **`AT_EMPTY_PATH | AT_SYMLINK_FOLLOW`**（与 Linux **`VALID_LINKAT_FLAGS`**），否则 **`EINVAL`**；上述与 **`resolve_flags`**（**`FOLLOW` ↔ `NOFOLLOW`** 映射）须在 **`vm_load_string(old_path/new_path)`** 之前完成（issue-137，非法 flags 先 **EINVAL**）。**`resolve_at`** 仍用 **`AT_SYMLINK_NOFOLLOW`** 表示「不 follow」。
 - **`unlinkat(2)`**：**`flags`** 仅 **`0`** 或 **`AT_REMOVEDIR`**，须在 **`vm_load_string(path)`** 之前校验，否则 **`EINVAL`**（issue-138）；勿将未知位当作「删文件」分支。
 - **`fchmodat(2)`** / **`fchmod`**： **`flags`** 须为 Linux **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW`** 的子集（**`sys_fchmod`** 用 **`AT_EMPTY_PATH`**），否则 **`EINVAL`**；掩码须在 **`vm_load_string(path)`** 之前完成（issue-139，非法 flags 先 **EINVAL** 于 **EFAULT**）；勿未校验即传入 **`resolve_at`**。
@@ -347,6 +350,7 @@
 - issue-137：**`linkat`** 非法 **`flags`** + 坏 path指针，首错 **`EINVAL`**（先于 **EFAULT**）。
 - issue-138：**`unlinkat`**/**`renameat2`** 非法 **`flags`** + 坏 path，首错 **`EINVAL`**（先于 **EFAULT**）。
 - issue-139：**`fchownat`**/**`fchmodat`** 非法 **`flags`** + 坏 **`path`**，首错 **`EINVAL`**（先于 **EFAULT**）；可扩展现有 **`/bin/test_fchownat_invalid_flags`**/**`test_fchmodat_invalid_flags`** 思路加坏指针组合。
+- issue-140：**`readlinkat`** 对已存在 symlink，**`bufsiz==0`** → **`EINVAL`**，勿 **`Ok(0)`**；可与坏 **`path`** 组合验证 **EINVAL** 先于 **ENOENT/EFAULT**。
 - issue-053：请跑 **`/bin/test_memfd_create_invalid_flags`**（**`memfd_create(..., 0x80000000)`** → **`EINVAL`**）。
 - issue-052：请跑 **`/bin/test_fchownat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`uid`/`gid`** 不变）。
 - issue-051：请跑 **`/bin/test_utimensat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`mtime`** 不变）。

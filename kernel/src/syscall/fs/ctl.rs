@@ -325,6 +325,11 @@ pub fn sys_readlinkat(
     buf: *mut u8,
     size: usize,
 ) -> AxResult<isize> {
+    // Linux readlinkat(2): bufsiz must be positive; EINVAL before path resolution.
+    if size == 0 {
+        return Err(AxError::InvalidInput);
+    }
+
     let path = vm_load_string(path)?;
 
     debug!("sys_readlinkat <= dirfd: {dirfd}, path: {path:?}");

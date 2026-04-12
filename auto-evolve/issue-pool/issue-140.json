@@ -1,0 +1,27 @@
+{
+  "id": "issue-140",
+  "title": "readlink/readlinkat 允许 bufsiz==0并成功返回 0，偏离 Linux/POSIX 的 EINVAL",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "在 `sys_readlinkat` 开头于 `vm_load_string(path)` 之前校验 `size != 0`，`bufsiz==0` 返回 `InvalidInput`（EINVAL），对齐 Linux/POSIX，避免误成功 `Ok(0)`；`sys_readlink` 经 `readlinkat` 自动覆盖。",
+  "files_changed": ["kernel/src/syscall/fs/ctl.rs"],
+  "description": "**`sys_readlinkat`**（`kernel/src/syscall/fs/ctl.rs`）在 **`vm_load_string(path)`**、**`resolve_no_follow`**、**`read_link`** 之后执行 **`let read = size.min(link.len())`**，再 **`vm_write_slice(buf, &link.as_bytes()[..read])`**。当 **`size == 0`** 时 **`read == 0`**，空切片写入后 **`Ok(0)`**。**Linux `readlinkat`(2)**：**`bufsiz` 须为正**，否则 **`EINVAL`**（与「非符号链接」等并列）。**Starry** 会在 **`size==0`** 时仍完成路径解析与 **`read_link`**，且返回成功 **0**，与 **Linux** 及常见 **POSIX** 语义不一致；亦与 **`man 2 readlink`** 对 **`bufsiz`** 的约束不符。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["readlink", "readlinkat"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/ctl.rs:322-338"],
+    "related_files": [],
+    "key_insight": "未在解析链接前拒绝 size==0"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "对已存在符号链接调用 **`readlinkat(..., buf, 0)`**；对比 **Linux** **`EINVAL`** 与 **Starry** 返回值/错误。",
+    "expected_output_contains": "",
+    "pass_criteria": "**`size==0`** → **`InvalidInput`**（或等价 **`EINVAL`**），或文档化与 **Linux** 的差异。",
+    "last_result": "`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` 通过（2026-04-12）。"
+  },
+  "suggested_fix": "在 **`sys_readlinkat`** 开头（路径解析前）若 **`size == 0`** 则 **`return Err(AxError::InvalidInput)`**（或映射为 **Linux** **`EINVAL`** 的 errno）。",
+  "references": ["man 2 readlinkat", "man 2 readlink", "POSIX readlink"]
+}
