@@ -253,6 +253,11 @@ impl TransportOps for DgramTransport {
             if count < data.len() {
                 warn!("UDP message truncated: {} -> {} bytes", data.len(), count);
             }
+            if let Some(p) = options.msg_trunc {
+                unsafe {
+                    *p = count < data.len();
+                }
+            }
 
             if let Some(from) = options.from.as_mut() {
                 **from = SocketAddrEx::Unix(sender);

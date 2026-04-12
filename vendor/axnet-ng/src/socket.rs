@@ -141,12 +141,17 @@ pub struct RecvOptions<'a> {
     pub flags: RecvFlags,
     /// If set, ancillary control messages are appended here.
     pub cmsg: Option<&'a mut Vec<CMsgData>>,
+    /// If set, implementations set through the pointer when the datagram was larger than the
+    /// supplied buffer (Linux `MSG_TRUNC` on `recvmsg`). Raw pointer so `recv_poller` `FnMut`
+    /// closures can update without moving `&mut bool` captures.
+    pub msg_trunc: Option<*mut bool>,
 }
 impl Debug for RecvOptions<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RecvOptions")
             .field("from", &self.from)
             .field("flags", &self.flags)
+            .field("msg_trunc", &self.msg_trunc.is_some())
             .finish()
     }
 }

@@ -6,9 +6,10 @@ use axerrno::{AxError, AxResult};
 use axio::prelude::*;
 use axnet::{CMsgData, RecvFlags, RecvOptions, SendFlags, SendOptions, SocketAddrEx, SocketOps};
 use linux_raw_sys::net::{
-    MSG_CONFIRM, MSG_CMSG_CLOEXEC, MSG_DONTROUTE, MSG_DONTWAIT, MSG_EOR, MSG_ERRQUEUE,
-    MSG_FIN, MSG_MORE, MSG_NOSIGNAL, MSG_OOB, MSG_PEEK, MSG_PROBE, MSG_RST, MSG_SYN,
-    MSG_TRUNC, MSG_WAITALL, SCM_RIGHTS, SOL_SOCKET, cmsghdr, msghdr, sockaddr, socklen_t,
+    MSG_CONFIRM, MSG_CMSG_CLOEXEC, MSG_CTRUNC, MSG_DONTROUTE, MSG_DONTWAIT, MSG_EOR,
+    MSG_ERRQUEUE, MSG_FIN, MSG_MORE, MSG_NOSIGNAL, MSG_OOB, MSG_PEEK, MSG_PROBE, MSG_RST,
+    MSG_SYN, MSG_TRUNC, MSG_WAITALL, SCM_RIGHTS, SOL_SOCKET, cmsghdr, msghdr, sockaddr,
+    socklen_t,
 };
 
 /// Linux `recvmsg(2)` / `recvfrom(2)` 第三参 flags：仅允许内核接受的 `MSG_*` 组合（与 Linux
@@ -166,12 +167,14 @@ fn recv_on_socket(
     addr: UserPtr<sockaddr>,
     addrlen: UserPtr<socklen_t>,
     cmsg_builder: Option<CMsgBuilder>,
+    msg_flags_out: Option<&mut u32>,
 ) -> AxResult<isize> {
     debug!("sys_recv <= fd: {fd}, flags: {flags}");
 
     let recv_flags = RecvFlags::from_bits_truncate(flags);
 
     let mut cmsg = Vec::new();
+    let mut msg_trunc = false;
 
     let mut remote_addr =
         (!addr.is_null()).then(|| SocketAddrEx::Ip((Ipv4Addr::UNSPECIFIED, 0).into()));
@@ -181,6 +184,9 @@ fn recv_on_socket(
             from: remote_addr.as_mut(),
             flags: recv_flags,
             cmsg: Some(&mut cmsg),
+            msg_trunc: msg_flags_out
+                .is_some()
+                .then_some(core::ptr::addr_of_mut!(msg_trunc)),
         },
     )?;
 
@@ -188,10 +194,13 @@ fn recv_on_socket(
         remote_addr.write_to_user(addr, addrlen.get_as_mut()?)?;
     }
 
+    let mut cmsg_trunc = false;
     if let Some(mut builder) = cmsg_builder {
-        for cmsg in cmsg {
+        let mut iter = cmsg.into_iter();
+        while let Some(cmsg) = iter.next() {
             let Ok(cmsg) = cmsg.downcast::<CMsg>() else {
                 warn!("received unexpected cmsg");
+                cmsg_trunc = true;
                 continue;
             };
 
@@ -207,9 +216,26 @@ fn recv_on_socket(
                 })?,
             };
             if !pushed {
+                cmsg_trunc = true;
                 break;
             }
         }
+        if iter.next().is_some() {
+            cmsg_trunc = true;
+        }
+    } else if !cmsg.is_empty() {
+        cmsg_trunc = true;
+    }
+
+    if let Some(out) = msg_flags_out {
+        let mut mf = 0u32;
+        if msg_trunc {
+            mf |= MSG_TRUNC;
+        }
+        if cmsg_trunc {
+            mf |= MSG_CTRUNC;
+        }
+        *out = mf;
     }
 
     debug!("sys_recv => fd: {fd}, recv: {recv}");
@@ -226,7 +252,7 @@ fn recv_impl(
 ) -> AxResult<isize> {
     validate_recvmsg_flags(flags)?;
     let socket = Socket::from_fd(fd)?;
-    recv_on_socket(&socket, fd, dst, flags, addr, addrlen, cmsg_builder)
+    recv_on_socket(&socket, fd, dst, flags, addr, addrlen, cmsg_builder, None)
 }
 
 pub fn sys_recvfrom(
@@ -258,5 +284,6 @@ pub fn sys_recvmsg(fd: i32, msg: UserPtr<msghdr>, flags: u32) -> AxResult<isize>
                 &mut msg.msg_controllen,
             )
         }),
+        Some(&mut msg.msg_flags),
     )
 }

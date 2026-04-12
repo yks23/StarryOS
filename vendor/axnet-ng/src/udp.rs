@@ -269,6 +269,11 @@ impl SocketOps for UdpSocket {
                             if read < src.len() {
                                 warn!("UDP message truncated: {} -> {} bytes", src.len(), read);
                             }
+                            if let Some(p) = options.msg_trunc {
+                                unsafe {
+                                    *p = read < src.len();
+                                }
+                            }
 
                             Ok(if options.flags.contains(RecvFlags::TRUNCATE) {
                                 src.len()
