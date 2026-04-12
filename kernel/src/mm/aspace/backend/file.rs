@@ -86,6 +86,22 @@ impl FileBackendInner {
 #[derive(Clone)]
 pub struct FileBackend(Arc<FileBackendInner>);
 impl FileBackend {
+    /// Same file mapping at a new virtual start (for `mremap` relocation / regrow).
+    pub(crate) fn remap_at(
+        &self,
+        new_start: VirtAddr,
+        proc_aspace: &Arc<RwLock<AddrSpace>>,
+    ) -> Backend {
+        let offset = self.0.offset_page as usize * PAGE_SIZE_4K;
+        Backend::new_file(
+            new_start,
+            self.0.cache.clone(),
+            self.0.flags,
+            offset,
+            proc_aspace,
+        )
+    }
+
     fn check_flags(&self, flags: MappingFlags) -> AxResult {
         let mut required_flags = FileFlags::empty();
         if flags.contains(MappingFlags::READ) {
@@ -103,6 +119,10 @@ impl FileBackend {
 
     pub fn futex_handle(&self) -> Weak<()> {
         Arc::downgrade(&self.0.futex_handle)
+    }
+
+    pub(crate) fn shared_page_cache(&self) -> CachedFile {
+        self.0.cache.clone()
     }
 }
 

@@ -1,10 +1,11 @@
-use alloc::sync::Arc;
+use alloc::{sync::Arc, vec::Vec};
 use core::{fmt, ops::DerefMut};
 
 use axerrno::{AxError, AxResult, ax_bail};
+use axfs::CachedFile;
 use axhal::{
     mem::phys_to_virt,
-    paging::{MappingFlags, PageTable},
+    paging::{MappingFlags, PageSize, PageTable},
     trap::PageFaultFlags,
 };
 use memory_addr::{
@@ -288,6 +289,137 @@ impl AddrSpace {
         Ok(())
     }
 
+    fn clone_backend_for_mremap(
+        backend: &Backend,
+        new_start: VirtAddr,
+        proc_aspace: &Arc<RwLock<AddrSpace>>,
+    ) -> AxResult<Backend> {
+        Ok(match backend {
+            Backend::File(f) => f.remap_at(new_start, proc_aspace),
+            Backend::Cow(c) => Backend::Cow(c.with_virt_start(new_start)),
+            Backend::Shared(_) | Backend::Linear(_) => return Err(AxError::BadState),
+        })
+    }
+
+    fn vm_range_unmapped(&self, start: VirtAddr, len: usize) -> AxResult<bool> {
+        if len == 0 {
+            return Ok(true);
+        }
+        let end = start + len;
+        let mut p = start;
+        while p < end {
+            if self.find_area(p).is_some() {
+                return Ok(false);
+            }
+            p += PAGE_SIZE_4K;
+        }
+        Ok(true)
+    }
+
+    fn mremap_move(
+        &mut self,
+        proc_aspace: &Arc<RwLock<AddrSpace>>,
+        addr: VirtAddr,
+        old_size: usize,
+        new_size: usize,
+        mmap_flags: MappingFlags,
+    ) -> AxResult<VirtAddr> {
+        let mut buf = alloc::vec![0u8; old_size];
+        self.read(addr, &mut buf)?;
+        let align = PageSize::Size4K as usize;
+        let new_addr = self
+            .find_free_area(
+                self.base(),
+                new_size,
+                VirtAddrRange::new(self.base(), self.end()),
+                align,
+            )
+            .ok_or(AxError::NoMemory)?;
+        let new_backend = {
+            let area = self.areas.find(addr).ok_or(AxError::BadState)?;
+            Self::clone_backend_for_mremap(area.backend(), new_addr, proc_aspace)?
+        };
+        self.areas.unmap(addr, old_size, &mut self.pt)?;
+        self.areas.map(
+            MemoryArea::new(new_addr, new_size, mmap_flags, new_backend),
+            &mut self.pt,
+            false,
+        )?;
+        self.write(new_addr, &buf)?;
+        Ok(new_addr)
+    }
+
+    /// Linux-style `mremap`: resize a single VMA at `addr` that currently has size `old_size`.
+    ///
+    /// Requires `addr` to be the VMA start and `old_size` to match the VMA length.
+    /// `maymove` is set when `MREMAP_MAYMOVE` is passed from userspace.
+    pub fn mremap(
+        &mut self,
+        proc_aspace: &Arc<RwLock<AddrSpace>>,
+        addr: VirtAddr,
+        old_size: usize,
+        new_size: usize,
+        maymove: bool,
+    ) -> AxResult<VirtAddr> {
+        if old_size == 0 || new_size == 0 {
+            ax_bail!(InvalidInput);
+        }
+        self.validate_region(addr, old_size)?;
+        self.validate_region(addr, new_size)?;
+
+        let mmap_flags = {
+            let area = self.areas.find(addr).ok_or(AxError::NoMemory)?;
+            if area.start() != addr || area.size() != old_size {
+                ax_bail!(InvalidInput);
+            }
+            if matches!(area.backend(), Backend::Shared(_)) && new_size > old_size {
+                ax_bail!(OperationNotSupported);
+            }
+            if matches!(area.backend(), Backend::Linear(_)) && new_size != old_size {
+                ax_bail!(OperationNotSupported);
+            }
+            area.flags()
+        };
+
+        if new_size == old_size {
+            return Ok(addr);
+        }
+
+        if new_size < old_size {
+            let tail = addr + new_size;
+            let remove = old_size - new_size;
+            self.areas.unmap(tail, remove, &mut self.pt)?;
+            return Ok(addr);
+        }
+
+        let delta = new_size - old_size;
+        let tail_start = addr + old_size;
+        if !self.contains_range(tail_start, delta) {
+            ax_bail!(NoMemory);
+        }
+
+        let tail_free = self.vm_range_unmapped(tail_start, delta)?;
+        if tail_free {
+            let new_backend = {
+                let area = self.areas.find(addr).ok_or(AxError::BadState)?;
+                Self::clone_backend_for_mremap(area.backend(), addr, proc_aspace)?
+            };
+            self.areas.unmap(addr, old_size, &mut self.pt)?;
+            self.areas.map(
+                MemoryArea::new(addr, new_size, mmap_flags, new_backend),
+                &mut self.pt,
+                false,
+            )?;
+            return Ok(addr);
+        }
+
+        if !maymove {
+            ax_bail!(NoMemory);
+        }
+
+        self.mremap_move(proc_aspace, addr, old_size, new_size, mmap_flags)
+    }
+
     /// Removes all mappings in the address space.
     pub fn clear(&mut self) {
         self.areas.clear(&mut self.pt).unwrap();
@@ -406,6 +538,29 @@ impl AddrSpace {
     /// Exposing internal state for system introspection is a standard practice.
     pub fn areas(&self) -> impl Iterator<Item = &MemoryArea<Backend>> {
         self.areas.iter()
+    }
+
+    /// Writes back dirty pages for every file-backed VMA overlapping `range`.
+    ///
+    /// Used by `msync(2)` so `MAP_SHARED` updates become visible to ordinary
+    /// file reads on the same inode.
+    pub fn msync_file_mappings(&self, range: VirtAddrRange) -> AxResult<()> {
+        let mut caches: Vec<CachedFile> = Vec::new();
+        for area in self.areas.iter() {
+            if area.end() <= range.start || area.start() >= range.end {
+                continue;
+            }
+            if let Backend::File(fb) = area.backend() {
+                let c = fb.shared_page_cache();
+                if !caches.iter().any(|x| x.ptr_eq(&c)) {
+                    caches.push(c);
+                }
+            }
+        }
+        for c in caches {
+            c.sync(false).map_err(|_| AxError::Io)?;
+        }
+        Ok(())
     }
 }
 

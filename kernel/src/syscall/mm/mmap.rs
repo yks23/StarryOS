@@ -6,7 +6,6 @@ use axhal::paging::{MappingFlags, PageSize};
 use axtask::current;
 use linux_raw_sys::general::*;
 use memory_addr::{MemoryAddr, VirtAddr, VirtAddrRange, align_up_4k};
-use starry_vm::{vm_load, vm_write_slice};
 
 use crate::{
     file::{File, FileLike},
@@ -285,7 +284,13 @@ pub fn sys_mremap(addr: usize, old_size: usize, new_size: usize, flags: u32) -> 
          {flags:#x}"
     );
 
-    // TODO: full implementation
+    if flags & !(MREMAP_MAYMOVE | MREMAP_FIXED | MREMAP_DONTUNMAP) != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    if flags & (MREMAP_FIXED | MREMAP_DONTUNMAP) != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    let maymove = flags & MREMAP_MAYMOVE != 0;
 
     if !addr.is_multiple_of(PageSize::Size4K as usize) {
         return Err(AxError::InvalidInput);
@@ -293,28 +298,13 @@ pub fn sys_mremap(addr: usize, old_size: usize, new_size: usize, flags: u32) -> 
     let addr = VirtAddr::from(addr);
 
     let curr = current();
-    let aspace = curr.as_thread().proc_data.aspace.read();
+    let proc_aspace = curr.as_thread().proc_data.aspace.clone();
     let old_size = align_up_4k(old_size);
     let new_size = align_up_4k(new_size);
 
-    let flags = aspace.find_area(addr).ok_or(AxError::NoMemory)?.flags();
-    drop(aspace);
-    let new_addr = sys_mmap(
-        addr.as_usize(),
-        new_size,
-        flags.bits() as _,
-        MmapFlags::PRIVATE.bits(),
-        -1,
-        0,
-    )? as usize;
-
-    let copy_len = new_size.min(old_size);
-    let data = vm_load(addr.as_ptr(), copy_len)?;
-    vm_write_slice(new_addr as *mut u8, &data)?;
-
-    sys_munmap(addr.as_usize(), old_size)?;
-
-    Ok(new_addr as isize)
+    let mut aspace = proc_aspace.write();
+    let out = aspace.mremap(&proc_aspace, addr, old_size, new_size, maymove)?;
+    Ok(out.as_usize() as isize)
 }
 
 pub fn sys_madvise(addr: usize, length: usize, advice: i32) -> AxResult<isize> {
@@ -357,6 +347,8 @@ pub fn sys_msync(addr: usize, length: usize, flags: u32) -> AxResult<isize> {
     {
         return Err(AxError::NoMemory);
     }
+    let range = VirtAddrRange::from_start_size(start, length);
+    aspace.msync_file_mappings(range)?;
     Ok(0)
 }
 

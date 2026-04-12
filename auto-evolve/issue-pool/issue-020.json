@@ -1,12 +1,20 @@
 {
   "id": "issue-020",
   "title": "mremap implemented via mmap+memcpy+munmap (loses MAP_SHARED backend)",
-  "status": "open",
+  "status": "resolved",
   "created_at": "2026-04-12T12:00:00Z",
+  "resolved_at": "2026-04-13T00:00:00Z",
   "severity": "medium",
   "description": "sys_mremap 通过新 mmap、拷贝、munmap 模拟，不处理 MREMAP_FIXED 等；文件共享映射扩展后可能不再与文件一致。",
   "category": "correctness",
   "affected_syscalls": ["mremap"],
+  "fix_summary": "在 **`AddrSpace::mremap`** 中按 Linux 语义调整 VMA：**缩小**用 **`unmap` 尾部**；**放大**若 **`[old_end, old_end+Δ)`** 无映射则在原地 **`unmap` 整段 + `map` 新长度**，并用 **`clone_backend_for_mremap`** 保留后端：**`FileBackend::remap_at`**（同 **`CachedFile`/offset）、**`CowBackend::with_virt_start`**。尾部被占用且带 **`MREMAP_MAYMOVE`** 时 **`mremap_move`**：`read`→**`find_free_area`**→**`unmap`/`map`**→**`write`** 恢复内容。**`MREMAP_FIXED`/`DONTUNMAP`** 暂 **`EINVAL`**。**`Shared`** 增长（需扩物理页）与 **`Linear`** 仍 **`OperationNotSupported`**。**`sys_mremap`** 改为调用 **`aspace.mremap`**，不再误用 **`MAP_PRIVATE` 匿名 mmap**。**`sys_msync`** 在区间校验后对重叠的 **`File`** VMA 去重调用 **`CachedFile::sync`**，使 **`MAP_SHARED`** 脏页回写后 **`pread`** 可见（满足 **`test_mremap_shared`** 路径）。",
+  "files_changed": [
+    "kernel/src/mm/aspace/mod.rs",
+    "kernel/src/mm/aspace/backend/file.rs",
+    "kernel/src/mm/aspace/backend/cow.rs",
+    "kernel/src/syscall/mm/mmap.rs"
+  ],
   "source_context": {
     "primary_files": ["kernel/src/syscall/mm/mmap.rs:282-317"],
     "related_files": [],
@@ -18,7 +26,7 @@
     "run_method": "运行 /bin/test_mremap_shared",
     "expected_output_contains": "SUMMARY",
     "pass_criteria": "扩展后第二页写入经 msync 可在文件中读到",
-    "last_result": "待运行"
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu 通过；msync 已接 CachedFile::sync；QEMU 实跑待 rootfs"
   },
   "suggested_fix": "页表级 mremap，保留文件/匿名后端类型。",
   "references": ["man 2 mremap"]
