@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-069 resolved（**`clone`**/**`clone3`**：**`CLONE_NEW*`** → **`Unsupported`**，勿仅 **`warn`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-059 resolved（**`sync`**/**`syncfs`**：**`flush_mount_subtree`** + **`FilesystemOps::flush`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-058 resolved（**`shmat`**：**`SHM_RND`**/**`SHM_REMAP`**/`SHMLBA` 附着语义 + **`shmflg`** 掩码；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-057 resolved（**`statx`**：**`flags`** 掩码 **`AT_EMPTY_PATH|AT_SYMLINK_NOFOLLOW|AT_STATX_SYNC_TYPE`** + **`FORCE`/`DONT` 互斥**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过）
@@ -41,6 +42,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-069 | clone/clone3 拒绝 CLONE_NEW*（Unsupported） | resolved | 2026-04-13 |
 | issue-059 | sync/syncfs 调用 VFS flush 与嵌套挂载 | resolved | 2026-04-12 |
 | issue-058 | shmat SHM_RND/SHM_REMAP 与 shmflg 掩码 | resolved | 2026-04-12 |
 | issue-057 | statx AT_* / AT_STATX_* flags 校验 | resolved | 2026-04-12 |

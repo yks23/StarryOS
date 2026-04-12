@@ -125,7 +125,7 @@ impl CloneArgs {
             | CloneFlags::NEWCGROUP;
 
         if flags.intersects(namespace_flags) {
-            warn!("sys_clone/sys_clone3: namespace flags detected, stub support only");
+            return Err(AxError::Unsupported);
         }
 
         Ok(())
