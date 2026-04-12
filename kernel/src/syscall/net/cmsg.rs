@@ -2,7 +2,10 @@ use alloc::{sync::Arc, vec::Vec};
 use core::mem::size_of;
 
 use axerrno::{AxError, AxResult};
-use linux_raw_sys::net::{SCM_RIGHTS, SOL_SOCKET, cmsghdr};
+use linux_raw_sys::net::{
+    SCM_CREDENTIALS, SCM_RIGHTS, SCM_SECURITY, SCM_TIMESTAMP, SCM_TIMESTAMPING, SCM_TIMESTAMPNS,
+    SOL_SOCKET, cmsghdr,
+};
 
 use crate::{
     file::{FileLike, get_file_like},
@@ -28,7 +31,7 @@ impl CMsg {
         let data =
             UserConstPtr::<u8>::from((hdr as *const cmsghdr as usize) + size_of::<cmsghdr>())
                 .get_as_slice(hdr.cmsg_len - size_of::<cmsghdr>())?;
-        Ok(match (hdr.cmsg_level as u32, hdr.cmsg_type as u32) {
+        match (hdr.cmsg_level as u32, hdr.cmsg_type as u32) {
             (SOL_SOCKET, SCM_RIGHTS) => {
                 if data.len() % size_of::<i32>() != 0 {
                     return Err(AxError::InvalidInput);
@@ -42,12 +45,16 @@ impl CMsg {
                     let f = get_file_like(fd)?;
                     fds.push(f);
                 }
-                Self::Rights { fds }
+                Ok(Self::Rights { fds })
             }
-            _ => {
-                return Err(AxError::InvalidInput);
-            }
-        })
+            // Known `SOL_SOCKET` control messages (`unix(7)`) not implemented; do not use EINVAL.
+            (SOL_SOCKET, SCM_CREDENTIALS)
+            | (SOL_SOCKET, SCM_TIMESTAMP)
+            | (SOL_SOCKET, SCM_TIMESTAMPNS)
+            | (SOL_SOCKET, SCM_TIMESTAMPING)
+            | (SOL_SOCKET, SCM_SECURITY) => Err(AxError::Unsupported),
+            _ => Err(AxError::InvalidInput),
+        }
     }
 }
 

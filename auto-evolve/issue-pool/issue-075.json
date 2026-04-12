@@ -1,0 +1,28 @@
+{
+  "id": "issue-075",
+  "title": "sendmsg 控制消息仅支持 SCM_RIGHTS，SCM_CREDENTIALS 等 Unix 域 cmsg 一律 InvalidInput",
+  "status": "resolved",
+  "created_at": "2026-04-13T09:00:00Z",
+  "resolved_at": "2026-04-13T21:00:00Z",
+  "severity": "low",
+  "description": "**`CMsg::parse`**（`kernel/src/syscall/net/cmsg.rs`）在 **`recvmsg`/`sendmsg`** 路径中仅将 **`(SOL_SOCKET, SCM_RIGHTS)`** 解析为 **`CMsg::Rights`**；**`match`** 的 **`_`** 分支 **`return Err(AxError::InvalidInput)`**。Linux **`unix(7)`** 在 **Unix 域套接字**上还支持 **`SCM_CREDENTIALS`**/**`SCM_TIMESTAMP`** 等控制消息；用户态 **`sendmsg`** 携带 **`SCM_CREDENTIALS`**（或内核未来接受的其它 **`SOL_SOCKET`** 类型）时，**Linux** 可能按能力/策略处理或返回 **`EPERM`**/**`EINVAL`** 等，而 **Starry** 在 **解析阶段**即 **`InvalidInput`**，**整条 `sendmsg` 失败**，无法与 **仅传递 SCM_RIGHTS** 的 Linux 子集对齐，也**未**区分「未实现」与「格式错误」。与 **issue-074**（INET **`addrlen`**）不同，本条为 **Unix 域 cmsg 能力缺口**。",
+  "fix_summary": "**`CMsg::parse`**：对 **`SOL_SOCKET`** 下 **`SCM_CREDENTIALS`/`SCM_TIMESTAMP`/`SCM_TIMESTAMPNS`/`SCM_TIMESTAMPING`/`SCM_SECURITY`** 返回 **`Unsupported`**（**ENOSYS**）；**`SCM_RIGHTS`** 仍解析；其它 **`_` → `InvalidInput`**。",
+  "files_changed": ["kernel/src/syscall/net/cmsg.rs"],
+  "category": "syscall-semantic",
+  "affected_syscalls": ["sendmsg"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/cmsg.rs:23-50"],
+    "related_files": ["kernel/src/syscall/net/io.rs:93-123"],
+    "key_insight": "仅 SCM_RIGHTS；其余 cmsg 类型走 InvalidInput"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "在 Linux 上构造 **Unix 域** **`sendmsg`** + **`SCM_CREDENTIALS`**（视权限）；对比 Starry QEMU 返回码与是否可接受为 **Unsupported/EPERM** 子集。",
+    "expected_output_contains": "",
+    "pass_criteria": "实现 **`SCM_CREDENTIALS`** 或与 Linux 一致的拒绝语义；或文档化仅支持 **SCM_RIGHTS**。",
+    "last_result": "2026-04-13：已知 **`SCM_*`（非 RIGHTS）→ `Unsupported`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** PASS"
+  },
+  "suggested_fix": "按需实现 **`SCM_CREDENTIALS`**（或返回 **`Unsupported`** 而非与非法参数混用的 **`InvalidInput`**）；在 **`sendmsg`** 解析链上对「已知未实现类型」单独映射。",
+  "references": ["man 7 unix", "man 3 cmsg"]
+}
