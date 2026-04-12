@@ -239,6 +239,9 @@ pub struct ProcessData {
     pub exe_path: RwLock<String>,
     /// The command line arguments
     pub cmdline: RwLock<Arc<Vec<String>>>,
+    /// Environment strings (`KEY=value`) for the process; used when `execve` is called with
+    /// `envp == NULL` (inherit environment, Linux `execve(2)`).
+    pub environment: RwLock<Arc<Vec<String>>>,
     /// The virtual memory address space.
     // TODO: scopify
     pub aspace: Arc<RwLock<AddrSpace>>,
@@ -313,6 +316,7 @@ impl ProcessData {
         proc: Arc<Process>,
         exe_path: String,
         cmdline: Arc<Vec<String>>,
+        environment: Arc<Vec<String>>,
         aspace: Arc<RwLock<AddrSpace>>,
         signal_actions: Arc<SpinNoIrq<SignalActions>>,
         exit_signal: Option<Signo>,
@@ -321,6 +325,7 @@ impl ProcessData {
             proc,
             exe_path: RwLock::new(exe_path),
             cmdline: RwLock::new(cmdline),
+            environment: RwLock::new(environment),
             aspace,
             scope: RwLock::new(Scope::new()),
             heap_top: AtomicUsize::new(crate::config::USER_HEAP_BASE),

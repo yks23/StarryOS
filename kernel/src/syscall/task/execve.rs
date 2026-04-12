@@ -27,19 +27,21 @@ pub fn sys_execve(
 ) -> AxResult<isize> {
     let path = vm_load_string(path)?;
 
-    let args = if argv.is_null() {
-        // Handle NULL argv (treat as empty array)
-        Vec::new()
-    } else {
-        vm_load_until_nul(argv)?
-            .into_iter()
-            .map(vm_load_string)
-            .collect::<Result<Vec<_>, _>>()?
-    };
+    // Linux `execve(2)`: `argv` must be a valid pointer to a NULL-terminated array → EFAULT.
+    if argv.is_null() {
+        return Err(AxError::BadAddress);
+    }
+    let args = vm_load_until_nul(argv)?
+        .into_iter()
+        .map(vm_load_string)
+        .collect::<Result<Vec<_>, _>>()?;
 
+    let curr = current();
+    let proc_data = &curr.as_thread().proc_data;
+
+    // Linux: `envp == NULL` inherits the calling process's environment (not an empty env).
     let envs = if envp.is_null() {
-        // Handle NULL envp (treat as empty array)
-        Vec::new()
+        proc_data.environment.read().as_ref().clone()
     } else {
         vm_load_until_nul(envp)?
             .into_iter()
@@ -48,9 +50,6 @@ pub fn sys_execve(
     };
 
     debug!("sys_execve <= path: {path:?}, args: {args:?}, envs: {envs:?}");
-
-    let curr = current();
-    let proc_data = &curr.as_thread().proc_data;
     let process = proc_data.proc.clone();
     let my_tid = curr.id().as_u64() as Pid;
 
@@ -86,6 +85,7 @@ pub fn sys_execve(
 
     *proc_data.exe_path.write() = loc.absolute_path()?.to_string();
     *proc_data.cmdline.write() = Arc::new(args);
+    *proc_data.environment.write() = Arc::new(envs);
 
     proc_data.set_heap_top(USER_HEAP_BASE);
 

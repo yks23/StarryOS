@@ -54,6 +54,7 @@ pub fn init(args: &[String], envs: &[String]) {
         proc,
         path.to_string(),
         Arc::new(args.to_vec()),
+        Arc::new(envs.to_vec()),
         Arc::new(RwLock::new(uspace)),
         Arc::default(),
         None,

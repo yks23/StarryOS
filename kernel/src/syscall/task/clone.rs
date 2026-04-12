@@ -227,6 +227,7 @@ impl CloneArgs {
                 proc,
                 old_proc_data.exe_path.read().clone(),
                 old_proc_data.cmdline.read().clone(),
+                old_proc_data.environment.read().clone(),
                 aspace,
                 signal_actions,
                 exit_signal,
