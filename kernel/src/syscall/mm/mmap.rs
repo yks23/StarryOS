@@ -362,6 +362,13 @@ pub fn sys_mremap(
          {flags:#x}, new_addr: {new_addr:#x}"
     );
 
+    // Linux `do_mremap`: page-aligned `addr` before rejecting unknown `flags` (issue-344; EINVAL
+    // order theme as dup3 issue-341 / close_range issue-324).
+    if !addr.is_multiple_of(PageSize::Size4K as usize) {
+        return Err(AxError::InvalidInput);
+    }
+    let addr = VirtAddr::from(addr);
+
     if flags & !(MREMAP_MAYMOVE | MREMAP_FIXED | MREMAP_DONTUNMAP) != 0 {
         return Err(AxError::InvalidInput);
     }
@@ -369,11 +376,6 @@ pub fn sys_mremap(
     if flags & MREMAP_DONTUNMAP != 0 {
         return Err(AxError::OperationNotSupported);
     }
-
-    if !addr.is_multiple_of(PageSize::Size4K as usize) {
-        return Err(AxError::InvalidInput);
-    }
-    let addr = VirtAddr::from(addr);
 
     let curr = current();
     let proc_aspace = curr.as_thread().proc_data.aspace.clone();

@@ -1,0 +1,32 @@
+{
+  "id": "issue-344",
+  "title": "`mremap(2)`：`sys_mremap` 先校验 `flags` 保留位与 `MREMAP_DONTUNMAP`，再校验 `addr` 的 4K 页对齐；与 Linux `mremap` 在「未对齐 `addr`/`EINVAL`」与「非法 `flags`/`EINVAL`」上的常见失败顺序可能不完全一致",
+  "status": "resolved",
+  "created_at": "2026-04-16T12:00:00Z",
+  "resolved_at": "2026-05-23T00:00:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/mm/mmap.rs`** **`sys_mremap`** **（** **约** **353–393** **行** **）** **顺序** **：** **`flags`** **未知** **位** **→** **`InvalidInput`** **→** **`MREMAP_DONTUNMAP`** **→** **`OperationNotSupported`** **→** **`addr`** **页** **对齐** **→** **`InvalidInput`** **等** **。** **当** **`flags`** **与** **`addr`** **同时** **不** **满足** **要求** **时** **，** **本** **路径** **固定** **先** **因** **`flags`** **失败** **；** **Linux** **`do_mremap`** **类** **实现** **常** **先** **校验** **`addr`/`old_len`** **/`prot`** **映射** **存在性** **与** **对齐** **，** **再** **处理** **扩展** **/`flags`** **组合** **（** **与** **具体** **版本** **`mm/mmap.c`** **有关** **）** **。** **与** **`issue-265`** **`mremap`** **功能** **/`MREMAP_FIXED`** **等** **正交** **；** **与** **`issue-341`** **`dup3`** **「** **标志** **先于** **fd** **对** **/`EINVAL`** **顺序** **」** **同类** **。**\n\n**建议** **：** **对照** **Linux** **`mm/mmap.c`** **`do_mremap`** **，** **将** **`addr`** **对齐** **与** **`VMA`** **查找** **（** **或** **等价** **前置** **条件** **）** **提前** **到** **非法** **`flags`** **拒绝** **之前** **，** **或** **注释** **说明** **与** **上游** **`EINVAL`** **优先级** **差异** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["mremap"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/mm/mmap.rs:353-393"],
+    "related_files": [],
+    "key_insight": "mremap flags validation before addr alignment EINVAL order"
+  },
+  "fix_summary": "`sys_mremap`：先 `addr` 4K 页对齐 → `InvalidInput`，再 `flags` 未知位与 `MREMAP_DONTUNMAP`；与 Linux `do_mremap` 常见对齐先于 flags 组合一致；注释 issue-344/issue-265。",
+  "files_changed": [
+    "kernel/src/syscall/mm/mmap.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-344.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：非法 `flags` + 未对齐 `addr` 对照 Linux `mremap` 返回顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游 `mremap` 对 `flags`/`addr` 的校验顺序一致，或注释说明差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "先 `addr` 对齐与映射存在性（与 Linux `do_mremap` 一致），再拒绝未知 `flags`/`DONTUNMAP`；或文档化顺序。",
+  "references": ["man 2 mremap", "kernel/src/syscall/mm/mmap.rs", "issue-265", "issue-341"]
+}
