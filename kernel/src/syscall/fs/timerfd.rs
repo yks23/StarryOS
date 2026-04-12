@@ -30,11 +30,12 @@ pub fn sys_timerfd_settime(
     old_value: *mut itimerspec,
 ) -> AxResult<isize> {
     let tfd = TimerFd::from_fd(fd)?;
-    if new_value.is_null() {
+    // Linux timerfd_settime: reject unknown `flags` bits before NULL `new_value` (EINVAL ordering;
+    // issue-330; issue-110 mask). Unrelated to field-wise `read_timespec_user` (issue-209).
+    if flags as u32 & !TFD_TIMER_ABSTIME != 0 {
         return Err(AxError::InvalidInput);
     }
-    // Linux `timerfd_settime(2)`：仅允许 `TFD_TIMER_ABSTIME`，未知位 → EINVAL。
-    if flags as u32 & !TFD_TIMER_ABSTIME != 0 {
+    if new_value.is_null() {
         return Err(AxError::InvalidInput);
     }
     // issue-209: read each `timespec` field-by-field (same as `read_timespec_user` / issue-205).

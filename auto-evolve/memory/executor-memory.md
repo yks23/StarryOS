@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-05-09：issue-330 resolved（**`timerfd_settime`**：**`flags`** **掩码** **先于** **`new_value.is_null()`**；**`timerfd.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-05-08：issue-329 resolved（**`getgroups`**：**`size>0`** **时** **`list.is_null()`** **先于** **`sz < ngroups`**，**`EFAULT`** **先于** **缓冲区** **不足** **`EINVAL`**；**`sys.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-05-07：issue-328 resolved（**`fanotify_init`**：**`FanotifyFd`** **保存** **`event_f_flags`** **`+ event_f_flags()`**；**`inotify.rs`**/**`notify.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-05-06：issue-327 resolved（**`prlimit64`**：**`get_process_data`/`may_peer_process_by_cred`** **先于** **`resource >= RLIM_NLIMITS`**，**`ESRCH`/`EPERM`** **先于** **越界** **`resource`** **的** **`EINVAL`**；**`resources.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -353,6 +354,7 @@
 | issue-271 | mlock/mlock2 addr 须页对齐 EINVAL | resolved | 2026-04-12 |
 | issue-272 | lseek SEEK_SET 负 offset EINVAL | resolved | 2026-04-12 |
 | issue-273 | prlimit64 跨 pid 权限 EPERM | resolved | 2026-04-12 |
+| issue-330 | timerfd_settime flags 先于 NULL new_value | resolved | 2026-05-09 |
 | issue-329 | getgroups NULL list 先于 size<ngroups EINVAL | resolved | 2026-05-08 |
 | issue-328 | fanotify FanotifyFd 存 event_f_flags | resolved | 2026-05-07 |
 | issue-327 | prlimit64 pid/凭证 先于 resource 边界 | resolved | 2026-05-06 |
@@ -572,7 +574,7 @@
 - **`rt_sigtimedwait`/`rt_sigsuspend`**：**`set`** 为必填可读 **`sigset_t`**（**`NULL` → EFAULT**），**`set.is_null()` → `BadAddress`**，须在 **`vm_read_uninit`** 前校验；**`timeout`/`info`** 等仍 **`nullable()`**。
 - **`rt_sigqueueinfo`/`rt_tgsigqueueinfo`**：Linux 分别为 **3/4 个**用户参数（**`uinfo`** 为最后一参），**无** **`sigsetsize`**；勿从 **`a3`/`a4`** 读 **`sigsetsize`** 或调用 **`check_sigset_size`**（残留寄存器会误 **EINVAL**）。**`rt_sig*`** 中带 **`sigsetsize`** 的是 **`rt_sigprocmask`**、**`rt_sigaction`**、**`rt_sigpending`**、**`rt_sigtimedwait`**、**`rt_sigsuspend`** 等，勿与 queueinfo 混淆。**`make_queue_signal_info`**：**`signo==0`** → **`Ok(None)`**；否则 **`parse_signo`** 后 **`uinfo==NULL` → `BadAddress`** 再 **`vm_read`**（**`pidfd_send_signal`** 同路径）。
 - **`tkill(2)`/`tgkill(2)`**：**`tid`** 须为非零有效线程 ID；**`tid==0` → `InvalidInput`（EINVAL）**，勿走 **`get_task(0)`→`current()`**（issue-249）。**`get_task(0)`** 仍保留给其它需「当前任务」的 syscall；**`kill`/`get_process_data(0)`** 等 **PID 0** 语义与此不同。
-- timerfd：`TimerFd` 实现 `FileLike` + `Pollable`；到期逻辑在 `process_expirations` 中根据时钟纳秒与 `next_deadline_nanos` 比较；通过 `axtask::register_timer_callback`（首次创建时注册）在每次内核 timer tick 中扫描弱引用列表并 `wake` `PollSet`；创建 fd 用 `add_file_like`（与 eventfd2 相同），勿对 `Arc<TimerFd>` 误用 `add_to_fd_table(self)`。**`timerfd_settime`**：**`new_value.is_null()` → `InvalidInput`**。**`timerfd_gettime`**：**`curr_value.is_null()` → `BadAddress`**（Linux **EFAULT**），在 **`from_fd`** 之后、**`gettime`/`vm_write`** 之前校验，避免先算定时器再因用户指针失败。
+- timerfd：`TimerFd` 实现 `FileLike` + `Pollable`；到期逻辑在 `process_expirations` 中根据时钟纳秒与 `next_deadline_nanos` 比较；通过 `axtask::register_timer_callback`（首次创建时注册）在每次内核 timer tick 中扫描弱引用列表并 `wake` `PollSet`；创建 fd 用 `add_file_like`（与 eventfd2 相同），勿对 `Arc<TimerFd>` 误用 `add_to_fd_table(self)`。**`timerfd_settime`**：**`from_fd`** **后** **`flags`** **掩码**（**`TFD_TIMER_ABSTIME`）** **先于** **`new_value.is_null()`**（**issue-330**；**issue-110**）；**`new_value.is_null()` → `InvalidInput`**。**`timerfd_gettime`**：**`curr_value.is_null()` → `BadAddress`**（Linux **EFAULT**），在 **`from_fd`** 之后、**`gettime`/`vm_write`** 之前校验，避免先算定时器再因用户指针失败。
 - **`mmap(2)` `flags`**：先 **`flags & !ALLOWED_MAP_FLAGS`**（**`MAP_TYPE|MAP_FIXED|MAP_ANONYMOUS|…|MAP_DROPPABLE|(MAP_HUGE_MASK<<MAP_HUGE_SHIFT)`** 等 uapi 位），非零 → **`InvalidInput`**；**`MmapFlags::from_bits(flags)`**，**`None`** 时 **`MAP_SHARED_VALIDATE` 类型 → `OperationNotSupported`**，否则 **`InvalidInput`**；勿在未知/非法组合上 **`from_bits_truncate`**。合法 **`MAP_HUGE_*`** 等须在 **`MmapFlags`** 中声明以便 **`from_bits`** 成功。
 - **`mmap(2)` `MAP_ANONYMOUS`/`fd`**：与 Linux 2.6.12+ 一致，**`MAP_ANONYMOUS`** 时 **`fd` 被忽略**（匿名路径不 **`File::from_fd`**），**`offset` 须为 0**；无 **`MAP_ANONYMOUS`** 时 **`fd <= 0`** → **`InvalidInput`**（issue-264）。
 - **`mprotect(2)`**：**`length == 0`** 在 **`prot` 可解析**、**无** **`PROT_GROWSDOWN`/`GROWSUP`**、**`addr` 页对齐**后 **`Ok(0)`** **no-op**（Linux **`do_mprotect_pkey`**，issue-280）；**非零** **`length`** 仍 **`align_up_4k`** 后 **`protect`**。**`addr`** 非页对齐 **`EINVAL`**（issue-270）。**`munmap(2)`**：**`length == 0`** → **`InvalidInput`**（**EINVAL**）（issue-234）；**`addr`** 须 **4K 页对齐**，否则 **`EINVAL`**（issue-268）。
