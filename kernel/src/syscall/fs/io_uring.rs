@@ -55,8 +55,9 @@ pub(crate) struct IoUringParams {
 /// Linux-style ordering: allocate the **`io_uring` fd first; only after that succeeds do we
 /// **`copy_to_user`** **`params`** (issue-145). If **`vm_write`** fails, the fd is closed again.
 pub fn sys_io_uring_setup(entries: u32, params: *mut IoUringParams) -> AxResult<isize> {
+    // Linux `io_uring_setup(2)`: invalid `params` pointer (incl. NULL) → EFAULT, not EINVAL.
     if params.is_null() {
-        return Err(AxError::InvalidInput);
+        return Err(AxError::BadAddress);
     }
     if entries == 0 || entries > 4096 {
         return Err(AxError::InvalidInput);

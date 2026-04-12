@@ -1,0 +1,27 @@
+{
+  "id": "issue-237",
+  "title": "io_uring_setup：`params == NULL` 返回 EINVAL，Linux 为 EFAULT",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`sys_io_uring_setup`**：**`params.is_null()` → `AxError::BadAddress`**（**EFAULT**），与 Linux **`io_uring_setup(2)`** 及 **issue-230** 指针语义一致；**`entries`/`flags`** 等仍 **`InvalidInput`**。",
+  "files_changed": ["kernel/src/syscall/fs/io_uring.rs"],
+  "description": "**`kernel/src/syscall/fs/io_uring.rs`** **`sys_io_uring_setup`**（约 **57–60** 行）在 **`params.is_null()`** 时返回 **`AxError::InvalidInput`**（**EINVAL**）。\n\n**Linux `io_uring_setup(2)`**：用户指针 **`params`** 无效（含 **NULL**）时在 **`copy_from_user`** 路径上返回 **`-EFAULT`**，而非 **`EINVAL`**。同仓库 **`sys_uname`**/**`sys_sysinfo`**（**`kernel/src/syscall/sys.rs`**）对输出指针 **NULL** 已显式 **`BadAddress`**（**issue-230** 风格）；**`InvalidInput`** 与 **errno 语义**及 **`EFAULT`/`EINVAL`** 区分不一致。\n\n**建议**：**`if params.is_null() { return Err(AxError::BadAddress); }`**（**EFAULT**）；其余 **`entries == 0`**、**`flags != 0`** 等**真**参数错误仍用 **`InvalidInput`**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["io_uring_setup"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/io_uring.rs:57-90"],
+    "related_files": ["kernel/src/syscall/sys.rs:154-158", "kernel/src/syscall/sys.rs:229-233"],
+    "key_insight": "NULL 用户指针应 BadAddress，非 EINVAL"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；`io_uring_setup(n, NULL)`。",
+    "expected_output_contains": "",
+    "pass_criteria": "NULL `params` → EFAULT/BadAddress。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos：通过（exit 0）"
+  },
+  "suggested_fix": "`params.is_null()` → `Err(AxError::BadAddress)`。",
+  "references": ["man 2 io_uring_setup", "issue-230", "issue-145"]
+}
