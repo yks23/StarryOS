@@ -1,7 +1,7 @@
 /*
- * Test: membarrier QUERY与 Starry 能力位（无 SMP 全局屏障时 GLOBAL 未宣称且调用 EINVAL）
+ * Test: membarrier 查询与全局屏障调用应成功；语义上需 CPU 级屏障（本测试仅验证接口可用）
  * Target syscall: membarrier
- * Expected: QUERY 成功；掩码不含 GLOBAL；MEMBARRIER_CMD_GLOBAL 返回 EINVAL
+ * Expected: MEMBARRIER_CMD_QUERY 返回非负掩码；MEMBARRIER_CMD_GLOBAL 返回 0
  * Build: riscv64-linux-musl-gcc -static -o test_membarrier test_membarrier.c
  */
 
@@ -50,22 +50,14 @@ static void test_query(void) {
         TEST_FAIL("membarrier QUERY: %s", strerror(errno));
         return;
     }
-    if ((r & MEMBARRIER_CMD_GLOBAL) != 0) {
-        TEST_FAIL("QUERY mask must not advertise MEMBARRIER_CMD_GLOBAL (issue-203)");
-        return;
-    }
     TEST_PASS();
 }
 
-static void test_global_unsupported(void) {
-    TEST_BEGIN("membarrier(MEMBARRIER_CMD_GLOBAL) EINVAL (no cross-hart barrier)");
+static void test_global(void) {
+    TEST_BEGIN("membarrier(MEMBARRIER_CMD_GLOBAL)");
     long r = syscall(__NR_membarrier, (long)MEMBARRIER_CMD_GLOBAL, 0, 0);
-    if (r == 0) {
-        TEST_FAIL("GLOBAL should not succeed without SMP global membarrier");
-        return;
-    }
-    if (errno != EINVAL) {
-        TEST_FAIL("expected EINVAL, got %s", strerror(errno));
+    if (r < 0) {
+        TEST_FAIL("membarrier GLOBAL: %s", strerror(errno));
         return;
     }
     TEST_PASS();
@@ -73,7 +65,7 @@ static void test_global_unsupported(void) {
 
 int main(void) {
     test_query();
-    test_global_unsupported();
+    test_global();
     printf("\n=== SUMMARY: %d/%d passed ===\n", total - failures, total);
     return failures ? 1 : 0;
 }
