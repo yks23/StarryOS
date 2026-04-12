@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-214 resolved（**`shmctl` `IPC_SET`**：仅合并用户 **`shm_perm.uid`/`gid`/`mode & 0o777`**，不再整颗 **`ShmidDs`** 覆盖内核；对齐 Linux **`shmctl(2)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-209 resolved（**`timerfd_settime`**：用户 **`itimerspec`** 由 **`read_timespec_user`** 读 **`it_interval`/`it_value`**（**`addr_of!`**）；去掉整结构 **`assume_init`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-208 resolved（**`io_uring_setup`**：用户侧仅 **`addr_of!((*params).flags).vm_read()`**；**`IoUringParams`** 成功写回前内核栈字面量构造；去掉整结构 **`vm_read_uninit`/`assume_init`**（嵌套 **`sq_off`/`cq_off`**）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-207 resolved（**`futex` `FUTEX_WAIT`/`FUTEX_WAIT_BITSET`**：用户 **`timespec` 超时** 经 **`crate::time::read_timespec_user`**（**`tv_sec`/`tv_nsec` 字段 `vm_read`**）；**`ctl`/`schedule`/`signal`** 重复实现并入 **`time.rs`**；去掉 **`assume_init`/`FIXME`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）

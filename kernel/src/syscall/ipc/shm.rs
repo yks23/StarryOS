@@ -542,7 +542,13 @@ pub fn sys_shmctl(shmid: i32, cmd: u32, buf: UserPtr<ShmidDs>) -> AxResult<isize
 
     let cmd = cmd as i32;
     if cmd == IPC_SET {
-        shm_inner.shmid_ds = *buf.get_as_mut()?;
+        // Linux `shmctl(IPC_SET)`: apply only `shm_perm.uid` / `shm_perm.gid` / permission bits of
+        // `shm_perm.mode` from the user's `shmid_ds`. Kernel-owned fields (`shm_segsz`, `shm_nattch`,
+        // timestamps, `shm_cpid` / `shm_lpid`, etc.) must not be replaced from userland (issue-214).
+        let user = buf.get_as_mut()?;
+        shm_inner.shmid_ds.shm_perm.uid = user.shm_perm.uid;
+        shm_inner.shmid_ds.shm_perm.gid = user.shm_perm.gid;
+        shm_inner.shmid_ds.shm_perm.mode = user.shm_perm.mode & 0o777;
     } else if cmd == IPC_STAT {
         // Linux shmctl(IPC_STAT): buf must point to writable shmid_ds; NULL → EFAULT (issue-152).
         *buf.get_as_mut()? = shm_inner.shmid_ds;
