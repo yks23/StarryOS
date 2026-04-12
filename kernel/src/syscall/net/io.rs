@@ -146,7 +146,20 @@ pub fn sys_sendmsg(fd: i32, msg: UserConstPtr<msghdr>, flags: u32) -> AxResult<i
     )
 }
 
-fn recv_impl(
+#[inline]
+fn validate_recvmsg_flags(flags: u32) -> AxResult<()> {
+    if flags & !RECVMSG_FLAGS_MASK != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    if flags & RECVMSG_FLAGS_UNSUPPORTED != 0 {
+        return Err(AxError::OperationNotSupported);
+    }
+    Ok(())
+}
+
+/// After [`validate_recvmsg_flags`], [`Socket::from_fd`], and (for `recvmsg`) user `msghdr` setup.
+fn recv_on_socket(
+    socket: &Socket,
     fd: i32,
     mut dst: impl Write + IoBufMut,
     flags: u32,
@@ -154,16 +167,8 @@ fn recv_impl(
     addrlen: UserPtr<socklen_t>,
     cmsg_builder: Option<CMsgBuilder>,
 ) -> AxResult<isize> {
-    if flags & !RECVMSG_FLAGS_MASK != 0 {
-        return Err(AxError::InvalidInput);
-    }
-    if flags & RECVMSG_FLAGS_UNSUPPORTED != 0 {
-        return Err(AxError::OperationNotSupported);
-    }
-
     debug!("sys_recv <= fd: {fd}, flags: {flags}");
 
-    let socket = Socket::from_fd(fd)?;
     let recv_flags = RecvFlags::from_bits_truncate(flags);
 
     let mut cmsg = Vec::new();
@@ -211,6 +216,19 @@ fn recv_impl(
     Ok(recv as isize)
 }
 
+fn recv_impl(
+    fd: i32,
+    dst: impl Write + IoBufMut,
+    flags: u32,
+    addr: UserPtr<sockaddr>,
+    addrlen: UserPtr<socklen_t>,
+    cmsg_builder: Option<CMsgBuilder>,
+) -> AxResult<isize> {
+    validate_recvmsg_flags(flags)?;
+    let socket = Socket::from_fd(fd)?;
+    recv_on_socket(&socket, fd, dst, flags, addr, addrlen, cmsg_builder)
+}
+
 pub fn sys_recvfrom(
     fd: i32,
     buf: *mut u8,
@@ -223,8 +241,12 @@ pub fn sys_recvfrom(
 }
 
 pub fn sys_recvmsg(fd: i32, msg: UserPtr<msghdr>, flags: u32) -> AxResult<isize> {
+    // Linux __sys_recvmsg: flags + sockfd_lookup before copy_msghdr_from_user (EINVAL/EBADF before EFAULT).
+    validate_recvmsg_flags(flags)?;
+    let socket = Socket::from_fd(fd)?;
     let msg = msg.get_as_mut()?;
-    recv_impl(
+    recv_on_socket(
+        &socket,
         fd,
         IoVectorBuf::new(msg.msg_iov as *mut IoVec, msg.msg_iovlen)?.into_io(),
         flags,

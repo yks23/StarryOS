@@ -1,0 +1,28 @@
+{
+  "id": "issue-135",
+  "title": "recvmsg 先 get_as_mut(msghdr)/IoVectorBuf::new 再 recv_impl 内 from_fd 与 flags 校验，EBADF/EFAULT 与 EINVAL 顺序可偏离 Linux",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "resolved_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "抽出 `validate_recvmsg_flags` 与 `recv_on_socket`；`sys_recvmsg` 先 `validate_recvmsg_flags` → `Socket::from_fd` → `get_as_mut`/`IoVectorBuf` → `recv_on_socket`。`recv_impl`（`recvfrom`）复用相同校验与 helper，与 issue-134 `sendmsg` 对称。",
+  "files_changed": ["kernel/src/syscall/net/io.rs"],
+  "description": "**`sys_recvmsg`**（`kernel/src/syscall/net/io.rs`）首行 **`msg.get_as_mut()?`**，再 **`IoVectorBuf::new(msg.msg_iov, msg.msg_iovlen)?`**，最后才进入 **`recv_impl`**。**`recv_impl`** 内先校验 **`flags`** 掩码，再 **`Socket::from_fd(fd)?`**。因此 **`msghdr`**/**`iovec`** 的用户访问均发生在 **`from_fd`** 之前。**Linux** **`__sys_recvmsg`** 通常先 **`sockfd_lookup`**（**`EBADF`**），再拷贝 **`msghdr`**/**`iovec`**。当 **`fd`** 无效但 **`msg`**/**`iov`** 不可读时：**Starry** 可能先 **`EFAULT`类**；**Linux** 多先 **`EBADF`**。另：非法 **`flags`** 在 **Linux** 可能早于 **`msghdr`** 拷贝即 **`EINVAL`**；**Starry** 在 **`recv_impl`** 内才拒 **`flags`**，但 **`get_as_mut`** 已执行。**`sys_sendmsg`**（**issue-134**）当前已 **`Socket::from_fd`** 先于 **`get_as_ref`**，**`recvmsg`** 仍不对称。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["recvmsg"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/io.rs:225-240"],
+    "related_files": ["kernel/src/syscall/net/io.rs:149-167"],
+    "key_insight": "`sys_recvmsg` 用户缓冲在 `recv_impl` 的 `from_fd` 之前"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "无效 **`fd`** + 非法 **`msg`** 或坏 **`iov`**；对比 **Linux** 与 **Starry** 首错 **`EBADF`** vs **`EFAULT`**。",
+    "expected_output_contains": "",
+    "pass_criteria": "**`fd`**/**`flags`** 校验不晚于 **`msghdr`/`iovec`** 首次用户访问，或文档化当前顺序。",
+    "last_result": "2026-04-12：`validate_recvmsg_flags`+`from_fd` 先于 `get_as_mut`；`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` PASS；QEMU 未测"
+  },
+  "suggested_fix": "在 **`sys_recvmsg`** 开头对齐 **`sys_sendmsg`**：**`flags`** 掩码（与 **`recv_impl`** 一致）→ **`Socket::from_fd(fd)?`** →再 **`get_as_mut`**/**`IoVectorBuf::new`**；或将 **`recv_impl`** 拆出 **`prepare_recv`** 与 **`from_fd`** 供入口复用。",
+  "references": ["man 2 recvmsg", "Linux net/socket.c __sys_recvmsg"]
+}
