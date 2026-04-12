@@ -1,0 +1,34 @@
+{
+  "id": "issue-039",
+  "title": "times(2) 将 tms_cutime/tms_cstime 误填为当前线程 utime/stime，未累计已 wait 子进程 CPU",
+  "status": "resolved",
+  "created_at": "2026-04-14T12:30:00Z",
+  "resolved_at": "2026-04-12T22:00:00Z",
+  "severity": "medium",
+  "fix_summary": "**`ProcessData`** 增加 **`exited_threads_*_ns`**（每线程退出前将 **`TimeManager`** 经 **`poll`** 后计入）与 **`child_*_ns`**（**`waitpid`** 非 **`WNOWAIT`** 回收僵尸时，将子进程 **`thread_group_cpu_nanos`** 累加到父）。**`ZOMBIE_PROCESS_DATA`** 在末线程 **`do_exit`** 时 **`register_zombie_process_data`**，**`get_process_data`** 在 **`PROCESS_TABLE`** 弱引用失效后仍可解析僵尸，**`wait`** 在 **`child.free()`** 后 **`remove_zombie_process_data`**。**`sys_times`** 用 **`thread_group_cpu_nanos`** 填 **`tms_utime`/`tms_stime`**，用 **`waited_children_cpu_nanos`** 填 **`tms_cutime`/`tms_cstime`**（微秒）。**`copy_credentials_from`** 将上述累计清零以匹配 **`fork`**。",
+  "files_changed": [
+    "kernel/src/syscall/time.rs",
+    "kernel/src/syscall/task/wait.rs",
+    "kernel/src/task/mod.rs",
+    "kernel/src/task/ops.rs",
+    "kernel/src/task/timer.rs"
+  ],
+  "description": "`sys_times` 从当前线程取 `(utime, stime)` 后，把 **`tms_cutime`/`tms_cstime` 写成与 `tms_utime`/`tms_stime` 相同**。Linux 语义中 **`tms_cutime`/`tms_cstime`** 为 **已结束且被 wait 回收的子进程** 的累计用户/系统时间；父进程几乎不耗 CPU、子进程大量用户态计算时，父的 **`tms_utime` 仍可为 0，但 `tms_cutime` 应增加**。当前实现导致 `time`/性能工具误判子进程耗时。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["times"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/time.rs:63-74"],
+    "related_files": ["kernel/src/task 时间统计与进程树"],
+    "key_insight": "`tms_cutime: utime` 与 `tms_cstime: stime` 与 Linux 子进程累计语义不符"
+  },
+  "test": {
+    "source_file": "auto-evolve/tests/test_times_cutime.c",
+    "build_command": "riscv64-linux-musl-gcc -static -O2 -o test_times_cutime test_times_cutime.c",
+    "run_method": "放入 rootfs /bin/ 后在 QEMU 运行",
+    "expected_output_contains": "SUMMARY",
+    "pass_criteria": "子进程 burn CPU 且 wait 后，父进程第二次 times 的 tms_cutime 大于第一次",
+    "last_result": "Linux 宿主机 gcc 运行 PASS；Starry 在按 utime 填 cutime 时预期 FAIL"
+  },
+  "suggested_fix": "在 `ProcessData` 或线程组层维护子进程累计 utime/stime（wait 回收时累加），`sys_times` 分别写入四域；或与 `getrusage`/`wait4` 统计共用数据源。",
+  "references": ["man 2 times"]
+}

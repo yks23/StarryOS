@@ -9,7 +9,7 @@ use linux_raw_sys::general::{
 use starry_vm::{VmMutPtr, VmPtr};
 
 use crate::{
-    task::{AsThread, ITimerType},
+    task::{AsThread, ITimerType, time_value_from_nanos},
     time::TimeValueLike,
 };
 
@@ -77,14 +77,20 @@ pub struct Tms {
 }
 
 pub fn sys_times(tms: *mut Tms) -> AxResult<isize> {
-    let (utime, stime) = current().as_thread().time.borrow().output();
-    let utime = utime.as_micros() as usize;
-    let stime = stime.as_micros() as usize;
+    let proc_data = current().as_thread().proc_data.clone();
+    let (ut_ns, st_ns) = proc_data.thread_group_cpu_nanos();
+    let (cu_ns, cs_ns) = proc_data.waited_children_cpu_nanos();
+
+    let utime = time_value_from_nanos(ut_ns).as_micros() as usize;
+    let stime = time_value_from_nanos(st_ns).as_micros() as usize;
+    let cutime = time_value_from_nanos(cu_ns).as_micros() as usize;
+    let cstime = time_value_from_nanos(cs_ns).as_micros() as usize;
+
     tms.vm_write(Tms {
         tms_utime: utime,
         tms_stime: stime,
-        tms_cutime: utime,
-        tms_cstime: stime,
+        tms_cutime: cutime,
+        tms_cstime: cstime,
     })?;
     Ok(nanos_to_ticks(monotonic_time_nanos()) as _)
 }

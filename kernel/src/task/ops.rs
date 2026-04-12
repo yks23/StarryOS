@@ -1,4 +1,5 @@
 use alloc::{
+    collections::BTreeMap,
     sync::{Arc, Weak},
     vec::Vec,
 };
@@ -22,6 +23,10 @@ use super::{
 static TASK_TABLE: RwLock<WeakMap<Pid, WeakAxTaskRef>> = RwLock::new(WeakMap::new());
 
 static PROCESS_TABLE: RwLock<WeakMap<Pid, Weak<ProcessData>>> = RwLock::new(WeakMap::new());
+
+/// Strong refs for zombie processes so `wait`/`get_process_data` can read CPU accounting after
+/// the last thread exited (`PROCESS_TABLE` only holds [`Weak`]).
+static ZOMBIE_PROCESS_DATA: RwLock<BTreeMap<Pid, Arc<ProcessData>>> = RwLock::new(BTreeMap::new());
 
 static PROCESS_GROUP_TABLE: RwLock<WeakMap<Pid, Weak<ProcessGroup>>> = RwLock::new(WeakMap::new());
 
@@ -93,7 +98,23 @@ pub fn get_process_data(pid: Pid) -> AxResult<Arc<ProcessData>> {
     if pid == 0 {
         return Ok(current().as_thread().proc_data.clone());
     }
-    PROCESS_TABLE.read().get(&pid).ok_or(AxError::NoSuchProcess)
+    if let Some(pd) = PROCESS_TABLE.read().get(&pid) {
+        return Ok(pd);
+    }
+    ZOMBIE_PROCESS_DATA
+        .read()
+        .get(&pid)
+        .cloned()
+        .ok_or(AxError::NoSuchProcess)
+}
+
+/// Keep [`ProcessData`] alive after the last thread exits until the parent `wait`s.
+pub fn register_zombie_process_data(pd: Arc<ProcessData>) {
+    ZOMBIE_PROCESS_DATA.write().insert(pd.proc.pid(), pd);
+}
+
+pub fn remove_zombie_process_data(pid: Pid) {
+    ZOMBIE_PROCESS_DATA.write().remove(&pid);
 }
 
 /// Finds the process group with the given PGID.
@@ -221,7 +242,14 @@ pub fn do_exit(exit_code: i32, group_exit: bool) {
     }
 
     let process = &thr.proc_data.proc;
+    {
+        let mut tm = thr.time.borrow_mut();
+        tm.poll(|_| {});
+        let (u, s) = tm.cpu_nanos();
+        thr.proc_data.accumulate_exited_thread_cpu_ns(u, s);
+    }
     if process.exit_thread(curr.id().as_u64() as Pid, exit_code) {
+        register_zombie_process_data(thr.proc_data.clone());
         *thr.proc_data.jobctl.lock() = JobCtl::default();
         process.exit();
         if let Some(parent) = process.parent() {

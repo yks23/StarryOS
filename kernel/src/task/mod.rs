@@ -8,6 +8,8 @@ mod stat;
 mod timer;
 mod user;
 
+pub(crate) use self::timer::time_value_from_nanos;
+
 use alloc::{boxed::Box, string::String, sync::Arc, vec::Vec};
 use core::{
     cell::RefCell,
@@ -287,6 +289,13 @@ pub struct ProcessData {
 
     /// Process nice (`getpriority` / `setpriority`, range -20..=19 on Linux; default 0).
     nice: AtomicI32,
+
+    /// Sum of exited threads' user/system CPU time (nanoseconds).
+    exited_threads_utime_ns: AtomicUsize,
+    exited_threads_stime_ns: AtomicUsize,
+    /// Cumulative user/system CPU of children reaped via `wait` (nanoseconds).
+    child_utime_ns: AtomicUsize,
+    child_stime_ns: AtomicUsize,
 }
 
 impl ProcessData {
@@ -338,6 +347,11 @@ impl ProcessData {
             cap_inheritable: AtomicU32::new(u32::MAX),
 
             nice: AtomicI32::new(0),
+
+            exited_threads_utime_ns: AtomicUsize::new(0),
+            exited_threads_stime_ns: AtomicUsize::new(0),
+            child_utime_ns: AtomicUsize::new(0),
+            child_stime_ns: AtomicUsize::new(0),
         })
     }
 
@@ -365,6 +379,11 @@ impl ProcessData {
             .store(parent.cap_permitted.load(o), o);
         self.cap_inheritable
             .store(parent.cap_inheritable.load(o), o);
+
+        self.exited_threads_utime_ns.store(0, o);
+        self.exited_threads_stime_ns.store(0, o);
+        self.child_utime_ns.store(0, o);
+        self.child_stime_ns.store(0, o);
     }
 
     #[inline]
@@ -564,5 +583,46 @@ impl ProcessData {
         self.cap_permitted.store(perm, o);
         self.cap_inheritable.store(inh, o);
         Ok(())
+    }
+
+    /// Called when a thread exits: fold its CPU time into process-wide exited totals.
+    pub fn accumulate_exited_thread_cpu_ns(&self, utime_ns: usize, stime_ns: usize) {
+        self.exited_threads_utime_ns
+            .fetch_add(utime_ns, Ordering::SeqCst);
+        self.exited_threads_stime_ns
+            .fetch_add(stime_ns, Ordering::SeqCst);
+    }
+
+    /// Linux `times` / `wait4` child CPU: waited-for zombie's thread-group time.
+    pub fn accumulate_waited_child_cpu_ns(&self, utime_ns: usize, stime_ns: usize) {
+        self.child_utime_ns.fetch_add(utime_ns, Ordering::SeqCst);
+        self.child_stime_ns.fetch_add(stime_ns, Ordering::SeqCst);
+    }
+
+    /// Cumulative waited-children CPU (nanoseconds), for `times` / `getrusage` child fields.
+    pub fn waited_children_cpu_nanos(&self) -> (usize, usize) {
+        let o = Ordering::Relaxed;
+        (
+            self.child_utime_ns.load(o),
+            self.child_stime_ns.load(o),
+        )
+    }
+
+    /// Thread-group CPU (nanoseconds): exited threads plus all live threads in this process.
+    pub fn thread_group_cpu_nanos(&self) -> (usize, usize) {
+        let mut ut = self.exited_threads_utime_ns.load(Ordering::Relaxed);
+        let mut st = self.exited_threads_stime_ns.load(Ordering::Relaxed);
+        for tid in self.proc.threads() {
+            if let Ok(task) = get_task(tid) {
+                if let Some(thr) = task.try_as_thread() {
+                    if thr.proc_data.proc.pid() == self.proc.pid() {
+                        let (u, s) = thr.time.borrow().cpu_nanos();
+                        ut += u;
+                        st += s;
+                    }
+                }
+            }
+        }
+        (ut, st)
     }
 }

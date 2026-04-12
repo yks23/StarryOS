@@ -16,7 +16,7 @@ use strum::FromRepr;
 
 use crate::task::poll_timer;
 
-fn time_value_from_nanos(nanos: usize) -> TimeValue {
+pub(crate) fn time_value_from_nanos(nanos: usize) -> TimeValue {
     let secs = nanos as u64 / NANOS_PER_SEC;
     let nsecs = nanos as u64 - secs * NANOS_PER_SEC;
     TimeValue::new(secs, nsecs as u32)
@@ -162,6 +162,12 @@ impl TimeManager {
         let utime = time_value_from_nanos(self.utime_ns);
         let stime = time_value_from_nanos(self.stime_ns);
         (utime, stime)
+    }
+
+    /// Raw user/system CPU time in nanoseconds (for `times` / `wait` accounting).
+    #[inline]
+    pub fn cpu_nanos(&self) -> (usize, usize) {
+        (self.utime_ns, self.stime_ns)
     }
 
     /// Polls the time manager to update the timers and emit signals if

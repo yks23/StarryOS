@@ -13,7 +13,7 @@ use linux_raw_sys::general::{
 use starry_process::{Pid, Process};
 use starry_vm::{VmMutPtr, VmPtr};
 
-use crate::task::{AsThread, get_process_data};
+use crate::task::{AsThread, get_process_data, remove_zombie_process_data};
 
 bitflags! {
     #[derive(Debug)]
@@ -92,7 +92,12 @@ pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isiz
     let check_children = || {
         if let Some(child) = children.iter().find(|c| c.is_zombie()) {
             if !options.contains(WaitOptions::WNOWAIT) {
+                if let Ok(child_pd) = get_process_data(child.pid()) {
+                    let (cu, cs) = child_pd.thread_group_cpu_nanos();
+                    proc_data.accumulate_waited_child_cpu_ns(cu, cs);
+                }
                 child.free();
+                remove_zombie_process_data(child.pid());
             }
             if let Some(exit_code) = exit_code.nullable() {
                 exit_code.vm_write(child.exit_code())?;
