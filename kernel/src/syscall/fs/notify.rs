@@ -71,6 +71,6 @@ pub fn sys_fanotify_init(flags: u32, event_f_flags: u32) -> AxResult<isize> {
     }
     let cloexec = flags & FAN_CLOEXEC != 0;
     let nonblock = flags & FAN_NONBLOCK != 0;
-    let fd = FanotifyFd::new(nonblock);
+    let fd = FanotifyFd::new(nonblock, event_f_flags);
     add_file_like(fd as _, cloexec).map(|fd| fd as isize)
 }

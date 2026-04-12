@@ -1,0 +1,27 @@
+{
+  "id": "issue-328",
+  "title": "`fanotify_init(2)`：`sys_fanotify_init` 校验 `event_f_flags` 合法位后未将其存入 `FanotifyFd` 或供后续 `fanotify_mark` 等路径使用，与 Linux 将 `event_f_flags` 作为实例打开文件时的 `O_*` 语义来源不完全一致（占位实现缺口）",
+  "status": "resolved",
+  "created_at": "2026-04-13T18:00:00Z",
+  "severity": "low",
+  "fix_summary": "在 `FanotifyFd` 增加 `event_f_flags: u32` 与 `event_f_flags()`；`sys_fanotify_init` 在掩码校验后传入 `FanotifyFd::new(nonblock, event_f_flags)`。注释 Linux 语义与 issue-328；`fanotify_mark` 等仍占位。更新 `executor-memory` proc/fanotify 句、表格与最近更新；新增 `issue-328.json`。",
+  "files_changed": ["kernel/src/file/inotify.rs", "kernel/src/syscall/fs/notify.rs", "auto-evolve/memory/executor-memory.md", "auto-evolve/issue-pool/issue-328.json"],
+  "description": "**`kernel/src/syscall/fs/notify.rs`** **`sys_fanotify_init`** **（** **约** **65–76** **行** **）** **在** **`flags`** **与** **`event_f_flags`** **上** **做** **位** **掩** **码** **校** **验** **后** **仅** **调** **用** **`FanotifyFd::new(nonblock)`** **，** **未** **保** **留** **`event_f_flags`** **。** **`kernel/src/file/inotify.rs`** **`FanotifyFd`** **仅** **含** **`non_blocking`** **，** **无** **`event_f_flags`** **字** **段** **。** **Linux** **`fanotify_init`** **将** **`event_f_flags`** **存** **入** **`fanotify`** **实** **例** **，** **影** **响** **后** **续** **`fanotify_mark`** **等** **打** **开** **/** **访** **问** **文** **件** **时** **的** **`O_ACCMODE`** **等** **行** **为** **。** **当** **前** **实** **现** **为** **占** **位** **，** **校** **验** **通** **过** **的** **`event_f_flags`** **对** **运** **行** **时** **无** **实** **际** **效** **果** **。**\n\n**建** **议** **：** **在** **`FanotifyFd`** **中** **保** **存** **`event_f_flags`** **（** **或** **等** **价** **）** **并** **在** **未** **来** **`fanotify_mark`** **/** **`open`** **路** **径** **应** **用** **；** **或** **注** **释** **说** **明** **有** **意** **忽** **略** **直** **到** **功** **能** **完** **备** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["fanotify_init"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/notify.rs:65-76", "kernel/src/file/inotify.rs:48-58"],
+    "related_files": [],
+    "key_insight": "fanotify_init event_f_flags validated but not stored in stub FanotifyFd"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：对照 Linux fanotify 实例字段与后续 mark/open 语义。",
+    "expected_output_contains": "",
+    "pass_criteria": "持久化并应用 `event_f_flags`，或文档说明占位边界。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "扩展 `FanotifyFd` 保存 `event_f_flags`；在实现 `fanotify_mark` 等时使用，与 Linux `fs/notify/fanotify` 对齐。",
+  "references": ["man 2 fanotify_init", "kernel/src/syscall/fs/notify.rs", "kernel/src/file/inotify.rs"]
+}

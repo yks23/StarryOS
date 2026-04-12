@@ -48,13 +48,26 @@ impl Pollable for InotifyFd {
 /// Placeholder fanotify instance (no marks/events yet); exposes a stable anon_inode path.
 pub struct FanotifyFd {
     non_blocking: AtomicBool,
+    /// `event_f_flags` from `fanotify_init(2)` (validated `O_*` bits). Linux stores these on the
+    /// fanotify group for opening/accessing paths when delivering events; future `fanotify_mark` /
+    /// event paths should apply them (issue-328).
+    #[allow(dead_code)]
+    event_f_flags: u32,
 }
 
 impl FanotifyFd {
-    pub fn new(nonblocking: bool) -> Arc<Self> {
+    pub fn new(nonblocking: bool, event_f_flags: u32) -> Arc<Self> {
         Arc::new(Self {
             non_blocking: AtomicBool::new(nonblocking),
+            event_f_flags,
         })
+    }
+
+    /// Validated `O_*` bits from `fanotify_init`; for future mark/event fd creation.
+    #[allow(dead_code)]
+    #[inline]
+    pub fn event_f_flags(&self) -> u32 {
+        self.event_f_flags
     }
 }
 

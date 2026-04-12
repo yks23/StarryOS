@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-05-07：issue-328 resolved（**`fanotify_init`**：**`FanotifyFd`** **保存** **`event_f_flags`** **`+ event_f_flags()`**；**`inotify.rs`**/**`notify.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-05-06：issue-327 resolved（**`prlimit64`**：**`get_process_data`/`may_peer_process_by_cred`** **先于** **`resource >= RLIM_NLIMITS`**，**`ESRCH`/`EPERM`** **先于** **越界** **`resource`** **的** **`EINVAL`**；**`resources.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-05-05：issue-326 resolved（**`sendfile`**：**`get_file_like(in/out)`** **先于** **`in_fd == out_fd`**，**`EBADF`** **先于** **同** **fd** **`EINVAL`**；**`fs/io.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-05-04：issue-325 resolved（**`execve`**：**`argv.is_null()`** **先于** **`vm_load_string(path)`**，**`EFAULT`** **（NULL argv）** **先于** **坏** **`filename`**；**`execve.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -351,6 +352,7 @@
 | issue-271 | mlock/mlock2 addr 须页对齐 EINVAL | resolved | 2026-04-12 |
 | issue-272 | lseek SEEK_SET 负 offset EINVAL | resolved | 2026-04-12 |
 | issue-273 | prlimit64 跨 pid 权限 EPERM | resolved | 2026-04-12 |
+| issue-328 | fanotify FanotifyFd 存 event_f_flags | resolved | 2026-05-07 |
 | issue-327 | prlimit64 pid/凭证 先于 resource 边界 | resolved | 2026-05-06 |
 | issue-326 | sendfile get_file_like 先于 in_fd==out_fd | resolved | 2026-05-05 |
 | issue-325 | execve argv NULL 先于 vm_load_string(path) | resolved | 2026-05-04 |
@@ -616,7 +618,7 @@
 - `bpf` / `userfaultfd`：未实现时返回 **`AxError::Unsupported`（ENOSYS）**，勿再 `sys_dummy_fd`；`perf_event_open` 可返回 **`PermissionDenied`（EPERM）** 以匹配测试与常见无能力场景。**`io_uring_setup`**：**`params==NULL` → `BadAddress`**（**EFAULT**，issue-237）；桩实现返回 **`anon_inode:[io_uring]`** 的 **`IoUringFd`**；须先 **`add_file_like`** 成功，再 **`vm_write`** **`IoUringParams`**（**`sq_entries`/`cq_entries`** 等）；**`add_file_like`** 失败（如 **EMFILE**）不得改写用户 **`params`**（issue-145）；**`vm_write`** 失败则 **`close_file_like`** 回收 fd。成功写回前仍将 **`sq_off`/`cq_off`/`resv`/`sq_thread_*`** **清零**（无真实 ring 布局，issue-112），勿把用户输入的布局垃圾写回；真 io_uring 需 ring mmap 与提交队列。
 - `fsopen`：无 fs-context 实现时返回 **`NoSuchDevice`（ENODEV）**（或 EINVAL），勿发 `anon_inode:[dummy]`；`fspick`/`open_tree` 可 **`Unsupported`**。`memfd_secret` 在用户态常以两参探测（与 `memfd_create` 同形）时，可 **`sys_memfd_create` 复用** 以获得真实 memfd 路径。已移除 **`sys_dummy_fd`** 分配假 fd 的路径。
 - **`mount`/`umount2`**：**`sys_mount`** 仅允许 **`SUPPORTED_MOUNT_FSTYPES`**（当前 **`tmpfs`**）；空或未知 **`fstype`** → **`EINVAL`**。**`mount`** 的 **`flags`** 当前须为 **0**（未实现 **`MS_RDONLY`/`MS_BIND`/…**）；**`data`** 须为 **`NULL`** 或空 C 字符串（非空 **`tmpfs` 选项** → **`EINVAL`**）。**`vm_load_string`（`source`/`target`/`fs_type`）** 与 **`validate_mount_data`** **先于** **`validate_mount_flags`**，使用户路径/**`data`** 的 **EFAULT**/**长度类** 错误优先于非法 **`MS_*`** 的 **EINVAL**（与 Linux **`copy_mount_string`** 链更接近，issue-303）。**`sys_umount2`** 的 **`flags`** 须为 **`MNT_FORCE|DETACH|EXPIRE|UMOUNT_NOFOLLOW`** 子集，否则 **`EINVAL`**。未建模 **`CAP_SYS_ADMIN`** 等挂载权限。
-- `/proc/self/fd/N` 的 readlink 内容来自 `FileLike::path()`；`inotify_init1`/`fanotify_init` 须使用独立 `InotifyFd`/`FanotifyFd`（`anon_inode:[inotify]` / `anon_inode:[fanotify]`），不能再用 `anon_inode:[dummy]`，否则用户态假阳性。
+- `/proc/self/fd/N` 的 readlink 内容来自 `FileLike::path()`；`inotify_init1`/`fanotify_init` 须使用独立 `InotifyFd`/`FanotifyFd`（`anon_inode:[inotify]` / `anon_inode:[fanotify]`），不能再用 `anon_inode:[dummy]`，否则用户态假阳性。**`fanotify_init`** **校验** **后** **`event_f_flags`** **须** **存入** **`FanotifyFd`**（**`event_f_flags()`**），与 **Linux** **实例** **`O_*`** **语义** **来源** **一致**；**`fanotify_mark`/事件** **打开** **路径** **仍** **占位**（**issue-328**；掩码 **issue-060**）。
 - POSIX `timer_create` / `timer_settime` / `timer_gettime` / `timer_delete`：未实现时须返回 **`AxError::Unsupported`（ENOSYS）**，禁止 `Ok(0)` 导致用户态 `timer_t` 未写入却被当作成功；若将来实现，需向 `timer_create` 第四参写入非空 id 并接 `sigevent`/线程定时逻辑。
 - `flock(2)`：按 inode（`File`/`Directory` 的 `metadata` dev/ino）维护 BSD 风格互斥/共享锁；同一 fd 升级/幂等、关闭 fd 须从全局表移除；`LOCK_NB` 冲突映射 `AxError::WouldBlock`（EAGAIN）；阻塞模式在 `WouldBlock` 上 `yield_now` 轮询。
 - `fcntl` 记录锁（`F_SETLK`/`F_SETLKW`/`F_GETLK` 及 `F_OFD_*` 同路径）：**`sys_fcntl`** 须先 **`get_file_like(fd)`** 再读/写用户 **`flock64`**（**`EBADF`** 先于 **EFAULT**，issue-136）；**`record_lock`** 内仍会 **`inode_key`/`get_file_like`**。仅对普通 **`File`** fd；**`flock64`** 区间经 SEEK_SET/CUR/END 解析；写锁与读/写冲突、读锁仅与写冲突；同进程占位前先对重叠区间解锁再插入；**`F_SETLK`** 冲突返回 **`WouldBlock`**；**`close_file_like`** 调用 **`record_lock::release_fd`** 清除该 fd 登记锁。
