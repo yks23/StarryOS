@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-178 resolved（**`close_range` `CLOSE_RANGE_UNSHARE`**：**`FD_TABLE.read().clone()`** 快照 + **`Arc::new(RwLock::new(..))`** 写回 **`scope`**，修复 **`mem::take`** 丢表；避免同 **`Arc` 上 `write`+`read` 死锁；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-177 resolved（**`umount2`**：**`UMOUNT_NOFOLLOW`** → **`resolve_no_follow`**；**`MNT_FORCE`/`MNT_DETACH`/`MNT_EXPIRE`** → **`EOPNOTSUPP`**，避免静默忽略；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-174 resolved（**`recvmsg`**：**`msg_flags`** **`MSG_TRUNC`**/**`MSG_CTRUNC`**；**`axnet`** **UDP/dgram** **`RecvOptions.msg_trunc`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-173 resolved（**`madvise`**：**`WILLNEED`/`POPULATE_*` → `populate_area`**；**`NORMAL`/`RANDOM`/`SEQUENTIAL`** no-op；其余白名单 → **`EOPNOTSUPP`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）

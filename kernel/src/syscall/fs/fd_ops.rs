@@ -1,9 +1,5 @@
 use alloc::{format, string::ToString, sync::Arc};
-use core::{
-    ffi::{c_char, c_int},
-    mem,
-    ops::{Deref, DerefMut},
-};
+use core::ffi::{c_char, c_int};
 
 use axerrno::{AxError, AxResult};
 use axfs::{FS_CONTEXT, FileBackend, OpenOptions, OpenResult};
@@ -11,6 +7,7 @@ use axfs_ng_vfs::{DirEntry, FileNode, Location, NodePermission, NodeType, Refere
 use axtask::current;
 use bitflags::bitflags;
 use linux_raw_sys::general::*;
+use spin::RwLock;
 
 use crate::{
     file::{
@@ -162,12 +159,14 @@ pub fn sys_close_range(first: i32, last: i32, flags: u32) -> AxResult<isize> {
     let flags = CloseRangeFlags::from_bits(flags).ok_or(AxError::InvalidInput)?;
     debug!("sys_close_range <= fds: [{first}, {last}], flags: {flags:?}");
     if flags.contains(CloseRangeFlags::UNSHARE) {
-        // TODO: optimize
+        // Linux `CLOSE_RANGE_UNSHARE`: private FD table for this task group slot (see `clone` without
+        // `CLONE_FILES`). Cannot use `scope_mut(..).write().clone_from(&FD_TABLE.read())` here:
+        // that deadlocks when the active table is the same `Arc` as the scope slot. Snapshot under
+        // a read lock, then replace the slot with a fresh `Arc` like `!CLONE_FILES` does for a child.
         let curr = current();
         let mut scope = curr.as_thread().proc_data.scope.write();
-        let mut guard = FD_TABLE.scope_mut(&mut scope);
-        let old_files = mem::take(guard.deref_mut());
-        old_files.write().clone_from(old_files.read().deref());
+        let snapshot = FD_TABLE.read().clone();
+        *FD_TABLE.scope_mut(&mut scope) = Arc::new(RwLock::new(snapshot));
     }
 
     let cloexec = flags.contains(CloseRangeFlags::CLOEXEC);
