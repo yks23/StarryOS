@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-143 resolved（**`Directory`** **`FileLike::read`/`write`** → **`IsADirectory`**（**EISDIR**），对齐 Linux目录 fd；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-142 resolved（**`sched_setaffinity`**/**`sched_setscheduler`**：**`sched_resolve_task(pid)`** 先于 **`vm_load`**/**`vm_read_uninit(param)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-141 resolved（**`prlimit64`**：内核内快照 **`old`** →读/校验/应用 **`new_limit`** → 再 **`vm_write(old_limit)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-140 resolved（**`readlink`**/**`readlinkat`**：**`bufsiz==0`** → **`InvalidInput`**（**EINVAL**），在 **`vm_load_string(path)`** 与 VFS 解析前；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -123,6 +124,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-143 | 目录 fd read/write → EISDIR | resolved | 2026-04-12 |
 | issue-142 | sched_setaffinity pid 解析先于 user_mask | resolved | 2026-04-12 |
 | issue-141 | prlimit64 old 出参晚于 new 读/校验 | resolved | 2026-04-12 |
 | issue-140 | readlinkat bufsiz==0 → EINVAL | resolved | 2026-04-12 |
@@ -289,6 +291,7 @@
 - **`getrandom(2)`**：**`flags`** 须为 **`linux_raw_sys::general`** 中 **`GRND_NONBLOCK|GRND_RANDOM|GRND_INSECURE`** 的子集（与 **`uapi/linux/random.h`** 一致），否则 **`EINVAL`**；勿用 **`from_bits_retain`** 静默丢弃未知位。
 - **`fadvise64`**：管道等不可 seek 的 fd 上 Linux 为 **`ESPIPE`**（非法 seek），非 **`EPIPE`**（断管）。实现上 **`Pipe::from_fd`** 分支返回 **`LinuxError::ESPIPE.into()`**（**`axerrno::LinuxError`**），勿用 **`AxError::BrokenPipe`**。真 **`fadvise`** 语义仍为桩；**`advice≤5`** 且非 pipe 时 **`offset`/`len`** 须非负，且 cast 为 **`u64`** 后 **`checked_add`** 不溢出，否则 **`InvalidInput`**（**EINVAL**），与 **`sys_fallocate`** 一致。
 - **`fsync(2)`/`fdatasync(2)`**：须 **`get_file_like`** 后对 **`File`** 或 **`MemfdCreatedFile`**（包装 **`File`**）调用 **`axfs::File::sync`**；**pipe**、**socket**、**目录**、**epoll** 等其它 **`FileLike`** → **`InvalidInput`**（**EINVAL**），勿用 **`File::from_fd`**（会得到 **`BrokenPipe`**/**`IsADirectory`**，issue-130）。无效 **`fd`** 仍为 **`BadFileDescriptor`**（**EBADF**）。
+- **`read(2)`/`write(2)`**（经 **`readv`/`writev`**）：**`Directory`** **`FileLike::read`/`write`** 须 **`IsADirectory`**（**EISDIR**），勿 **`BadFileDescriptor`**（**EBADF**），与 Linux 及 **`pread`/`pwrite`** 经 **`File::from_fd`** 行为一致（issue-143）。
 - **`renameat2(2)`**：**`flags`** 掩码、**`NOREPLACE`+`EXCHANGE`** 互斥、**`WHITEOUT`** 须在 **`vm_load_string(old_path/new_path)`** 之前完成（issue-138）。**`flags`** 须为 **`linux_raw_sys::general`** 中 **`RENAME_NOREPLACE|RENAME_EXCHANGE|RENAME_WHITEOUT`** 的子集，否则 **`EINVAL`**；**`WHITEOUT`** 未建模 overlay → **`EINVAL`**。**`RENAME_NOREPLACE`** 且 **`new_dir.lookup_no_follow(new_name)`** 已存在 → **`EEXIST`**。**`RENAME_EXCHANGE`**：两端须存在（否则 **`ENOENT`**）；同目录同名 → **`EINVAL`**；交换以临时名三次 **`Location::rename`**（非崩溃原子）。**`new_path`** 用 **`resolve_parent`**。
 - **`setitimer`/`getitimer`**：**`ITIMER_REAL`** 独占 wall 时钟 **`alarm_task`**（**`ITimer::schedule_wall_alarm`**）；**`ITIMER_VIRTUAL`/`PROF`** 仅在 **`TimeManager::poll`** 中按 **`TimerState::User`/`Kernel`** 推进 **`remained_ns`**，**`set_itimer`** 与周期重载不再为二者注册 wall alarm。**`last_wall_ns`** 在 **`TimeManager::new`** 中初始化为 **`monotonic_time_nanos()`**，避免首次 **`delta`** 近似为开机时长。抢占与内核内 steal 时间仍弱于 Linux（TODO）。
 - **`ioctl`（`kernel/src/file/fs.rs` 的 `File`）**：与 **`Tty`** 驱动已实现的终端/PTY 命令（**`TCGETS`**/**`TCSETS`** 族、**`TIOCGWINSZ`**、**`TIOCGPGRP`**、**`TIOCSCTTY`** 等）在 **`NodeType != CharacterDevice`** 时于转发 **`location().ioctl`** 前返回 **`NotATty`（ENOTTY）**；字符设备仍走 **`Device`**/**`DeviceOps`**（TTY 与其它设备各自处理）。
@@ -358,6 +361,7 @@
 - issue-140：**`readlinkat`** 对已存在 symlink，**`bufsiz==0`** → **`EINVAL`**，勿 **`Ok(0)`**；可与坏 **`path`** 组合验证 **EINVAL** 先于 **ENOENT/EFAULT**。
 - issue-141：**`prlimit64`** 同时 **`old_limit`** + 非法 **`new_limit`**（**`rlim_cur`>`rlim_max`** 或不可读 **`new`**）：**`old`** 缓冲应未被写入；首错 **`EINVAL`**/**`EFAULT`**。
 - issue-142：无效 **`pid`** + 坏 **`user_mask`** / **`sched_param`**：首错 **`ESRCH`**（先于 **EFAULT**）；**`sched_setscheduler`** **`NULL` param** 仍 **`EINVAL`**。
+- issue-143：已 **`open` 目录** fd 上 **`read`/`write`** → **`EISDIR`**，勿 **EBADF**。
 - issue-053：请跑 **`/bin/test_memfd_create_invalid_flags`**（**`memfd_create(..., 0x80000000)`** → **`EINVAL`**）。
 - issue-052：请跑 **`/bin/test_fchownat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`uid`/`gid`** 不变）。
 - issue-051：请跑 **`/bin/test_utimensat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`mtime`** 不变）。
