@@ -38,9 +38,13 @@ pub fn sys_prlimit64(
         }
     });
 
-    if let Some(new_limit) = new_limit.nullable() {
-        // FIXME: AnyBitPattern
-        let new_limit = unsafe { new_limit.vm_read_uninit()?.assume_init() };
+    if let Some(user_new) = new_limit.nullable() {
+        // Linux `struct rlimit64` is two `__u64` fields; read by scalar to avoid
+        // `AnyBitPattern` / whole-struct `assume_init` if uapi padding ever changes.
+        let p = user_new.cast::<u64>();
+        let rlim_cur = p.vm_read()?;
+        let rlim_max = unsafe { p.add(1) }.vm_read()?;
+        let new_limit = rlimit64 { rlim_cur, rlim_max };
         if new_limit.rlim_cur > new_limit.rlim_max {
             return Err(AxError::InvalidInput);
         }
