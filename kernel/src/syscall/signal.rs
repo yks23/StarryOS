@@ -23,7 +23,9 @@ use crate::{
 };
 
 pub(crate) fn check_sigset_size(size: usize) -> AxResult<()> {
-    if size != size_of::<SignalSet>() && size != 0 {
+    // Linux `copy_sigset_from_user` / `rt_sigprocmask` 等：`sigsetsize` 须严格等于
+    // `sizeof(sigset_t)`，`0` 与过大/过小均为 **EINVAL**（与畸形 libc /直接 syscall 对齐）。
+    if size != size_of::<SignalSet>() {
         return Err(AxError::InvalidInput);
     }
     Ok(())
