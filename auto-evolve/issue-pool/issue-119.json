@@ -1,0 +1,28 @@
+{
+  "id": "issue-119",
+  "title": "getsockname/getpeername 先 local_addr/peer_addr 再校验 addrlen，用户指针 EFAULT 顺序与 Linux 常见路径不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "resolved_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`sys_getsockname`/`sys_getpeername`**：在 **`Socket::from_fd`** 之后、**`local_addr`/`peer_addr`** 之前 **`addrlen.get_as_mut()?`**，再 **`write_to_user(addr, alen)`**；**`addr`** 仍由 **`fill_addr`** 在写回阶段校验。",
+  "files_changed": ["kernel/src/syscall/net/name.rs"],
+  "description": "**`sys_getsockname`** / **`sys_getpeername`**（`kernel/src/syscall/net/name.rs`）在 **`Socket::from_fd`** 之后先调用 **`local_addr()`** / **`peer_addr()`**，再执行 **`write_to_user(addr, addrlen.get_as_mut()?)?`**。**`addrlen.get_as_mut()`**仅在构造 **`write_to_user`** 实参时求值，故发生在已取得内核 **`SocketAddr`** **之后**。**Linux** **`getsockname`/`getpeername`** 在 **`move_addr_to_user`** 一侧会先触碰 **`addrlen`/`addr`** 等用户缓冲区；若 **`addrlen`** 为 **`NULL`** 或不可写，多早返回 **`-EFAULT`**，且通常**不会**先完成「解析本地/对端地址」再失败。Starry 当前顺序在 **`local_addr`/`peer_addr`** 无副作用时错误码仍多为 **EFAULT**，但若未来实现带可观测副作用（统计、跟踪、权限日志），则与 **Linux** 的**失败前序**不一致。更稳妥做法：在 **`local_*/peer_*`** 之前先 **`addrlen.get_as_mut()`**（或等价的 **`UserPtr`** 校验），再取地址并 **`write_to_user`**。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["getsockname", "getpeername"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/name.rs:11-34"],
+    "related_files": ["kernel/src/syscall/net/addr.rs:44-56"],
+    "key_insight": "`local_addr`/`peer_addr` 先于 `addrlen.get_as_mut`"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "**`getsockname(fd, buf, NULL)`** 或 **`addrlen` 指向无效页**；对比 **Linux** 与 **Starry** 错误码及是否在 **`local_addr`** 之后才失败（可插桩或断点）。",
+    "expected_output_contains": "",
+    "pass_criteria": "**`addrlen`/`addr`** 用户访问失败在 **`local_addr`/`peer_addr`** 之前或与 **Linux** 文档化顺序一致。",
+    "last_result": "2026-04-12：已先 **`get_as_mut(addrlen)`** 再 **`local_addr`/`peer_addr`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** PASS；QEMU 未测"
+  },
+  "suggested_fix": "在 **`write_to_user`** 前提取 **`let alen = addrlen.get_as_mut()?;`**，或调整调用顺序使 **`get_as_mut`** 早于 **`local_addr`/`peer_addr`**（在 **`from_fd`** 之后即可）。",
+  "references": ["man 2 getsockname", "man 2 getpeername", "Linux net/socket.c"]
+}
