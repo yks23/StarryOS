@@ -623,10 +623,11 @@ pub fn handle_syscall(uctx: &mut UserContext) {
         ),
         Sysno::timerfd_gettime => sys_timerfd_gettime(uctx.arg0() as _, uctx.arg1() as _),
 
+        Sysno::inotify_init1 => sys_inotify_init1(uctx.arg0() as _),
+        Sysno::fanotify_init => sys_fanotify_init(uctx.arg0() as _, uctx.arg1() as _),
+
         // dummy fds
-        Sysno::fanotify_init
-        | Sysno::inotify_init1
-        | Sysno::userfaultfd
+        Sysno::userfaultfd
         | Sysno::perf_event_open
         | Sysno::io_uring_setup
         | Sysno::bpf

@@ -1,6 +1,7 @@
 pub mod epoll;
 pub mod event;
 mod fs;
+mod inotify;
 mod net;
 mod pidfd;
 mod pipe;
@@ -23,6 +24,7 @@ use spin::RwLock;
 
 pub use self::{
     fs::{Directory, File, resolve_at, with_fs},
+    inotify::{FanotifyFd, InotifyFd},
     net::Socket,
     pidfd::PidFd,
     pipe::Pipe,
