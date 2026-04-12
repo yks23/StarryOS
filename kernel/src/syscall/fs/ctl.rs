@@ -284,6 +284,10 @@ pub fn sys_linkat(
     }
 
     let new_path = vm_load_string(new_path)?;
+    // Linux rejects empty new pathname with EINVAL (issue-398; issue-397/393 theme).
+    if new_path.is_empty() {
+        return Err(AxError::InvalidInput);
+    }
     if new_dirfd != AT_FDCWD && !new_path.starts_with('/') {
         let _ = Directory::from_fd(new_dirfd)?;
     }
