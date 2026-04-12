@@ -18,7 +18,7 @@ use linux_raw_sys::{
 
 use super::addr::SocketAddrExt;
 use crate::{
-    file::{FileLike, Socket},
+    file::{FileLike, Socket, close_file_like},
     mm::{UserConstPtr, UserPtr},
     task::AsThread,
 };
@@ -215,9 +215,15 @@ pub fn sys_socketpair(
     }
     let cloexec = raw_ty & O_CLOEXEC != 0;
 
-    *fds.get_as_mut()? = [
-        sock1.add_to_fd_table(cloexec)?,
-        sock2.add_to_fd_table(cloexec)?,
-    ];
+    let out = fds.get_as_mut()?;
+    let fd1 = sock1.add_to_fd_table(cloexec)?;
+    let fd2 = match sock2.add_to_fd_table(cloexec) {
+        Ok(fd) => fd,
+        Err(e) => {
+            let _ = close_file_like(fd1);
+            return Err(e);
+        }
+    };
+    *out = [fd1, fd2];
     Ok(0)
 }
