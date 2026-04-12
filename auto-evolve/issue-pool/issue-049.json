@@ -1,0 +1,28 @@
+{
+  "id": "issue-049",
+  "title": "fchmodat 未校验 flags，非法 AT_* 位经 resolve_at 静默忽略，应对齐 Linux EINVAL",
+  "status": "resolved",
+  "created_at": "2026-04-16T14:00:00Z",
+  "resolved_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "description": "Linux **`fchmodat(2)`** 的 **`flags`** 只能是 **`0`** 或 **`AT_SYMLINK_NOFOLLOW`**；其它位须 **`EINVAL`**（本环境 **`fchmodat(..., 0x80000000)`** → **`errno=22`**）。**`sys_fchmodat`** 将 **`flags`** 直接传入 **`resolve_at`**，未知位被忽略后仍可能 **`chmod`** 成功，与 Linux 不符，且与 **`linkat`/`unlinkat`** 同类问题一致。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["fchmodat"],
+  "fix_summary": "**`sys_fchmodat`**：按 Linux **`VALID_FCHMODAT_FLAGS`**（**`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW`**）校验，未知位 **`AxError::InvalidInput`**（**`EINVAL`**）；保留 **`sys_fchmod`** 使用的 **`AT_EMPTY_PATH`**。",
+  "files_changed": ["kernel/src/syscall/fs/ctl.rs"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/ctl.rs:371-380"],
+    "related_files": ["kernel/src/file/fs.rs:resolve_at"],
+    "key_insight": "入口校验 `flags` ⊆ `{0, AT_SYMLINK_NOFOLLOW}`（及 EMPTY_PATH 若走 fd+空路径路径需与 Linux 一致）"
+  },
+  "test": {
+    "source_file": "auto-evolve/tests/test_fchmodat_invalid_flags.c",
+    "build_command": "riscv64-linux-musl-gcc -static -Wall -o test_fchmodat_invalid_flags test_fchmodat_invalid_flags.c",
+    "run_method": "放入 rootfs /bin/ 后在 QEMU 运行",
+    "expected_output_contains": "SUMMARY",
+    "pass_criteria": "非法 flags 时返回 -1、errno=EINVAL，且文件 mode 不变",
+    "last_result": "未在 QEMU 运行；`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` 通过"
+  },
+  "suggested_fix": "在 `sys_fchmodat` 开头：`if flags & !AT_SYMLINK_NOFOLLOW != 0 { return Err(InvalidInput); }`（若不支持 `AT_EMPTY_PATH` 组合则按内核策略收紧）。",
+  "references": ["man 2 fchmodat"]
+}

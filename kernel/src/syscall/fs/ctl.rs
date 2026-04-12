@@ -380,6 +380,11 @@ pub fn sys_fchmod(fd: i32, mode: u32) -> AxResult<isize> {
 
 pub fn sys_fchmodat(dirfd: i32, path: *const c_char, mode: u32, flags: u32) -> AxResult<isize> {
     let path = path.nullable().map(vm_load_string).transpose()?;
+    // Linux VALID_FCHMODAT_FLAGS (see open.c): AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW.
+    const VALID_FCHMODAT_FLAGS: u32 = AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW;
+    if flags & !VALID_FCHMODAT_FLAGS != 0 {
+        return Err(AxError::InvalidInput);
+    }
     resolve_at(dirfd, path.as_deref(), flags)?
         .into_file()
         .ok_or(AxError::BadFileDescriptor)?

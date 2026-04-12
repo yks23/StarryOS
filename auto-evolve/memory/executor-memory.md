@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-049 resolved（**`fchmodat`**：**`flags`** 须为 Linux **`VALID_FCHMODAT_FLAGS`**（**`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW`**），未知位 **`EINVAL`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过）
 - 日期：2026-04-12：issue-048 resolved（**`unlinkat`**：**`flags`** 仅 **`0`** 或 **`AT_REMOVEDIR`**，否则 **`EINVAL`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过）
 - 日期：2026-04-12：issue-047 resolved（**`linkat`**：**`flags`** 须为 **`AT_EMPTY_PATH | AT_SYMLINK_FOLLOW`**（Linux **`VALID_LINKAT_FLAGS`**），未知位 **`EINVAL`**；传入 **`resolve_at`** 时将 **`FOLLOW`** 映射为 **`AT_SYMLINK_NOFOLLOW`** 语义；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过）
 - 日期：2026-04-16：issue-046 resolved（**`pipe2`**：**`PipeFlags::from_bits`**，未知位 **`EINVAL`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过）
@@ -30,6 +31,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-049 | fchmodat AT_* flags 掩码 EINVAL | resolved | 2026-04-12 |
 | issue-048 | unlinkat flags 仅 0 或 AT_REMOVEDIR | resolved | 2026-04-12 |
 | issue-047 | linkat AT_* flags 掩码 EINVAL | resolved | 2026-04-12 |
 | issue-046 | pipe2 flags 未知位 EINVAL | resolved | 2026-04-16 |
@@ -91,6 +93,7 @@
 - **`pipe2`**：**`flags`** 仅允许 **`O_CLOEXEC`/`O_NONBLOCK`**（**`PipeFlags`**）；用 **`from_bits(...).ok_or(InvalidInput)`**，勿 **`from_bits_truncate`**（与 **`eventfd2`/`epoll_create1`** 一致）。
 - **`linkat(2)`**：**`flags`** 仅允许 **`AT_EMPTY_PATH | AT_SYMLINK_FOLLOW`**（与 Linux **`VALID_LINKAT_FLAGS`**），否则 **`EINVAL`**；**`resolve_at`** 仍用 **`AT_SYMLINK_NOFOLLOW`** 表示「不 follow」，故在 **`sys_linkat`** 内将 **`AT_SYMLINK_FOLLOW` 未置位** 时并入 **`AT_SYMLINK_NOFOLLOW`** 再调用 **`resolve_at`**。
 - **`unlinkat(2)`**：**`flags`** 仅 **`0`** 或 **`AT_REMOVEDIR`**，否则 **`EINVAL`**；勿将未知位当作「删文件」分支。
+- **`fchmodat(2)`** / **`fchmod`**： **`flags`** 须为 Linux **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW`** 的子集（**`sys_fchmod`** 用 **`AT_EMPTY_PATH`**），否则 **`EINVAL`**；勿未校验即传入 **`resolve_at`**。
 - **`getrusage(RUSAGE_CHILDREN)`**：须为 **`wait`** 回收子进程的 **CPU** 累计（**`ProcessData::child_utime_ns`/`child_stime_ns`**），与 **`times`/`waitpid`** 累加路径一致；**勿**把 **`proc.threads()`** 中除当前线程外的 **pthread** 当作子进程。
 - **`prlimit64`**：若 **`new_limit.rlim_max >`** 当前硬 **`limit.max`**（无 **`CAP_SYS_RESOURCE`** 等能力建模时视为非法抬高），须 **`OperationNotPermitted`（EPERM）**；勿静默 **`Ok(0)`**。可降低硬上限或保持不变并更新 **`rlim_cur`**（在 **`rlim_cur <= rlim_max`** 前提下）。
 - **`ioctl(FIONBIO)`**：第三参为 **`int *`**（Linux）；用 **`(arg as *const c_int).vm_read()`** 读整型，**`set_nonblocking(value != 0)`**；勿只读单字节、勿将取值限制为 0/1（**`2`**、**`256`** 等小端首字节为 0 的非零值须启用 **`O_NONBLOCK`**）。
@@ -130,6 +133,7 @@
 - **`get_mempolicy(2)`**：无 NUMA 建模时 **`policy`** 写入 **`MPOL_DEFAULT`（0）**；若 **`nodemask`/`maxnode`** 有效则清零 **`maxnode`** 位对应字节（上限 8192 字节）以匹配 **默认** 策略的空节点掩码。
 
 ## 给 Debugger 的消息
+- issue-049：请跑 **`/bin/test_fchmodat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`st_mode`** 不变）。
 - issue-048：请跑 **`/bin/test_unlinkat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，目标文件未删）。
 - issue-047：请跑 **`/bin/test_linkat_invalid_flags`**（**`linkat(..., 0x80000000)`** → **`EINVAL`**）。
 - issue-023：请跑 **`/bin/test_mempolicy_stub`**（**`get_mempolicy`** 成功后 **`mode != -1`**）。
