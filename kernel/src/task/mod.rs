@@ -306,6 +306,9 @@ pub struct ProcessData {
 }
 
 impl ProcessData {
+    /// Linux `S_IRWXUGO` (`0o777`): bits that participate in `umask(2)` and `mode & !umask`.
+    const UMASK_PERM_MASK: u32 = 0o777;
+
     /// Create a new [`ProcessData`].
     pub fn new(
         proc: Arc<Process>,
@@ -557,12 +560,14 @@ impl ProcessData {
 
     /// Set the umask.
     pub fn set_umask(&self, umask: u32) {
-        self.umask.store(umask, Ordering::SeqCst);
+        self.umask.store(umask & Self::UMASK_PERM_MASK, Ordering::SeqCst);
     }
 
-    /// Set the umask and return the old value.
+    /// Set the umask and return the old value (Linux: `mask & S_IRWXUGO` / `0o777` for both).
     pub fn replace_umask(&self, umask: u32) -> u32 {
-        self.umask.swap(umask, Ordering::SeqCst)
+        let new = umask & Self::UMASK_PERM_MASK;
+        let old = self.umask.swap(new, Ordering::SeqCst);
+        old & Self::UMASK_PERM_MASK
     }
 
     /// Returns `(effective, permitted, inheritable)` capability masks (lower 32 bits).

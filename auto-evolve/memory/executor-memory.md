@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-193 resolved（**`umask`**：**`ProcessData::UMASK_PERM_MASK`（`0o777`）**；**`replace_umask`**存 **`mask & 0o777`**、返 **`old & 0o777`**；**`set_umask`** 同截断；对齐 Linux **`open`/`mkdir`** 的 **`mode & !umask`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-190 resolved（**`prlimit64`**：用户 **`new_limit`** 两次 **`u64::vm_read()`** + **`rlimit64 { .. }`**，去掉 **`assume_init`/`FIXME: AnyBitPattern`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-188 resolved（**`cmsg_align`**：**`checked_add(align - 1)`** 溢出 → **`InvalidInput`**；**`CMsgBuilder::push` `remaining`** 改为 **`capacity - written`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-189 resolved（**`recvmsg` `msg_controllen`**：**`CMsgBuilder`** 内 **`written`** 累计，**`commit()`** 仅在 **`recv` 成功**且 cmsg 处理完后写回用户；失败路径不再提前 **` *len = 0`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
