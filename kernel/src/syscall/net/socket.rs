@@ -81,19 +81,23 @@ pub fn sys_socket(domain: u32, raw_ty: u32, proto: u32) -> AxResult<isize> {
 }
 
 pub fn sys_bind(fd: i32, addr: UserConstPtr<sockaddr>, addrlen: u32) -> AxResult<isize> {
+    // Linux __sys_bind: sockfd_lookup before move_addr_to_kernel (EBADF before EFAULT).
+    let socket = Socket::from_fd(fd)?;
     let addr = SocketAddrEx::read_from_user(addr, addrlen)?;
     debug!("sys_bind <= fd: {fd}, addr: {addr:?}");
 
-    Socket::from_fd(fd)?.bind(addr)?;
+    socket.bind(addr)?;
 
     Ok(0)
 }
 
 pub fn sys_connect(fd: i32, addr: UserConstPtr<sockaddr>, addrlen: u32) -> AxResult<isize> {
+    // Linux __sys_connect: sockfd_lookup before copy sockaddr (EBADF before EFAULT).
+    let socket = Socket::from_fd(fd)?;
     let addr = SocketAddrEx::read_from_user(addr, addrlen)?;
     debug!("sys_connect <= fd: {fd}, addr: {addr:?}");
 
-    Socket::from_fd(fd)?.connect(addr).map_err(|e| {
+    socket.connect(addr).map_err(|e| {
         if e == AxError::WouldBlock {
             AxError::InProgress
         } else {

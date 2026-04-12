@@ -1,0 +1,28 @@
+{
+  "id": "issue-132",
+  "title": "bind/connect 先 read_from_user(addr) 再 Socket::from_fd，EBADF 与 EFAULT 顺序可偏离 Linux",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "resolved_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_bind`/`sys_connect`：`Socket::from_fd(fd)?` 先于 `SocketAddrEx::read_from_user`，无效 fd 先 `BadFileDescriptor`（EBADF），再读 `sockaddr`，与 Linux `sockfd_lookup` 顺序及 `sys_accept4` 对称。",
+  "files_changed": ["kernel/src/syscall/net/socket.rs"],
+  "description": "**`sys_bind`** / **`sys_connect`**（`kernel/src/syscall/net/socket.rs`）首行 **`SocketAddrEx::read_from_user(addr, addrlen)?`**，随后才 **`Socket::from_fd(fd)?`**。**Linux** **`sys_bind`**/**`sys_connect`** 类路径通常先 **`sockfd_lookup_light`** / **`fd`** 合法性（**`EBADF`**），再 **`move_addr_to_kernel`** / **`copy sockaddr`**。当 **`fd`** 无效但 **`addr`** 指向不可读内存时：**Starry** 可能先 **`EFAULT`类**；**Linux** 多先 **`EBADF`**。与 **issue-122** **`getsockopt`**（**verified**）同类。**`sys_accept4`** 已 **`from_fd`** 先于 **`write_to_user`**，不对称。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["bind", "connect"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/socket.rs:83-105"],
+    "related_files": ["kernel/src/syscall/net/socket.rs:127-158"],
+    "key_insight": "`read_from_user` 先于 `Socket::from_fd`"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "无效 **`socket fd`** + 非法 **`addr`** 指针；对比 **Linux** 与 **Starry** 首错 **`EBADF`** vs **`EFAULT`**。",
+    "expected_output_contains": "",
+    "pass_criteria": "**`fd`** 解析顺序与 **Linux** 一致，或文档化当前顺序。",
+    "last_result": "2026-04-12：`from_fd` 先于 `read_from_user`；`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` PASS；QEMU 未测"
+  },
+  "suggested_fix": "将 **`Socket::from_fd(fd)?`** 置于 **`SocketAddrEx::read_from_user`** 之前（与 **`sys_accept4`** 一致）。",
+  "references": ["man 2 bind", "man 2 connect", "Linux net/socket.c __sys_bind"]
+}

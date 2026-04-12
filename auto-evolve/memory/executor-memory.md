@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-132 resolved（**`bind`/`connect`**：**`Socket::from_fd`** 先于 **`SocketAddrEx::read_from_user`**，**`EBADF`** 先于 **EFAULT** 类；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-131 resolved（**`fstatat`/`newfstatat`**：**`VALID_NEWFSTATAT_FLAGS`** + **`AT_STATX_SYNC_TYPE`** 互斥先于 **`vm_load_string(path)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-130 resolved（**`fsync`/`fdatasync`**：**`get_file_like`** 后仅 **`File`**/**`MemfdCreatedFile`** 调 **`sync`**，否则 **`InvalidInput`**（**EINVAL**），对齐 Linux **pipe/socket** 等；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-129 resolved（**`faccessat2`**：**`VALID_FACCESSAT_FLAGS`** 与 **`VALID_ACCESS_MODE`** 先于 **`vm_load_string(path)`**（issue-128 掩码语义不变）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -112,6 +113,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-132 | bind/connect from_fd 先于读 sockaddr | resolved | 2026-04-12 |
 | issue-131 | fstatat/newfstatat flags 掩码 EINVAL | resolved | 2026-04-12 |
 | issue-130 | fsync/fdatasync 非文件 fd → EINVAL | resolved | 2026-04-12 |
 | issue-129 | faccessat2 flags/mode 先于读 path | resolved | 2026-04-12 |
@@ -289,6 +291,7 @@
 - **`socket(2)`/`socketpair(2)`**：**`type`** 仅允许 **`SOCK_TYPE_MASK`（0xf）** 内 **`SOCK_*`** 与 **`O_CLOEXEC|O_NONBLOCK`**；其它位 **`InvalidInput`**（对齐 Linux **`EINVAL`**）。**`ty`** 取 **`raw_ty & SOCK_TYPE_MASK`**。
 - **`setsockopt(2)`**：**`optlen`** 须 **`>=`** 选项值 **`sizeof(T)`**（与 Linux / **`getsockopt`** 侧一致），只使用缓冲区前 **`sizeof(T)`** 字节；**`optlen < sizeof(T)`** → **`EINVAL`**。
 - **`getsockopt(2)`**（**`net/opt.rs`**）：**`Socket::from_fd`** 须早于 **`optlen.get_as_mut`**，使无效 **`fd`** 先 **`EBADF`**，再触碰 **`optlen`/`optval`**（与 Linux **`sockfd_lookup`** 顺序及 **`setsockopt`** 对称）；日志仅用 **`UserPtr::address`** 避免提前用户读。
+- **`bind(2)`/`connect(2)`**（**`socket.rs`**）：**`Socket::from_fd`** 须早于 **`SocketAddrEx::read_from_user`**，无效 **`fd`** 先 **`BadFileDescriptor`**（**EBADF**），与 Linux **`sockfd_lookup`** 及 **`sys_accept4`** 顺序一致（issue-132）。
 - **`bind`/`connect`/`sendto` 等 INET 地址**：**`SocketAddrV4`/`SocketAddrV6::read_from_user`** 要求 **`addrlen >= sizeof(sockaddr_in|sockaddr_in6)`**，只按固定布局读 **`sockaddr_in`/`sockaddr_in6`**；**`addrlen` 大于结构体**时与 Linux 一样忽略尾部字节。**vsock** **`sockaddr_vm`** 同理。
 - **`sendmsg` / `recvmsg` 与 ancillary**：控制缓冲区须与 Linux 一致使用 **`CMSG_ALIGN(sizeof(cmsghdr)+payload)`** 作为**占用步长**；**`cmsg_len`** 仍为含头的逻辑长度。遍历下一条头用 **`ptr += CMSG_ALIGN(cmsg_len)`**；**`CMsgBuilder::push`** 在 **`msg_controllen`** 与下一 **`cmsghdr`** 指针上前移对齐后长度，**`cmsg_len` 至对齐边界**建议填 **0**。**`CMsg::parse`（`sendmsg`）** 仅实现 **`(SOL_SOCKET, SCM_RIGHTS)`**；**`SCM_CREDENTIALS`/`SCM_TIMESTAMP`/`SCM_TIMESTAMPNS`/`SCM_TIMESTAMPING`/`SCM_SECURITY`** → **`Unsupported`**，勿与格式错误混用 **`EINVAL`**。
 - **`sched_getaffinity` / `sched_setaffinity`**：`pid==0` 为当前任务；非零先 **`get_task(pid)`**，失败再 **`get_process_data(pid)`** 取 **`proc.threads()` 最小 tid** 定位线程组代表线程。set 时当前任务走 **`set_current_affinity`**（SMP 迁移），其它任务仅 **`set_cpumask`**。未完整建模 CAP、僵尸 **`ESRCH`** 等。
@@ -319,6 +322,7 @@
 - issue-129：非法 **`flags`** 或 **`mode`** + 坏 **`path`** 指针，首错应 **`EINVAL`**（先于 **EFAULT** 类）。
 - issue-130：**`fsync`/`fdatasync`** 在 **pipe**/**socket** fd 上应 **`EINVAL`**，勿 **`BrokenPipe`**/**`IsADirectory`**。
 - issue-131：**`fstatat`** 非法 **`flags`**（如保留高位）→ **`EINVAL`**；可与 **`statx`** 非法 flags 用例类比。
+- issue-132：无效 **socket `fd`** + 坏 **`addr`**，首错应 **`EBADF`**（先于 **EFAULT**）。
 - issue-053：请跑 **`/bin/test_memfd_create_invalid_flags`**（**`memfd_create(..., 0x80000000)`** → **`EINVAL`**）。
 - issue-052：请跑 **`/bin/test_fchownat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`uid`/`gid`** 不变）。
 - issue-051：请跑 **`/bin/test_utimensat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`mtime`** 不变）。
