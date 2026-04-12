@@ -31,10 +31,10 @@ impl TryFrom<Clone3Args> for CloneArgs {
 
     fn try_from(args: Clone3Args) -> AxResult<Self> {
         if args.set_tid != 0 || args.set_tid_size != 0 {
-            warn!("sys_clone3: set_tid/set_tid_size not supported, ignoring");
+            return Err(AxError::InvalidInput);
         }
         if args.cgroup != 0 {
-            warn!("sys_clone3: cgroup parameter not supported, ignoring");
+            return Err(AxError::InvalidInput);
         }
 
         let flags = CloneFlags::from_bits_truncate(args.flags);
