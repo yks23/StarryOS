@@ -307,12 +307,49 @@ pub fn sys_mremap(addr: usize, old_size: usize, new_size: usize, flags: u32) -> 
     Ok(out.as_usize() as isize)
 }
 
+/// `linux/uapi` `MADV_*` values Linux accepts as valid `advice` to `madvise(2)`; other integers
+/// (e.g. `0xdeadbeef`) return `EINVAL`.
+const KNOWN_MADV_ADVICE: &[u32] = &[
+    MADV_COLD,
+    MADV_COLLAPSE,
+    MADV_DODUMP,
+    MADV_DOFORK,
+    MADV_DONTDUMP,
+    MADV_DONTFORK,
+    MADV_DONTNEED,
+    MADV_DONTNEED_LOCKED,
+    MADV_FREE,
+    MADV_GUARD_INSTALL,
+    MADV_GUARD_REMOVE,
+    MADV_HUGEPAGE,
+    MADV_HWPOISON,
+    MADV_KEEPONFORK,
+    MADV_MERGEABLE,
+    MADV_NOHUGEPAGE,
+    MADV_NORMAL,
+    MADV_PAGEOUT,
+    MADV_POPULATE_READ,
+    MADV_POPULATE_WRITE,
+    MADV_RANDOM,
+    MADV_REMOVE,
+    MADV_SEQUENTIAL,
+    MADV_SOFT_OFFLINE,
+    MADV_UNMERGEABLE,
+    MADV_WILLNEED,
+    MADV_WIPEONFORK,
+];
+
 pub fn sys_madvise(addr: usize, length: usize, advice: i32) -> AxResult<isize> {
     debug!("sys_madvise <= addr: {addr:#x}, length: {length:x}, advice: {advice:#x}");
     let length = align_up_4k(length);
     let start = VirtAddr::from(addr);
 
-    match advice as u32 {
+    let a = advice as u32;
+    if !KNOWN_MADV_ADVICE.contains(&a) {
+        return Err(AxError::InvalidInput);
+    }
+
+    match a {
         MADV_DONTNEED | MADV_FREE => {
             let curr = current();
             let mut aspace = curr.as_thread().proc_data.aspace.write();

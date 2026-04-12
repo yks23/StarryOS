@@ -1,0 +1,28 @@
+{
+  "id": "issue-055",
+  "title": "madvise 对未知 advice 静默成功，应对齐 Linux 返回 EINVAL",
+  "status": "resolved",
+  "created_at": "2026-04-17T18:00:00Z",
+  "resolved_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "description": "**`sys_madvise`**（`kernel/src/syscall/mm/mmap.rs`）对 **`advice`** 仅特殊处理 **`MADV_DONTNEED`/`MADV_FREE`**，**`match` 的 `_ => {}` 分支对其它值不报错**并最终 **`Ok(0)`**。Linux **`madvise(2)`** 对未知或不受支持的 **`advice`** 返回 **`EINVAL`**（本环境 **`madvise(..., 0xdeadbeef)`** → **`errno=22`**）。静默成功会导致用户态误以为内核已接受提示。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["madvise"],
+  "fix_summary": "**`sys_madvise`**：先校验 **`advice as u32`** 属于 **`linux_raw_sys::general`** 中列出的 **`KNOWN_MADV_ADVICE`**（**`linux/uapi` 全部 `MADV_*`**），否则 **`AxError::InvalidInput`**；**`MADV_DONTNEED`/`MADV_FREE`** 仍走 **`madvise_dontneed`**，其余已定义值当前为 no-op **`Ok(0)`**。",
+  "files_changed": ["kernel/src/syscall/mm/mmap.rs"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/mm/mmap.rs:310-324"],
+    "related_files": [],
+    "key_insight": "未实现的 advice 应 `InvalidInput`（EINVAL），勿 `_ => {}`"
+  },
+  "test": {
+    "source_file": "auto-evolve/tests/test_madvise_invalid_advice.c",
+    "build_command": "riscv64-linux-musl-gcc -static -Wall -o test_madvise_invalid_advice test_madvise_invalid_advice.c",
+    "run_method": "放入 rootfs /bin/ 后在 QEMU 运行",
+    "expected_output_contains": "SUMMARY",
+    "pass_criteria": "`madvise(anon, len, 0xdeadbeef)` 返回 -1 且 errno=EINVAL",
+    "last_result": "未在 QEMU 运行；`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` 通过"
+  },
+  "suggested_fix": "将 **`advice`** 限制为当前内核实现的集合（如 **`MADV_DONTNEED`/`MADV_FREE`**），或显式列出允许的 **`MADV_*`** 后 **`_ => return Err(InvalidInput)`**。",
+  "references": ["man 2 madvise"]
+}
