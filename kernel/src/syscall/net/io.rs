@@ -50,6 +50,17 @@ use crate::{
     syscall::net::{CMsg, CMsgBuilder, cmsg_align},
 };
 
+/// Linux `copy_msghdr_from_user` / `verify_iovec` 风格：指针为 NULL 时对应长度须为 0，否则 **EINVAL**。
+fn validate_msghdr_ptr_len_consistency(msg: &msghdr) -> AxResult<()> {
+    if msg.msg_control.is_null() && msg.msg_controllen != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    if msg.msg_name.is_null() && msg.msg_namelen != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    Ok(())
+}
+
 /// After [`Socket::from_fd`] and `flags` validation: optional `to` address + [`Socket::send`].
 fn send_on_socket(
     socket: &Socket,
@@ -120,6 +131,7 @@ pub fn sys_sendmsg(fd: i32, msg: UserConstPtr<msghdr>, flags: u32) -> AxResult<i
     // Whole-structure snapshot (like `copy_msghdr_from_user`): `msg_control` / `msg_controllen` /
     // `msg_iov` / … come from one load sequence, not independent re-reads of user `msghdr` (issue-197).
     let msg = *msg.get_as_ref()?;
+    validate_msghdr_ptr_len_consistency(&msg)?;
     let mut cmsg = Vec::new();
     if !msg.msg_control.is_null() {
         let mut ptr = msg.msg_control as usize;
@@ -324,6 +336,7 @@ pub fn sys_recvmsg(fd: i32, msg: UserPtr<msghdr>, flags: u32) -> AxResult<isize>
     // Snapshot `msghdr` + field addresses: avoid holding `&mut msghdr` across `recv` (issue-198).
     let base = msg.address().as_usize();
     let m = *msg.get_as_mut()?;
+    validate_msghdr_ptr_len_consistency(&m)?;
     let cmsg_builder = if m.msg_control.is_null() {
         None
     } else {
