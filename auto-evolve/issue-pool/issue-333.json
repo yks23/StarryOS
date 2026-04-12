@@ -1,0 +1,27 @@
+{
+  "id": "issue-333",
+  "title": "`pselect6`/`select(2)`：`sys_pselect6`/`sys_select` 在调用 `do_select` 之前对 `timeout` 执行 `read_timespec_user`/`read_timeval_user`，而 `do_select` 内才检查 `nfds > __FD_SETSIZE` → `EINVAL`，与 Linux 常先校验 `nfds`/fd_set 再拷贝 `timeout` 时，「过大 `nfds`」与「非法 `timeout` 指针」的 `EINVAL`/`EFAULT` 优先级可能不完全一致",
+  "status": "resolved",
+  "created_at": "2026-04-13T23:35:00Z",
+  "severity": "low",
+  "fix_summary": "新增 `check_select_nfds`，在 `sys_select`/`sys_pselect6` 内于读取 `timeout` 之前调用；`do_select` 保留 `nfds` 校验并注释 issue-333。更新 `executor-memory` poll/select 条、表格与最近更新；新增 `issue-333.json`。",
+  "files_changed": ["kernel/src/syscall/io_mpx/select.rs", "auto-evolve/memory/executor-memory.md", "auto-evolve/issue-pool/issue-333.json"],
+  "description": "**`kernel/src/syscall/io_mpx/select.rs`** **`sys_pselect6`** **（** **约** **240–262** **行** **）** **与** **`#[cfg(x86_64)]`** **`sys_select`** **（** **约** **210–230** **行** **）** **在** **调用** **`do_select`** **之前** **即** **解析** **用户** **`timeout`** **（** **`read_timespec_user`** **/** **`read_timeval_user`** **）** **。** **`do_select`** **（** **约** **85–95** **行** **）** **入口** **才** **检查** **`nfds > __FD_SETSIZE`** **。** **当** **`nfds`** **越** **上** **界** **且** **`timeout`** **为** **无效** **用户** **指针** **时** **，** **本** **路径** **可能** **先** **`EFAULT`** **于** **`timeout`** **读** **取** **，** **而** **Linux** **`core_sys_select`** **类** **路径** **多** **先** **拒绝** **非法** **`nfds`** **。**\n\n**建议** **：** **将** **`nfds > __FD_SETSIZE`** **（** **及** **必要** **的** **`nfds`** **语义** **）** **提前** **到** **`timeout`** **用户** **读** **之前** **，** **或** **注释** **说明** **与** **上游** **顺序** **差异** **。** **`ppoll`** **（** **`poll.rs`** **）** **顺序** **可** **对照** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["pselect6", "select"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/io_mpx/select.rs:85-95", "kernel/src/syscall/io_mpx/select.rs:209-262"],
+    "related_files": ["kernel/src/syscall/io_mpx/poll.rs"],
+    "key_insight": "pselect6/select read timeout before do_select nfds cap"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：过大 `nfds` + 坏 `timeout` 指针对照 Linux 返回顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游 `select`/`pselect` 校验顺序一致，或注释说明差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `sys_pselect6`/`sys_select` 内先调用仅做 `nfds` 检查的辅助函数，或内联 `nfds` 检查后再读 `timeout`。",
+  "references": ["man 2 select", "man 2 pselect", "kernel/src/syscall/io_mpx/select.rs", "issue-295"]
+}

@@ -90,6 +90,7 @@ fn do_select(
     timeout: Option<Duration>,
     sigmask: UserConstPtr<SignalSetWithSize>,
 ) -> AxResult<isize> {
+    // Also enforced in `sys_select`/`sys_pselect6` before `timeout` read (issue-333).
     if nfds > __FD_SETSIZE {
         return Err(AxError::InvalidInput);
     }
@@ -206,6 +207,14 @@ fn do_select(
     poll_result
 }
 
+#[inline]
+fn check_select_nfds(nfds: u32) -> AxResult<()> {
+    if nfds > __FD_SETSIZE {
+        return Err(AxError::InvalidInput);
+    }
+    Ok(())
+}
+
 #[cfg(target_arch = "x86_64")]
 pub fn sys_select(
     nfds: u32,
@@ -214,20 +223,17 @@ pub fn sys_select(
     exceptfds: UserPtr<__kernel_fd_set>,
     timeout: UserConstPtr<timeval>,
 ) -> AxResult<isize> {
-    do_select(
-        nfds,
-        readfds,
-        writefds,
-        exceptfds,
-        if timeout.is_null() {
-            None
-        } else {
-            Some(
-                read_timeval_user(timeout.address().as_usize() as *const timeval)?.try_into_time_value()?,
-            )
-        },
-        0.into(),
-    )
+    // Linux core_sys_select: reject oversized `nfds` before copying `timeout` (EINVAL before EFAULT
+    // on bad `timeout`; issue-333).
+    check_select_nfds(nfds)?;
+    let timeout = if timeout.is_null() {
+        None
+    } else {
+        Some(
+            read_timeval_user(timeout.address().as_usize() as *const timeval)?.try_into_time_value()?,
+        )
+    };
+    do_select(nfds, readfds, writefds, exceptfds, timeout, 0.into())
 }
 
 #[repr(C)]
@@ -245,18 +251,14 @@ pub fn sys_pselect6(
     timeout: UserConstPtr<timespec>,
     sigmask: UserConstPtr<SignalSetWithSize>,
 ) -> AxResult<isize> {
-    do_select(
-        nfds,
-        readfds,
-        writefds,
-        exceptfds,
-        if timeout.is_null() {
-            None
-        } else {
-            Some(
-                read_timespec_user(timeout.address().as_usize() as *const timespec)?.try_into_time_value()?,
-            )
-        },
-        sigmask,
-    )
+    // Linux: `nfds` bound before `timeout` copy (issue-333; same as `sys_select`).
+    check_select_nfds(nfds)?;
+    let timeout = if timeout.is_null() {
+        None
+    } else {
+        Some(
+            read_timespec_user(timeout.address().as_usize() as *const timespec)?.try_into_time_value()?,
+        )
+    };
+    do_select(nfds, readfds, writefds, exceptfds, timeout, sigmask)
 }
