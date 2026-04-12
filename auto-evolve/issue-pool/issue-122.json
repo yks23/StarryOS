@@ -1,0 +1,28 @@
+{
+  "id": "issue-122",
+  "title": "getsockopt 在 Socket::from_fd 之前 optlen.get_as_mut，EBADF 与 EFAULT 相对顺序可偏离 Linux",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "resolved_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`sys_getsockopt`**：**`Socket::from_fd(fd)?`** 先于 **`optlen.get_as_mut()?`**，与 Linux **`sockfd_lookup` 先于用户拷贝**及同文件 **`setsockopt`** 一致；**`debug!`** 仅打印 **`optval`/`optlen` 用户地址**，不提前触 **`optlen`** 内容。",
+  "files_changed": ["kernel/src/syscall/net/opt.rs"],
+  "description": "**`sys_getsockopt`**（`kernel/src/syscall/net/opt.rs`）首行 **`let optlen = optlen.get_as_mut()?;`**，随后才 **`Socket::from_fd(fd)?`**。**Linux** **`do_getsockopt`** 类路径通常先 **`sockfd_lookup_light`** / **`fd`** 合法性（**`EBADF`**），再 **`copy_from_user`** / **`copy_to_user`** 触碰 **`optval`/`optlen`**。当 **`fd`** 无效但 **`optlen`** 指向不可访问地址时：**Starry** 可能先因 **`get_as_mut`** 得到 **`EFAULT`类**错误；**Linux** 多先 **`EBADF`**。当 **`fd`** 无效且 **`optlen`** 合法时：**Starry** 已对 **`optlen`** 做 **`check_region`**（建立可写引用）再 **`from_fd`** 失败——与 **Linux**「未打开 socket 则不碰出参」的细粒度顺序略有差别。**`setsockopt`** 为 **`from_fd`** 在前，不对称。建议：**`from_fd`** 早于 **`optlen.get_as_mut()`**（或与 **Linux** **`sockopt` 入口**顺序对齐）。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["getsockopt"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/opt.rs:115-141"],
+    "related_files": ["kernel/src/syscall/net/opt.rs:156-180"],
+    "key_insight": "`optlen.get_as_mut` 先于 `Socket::from_fd`"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "无效 **`fd`** +非法 **`optlen`** 指针组合；对比 **Linux** 与 **Starry** 首错 **`EBADF`** vs **`EFAULT`**。",
+    "expected_output_contains": "",
+    "pass_criteria": "**`fd`** 解析顺序与 **Linux** 一致，或文档化 Starry 优先校验 **`optlen`**的设计。",
+    "last_result": "2026-04-12：已 **`from_fd`** 先于 **`optlen.get_as_mut`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** PASS；QEMU 未测"
+  },
+  "suggested_fix": "将 **`Socket::from_fd(fd)?`** 移到 **`optlen.get_as_mut()`** 之前；**`debug!`** 可延后或仅用 **`optlen` 地址**不触用户。",
+  "references": ["man 2 getsockopt", "Linux net/socket.c sock_common_getsockopt"]
+}

@@ -119,14 +119,13 @@ pub fn sys_getsockopt(
     optval: UserPtr<u8>,
     optlen: UserPtr<socklen_t>,
 ) -> AxResult<isize> {
-    let optlen = optlen.get_as_mut()?;
     debug!(
-        "sys_getsockopt <= fd: {}, level: {}, optname: {}, optval: {:?}, optlen: {}",
+        "sys_getsockopt <= fd: {}, level: {}, optname: {}, optval: {:?}, optlen: {:?}",
         fd,
         level,
         optname,
         optval.address(),
-        optlen,
+        optlen.address(),
     );
 
     fn get<'a, T: 'static>(val: UserPtr<u8>, len: &mut socklen_t) -> AxResult<&'a mut T> {
@@ -138,6 +137,7 @@ pub fn sys_getsockopt(
     }
 
     let socket = Socket::from_fd(fd)?;
+    let optlen = optlen.get_as_mut()?;
     macro_rules! dispatch {
         ($which:ident) => {
             socket.get_option(GetSocketOption::$which(get(optval, optlen)?))?;

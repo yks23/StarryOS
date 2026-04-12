@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-122 resolved（**`getsockopt`**：**`from_fd`** 先于 **`optlen.get_as_mut`**，**`EBADF`** 先于 **EFAULT** 类；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-121 resolved（**`make_queue_signal_info`**：**`signo!=0`** 且 **`sig==NULL`** → **`BadAddress`**，在 **`vm_read_uninit`** 前；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-120 resolved（**`getrusage`**：先 **`who`** **`EINVAL`**，再 **`usage==NULL` → `BadAddress`**，后聚合 **`Rusage`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-119 resolved（**`getsockname`/`getpeername`**：**`addrlen.get_as_mut`** 早于 **`local_addr`/`peer_addr`**，对齐 **EFAULT** 前序；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -102,6 +103,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-122 | getsockopt from_fd 先于 optlen 用户访问 | resolved | 2026-04-12 |
 | issue-121 | make_queue_signal_info NULL sig → BadAddress | resolved | 2026-04-12 |
 | issue-120 | getrusage NULL usage → BadAddress | resolved | 2026-04-12 |
 | issue-119 | getsockname/getpeername 先校验 addrlen 指针 | resolved | 2026-04-12 |
@@ -266,6 +268,7 @@
 - **`getsockname`/`getpeername`**（**`net/name.rs`**）：**`addrlen.get_as_mut()`** 须在 **`local_addr`/`peer_addr`** 之前，使 **NULL** 或不可写的 **`addrlen`** 尽早 **EFAULT**，再取内核地址并 **`write_to_user`**（**`addr`** 仍在 **`fill_addr`** 写回时访问）。
 - **`socket(2)`/`socketpair(2)`**：**`type`** 仅允许 **`SOCK_TYPE_MASK`（0xf）** 内 **`SOCK_*`** 与 **`O_CLOEXEC|O_NONBLOCK`**；其它位 **`InvalidInput`**（对齐 Linux **`EINVAL`**）。**`ty`** 取 **`raw_ty & SOCK_TYPE_MASK`**。
 - **`setsockopt(2)`**：**`optlen`** 须 **`>=`** 选项值 **`sizeof(T)`**（与 Linux / **`getsockopt`** 侧一致），只使用缓冲区前 **`sizeof(T)`** 字节；**`optlen < sizeof(T)`** → **`EINVAL`**。
+- **`getsockopt(2)`**（**`net/opt.rs`**）：**`Socket::from_fd`** 须早于 **`optlen.get_as_mut`**，使无效 **`fd`** 先 **`EBADF`**，再触碰 **`optlen`/`optval`**（与 Linux **`sockfd_lookup`** 顺序及 **`setsockopt`** 对称）；日志仅用 **`UserPtr::address`** 避免提前用户读。
 - **`bind`/`connect`/`sendto` 等 INET 地址**：**`SocketAddrV4`/`SocketAddrV6::read_from_user`** 要求 **`addrlen >= sizeof(sockaddr_in|sockaddr_in6)`**，只按固定布局读 **`sockaddr_in`/`sockaddr_in6`**；**`addrlen` 大于结构体**时与 Linux 一样忽略尾部字节。**vsock** **`sockaddr_vm`** 同理。
 - **`sendmsg` / `recvmsg` 与 ancillary**：控制缓冲区须与 Linux 一致使用 **`CMSG_ALIGN(sizeof(cmsghdr)+payload)`** 作为**占用步长**；**`cmsg_len`** 仍为含头的逻辑长度。遍历下一条头用 **`ptr += CMSG_ALIGN(cmsg_len)`**；**`CMsgBuilder::push`** 在 **`msg_controllen`** 与下一 **`cmsghdr`** 指针上前移对齐后长度，**`cmsg_len` 至对齐边界**建议填 **0**。**`CMsg::parse`（`sendmsg`）** 仅实现 **`(SOL_SOCKET, SCM_RIGHTS)`**；**`SCM_CREDENTIALS`/`SCM_TIMESTAMP`/`SCM_TIMESTAMPNS`/`SCM_TIMESTAMPING`/`SCM_SECURITY`** → **`Unsupported`**，勿与格式错误混用 **`EINVAL`**。
 - **`sched_getaffinity` / `sched_setaffinity`**：`pid==0` 为当前任务；非零先 **`get_task(pid)`**，失败再 **`get_process_data(pid)`** 取 **`proc.threads()` 最小 tid** 定位线程组代表线程。set 时当前任务走 **`set_current_affinity`**（SMP 迁移），其它任务仅 **`set_cpumask`**。未完整建模 CAP、僵尸 **`ESRCH`** 等。
