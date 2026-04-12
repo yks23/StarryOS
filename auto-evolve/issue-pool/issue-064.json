@@ -1,0 +1,28 @@
+{
+  "id": "issue-064",
+  "title": "copy_file_range 未校验同 fd 区间重叠与普通文件约束，与 Linux EINVAL 不符",
+  "status": "resolved",
+  "created_at": "2026-04-12T23:30:00Z",
+  "resolved_at": "2026-04-13T08:00:00Z",
+  "severity": "low",
+  "description": "**`sys_copy_file_range`**（`kernel/src/syscall/fs/io.rs`）在 **`flags`** 通过 **`COPY_FILE_RANGE_MASK`** 校验后，直接构造 **`SendFile`** 并调用 **`do_send`**。源码中标注 **`// TODO: check both regular files`**、**`// TODO: check same file and overlap`**。Linux **`copy_file_range(2)`** 在 **同一打开文件描述符**上 **源/目标字节区间重叠**（或 **非普通文件**/**管道**等非法组合）时返回 **`EINVAL`**，以避免读改写同一区域产生未定义结果。当前实现**未**拒绝 **`fd_in == fd_out`** 且 **`off_in`/`off_out` 区间重叠** 等情况，可能与 Linux 行为不一致并存在数据竞争风险（视 **`do_send`** 缓冲策略而定）。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["copy_file_range"],
+  "fix_summary": "**`sys_copy_file_range`**：两 fd 的 **`metadata()`** 须为 **`NodeType::RegularFile`**，否则 **`InvalidInput`**；若 **`fd_in == fd_out`** 或 **`inode`+`device` 相同**（**`dup`/同 inode**），按 **`off_in`/`off_out`**（**`NULL`** 用 **`seek(Current(0))`**）与 **`len`** 计算 **`[start, end)`**，区间重叠或 **`checked_add`** 溢出 → **`InvalidInput`**。",
+  "files_changed": ["kernel/src/syscall/fs/io.rs"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/io.rs:316-378"],
+    "related_files": ["kernel/src/syscall/fs/io.rs:262-291"],
+    "key_insight": "对齐 Linux 对常规文件与同 inode 重叠区间的 EINVAL"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "建议在 QEMU 下：`open` 同一文件得 **`fd`**，**`copy_file_range(fd, &off1, fd, &off2, len, 0)`** 且区间重叠时，Linux 返回 **EINVAL**；Starry 若仍成功或部分拷贝则 FAIL。",
+    "expected_output_contains": "",
+    "pass_criteria": "重叠与非法类型组合返回 **`InvalidInput`**（**EINVAL**），或等价于 Linux 的错误码策略。",
+    "last_result": "2026-04-13：已实现常规文件 + 同 inode 重叠检测；`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` 通过；QEMU 重叠用例未跑"
+  },
+  "suggested_fix": "在 **`sys_copy_file_range`**：若 **`fd_in == fd_out`**，根据 **`off_in`/`off_out`**（含 **NULL** 表示当前偏移）计算区间，**重叠则 `InvalidInput`**；必要时校验两 fd 均为可寻址 **常规文件**（与 **`File::inner()`**/**`Location`** 能力一致）。",
+  "references": ["man 2 copy_file_range", "Linux fs/copy_range.c"]
+}

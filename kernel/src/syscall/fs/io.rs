@@ -6,6 +6,7 @@ use core::{
 
 use axerrno::{AxError, AxResult, LinuxError};
 use axfs::{FS_CONTEXT, FileFlags, OpenOptions};
+use axfs_ng_vfs::NodeType;
 use axio::{Seek, SeekFrom};
 use axpoll::{IoEvents, Pollable};
 use linux_raw_sys::general::{
@@ -335,8 +336,34 @@ pub fn sys_copy_file_range(
         return Err(AxError::InvalidInput);
     }
 
-    // TODO: check both regular files
-    // TODO: check same file and overlap
+    let f_in = File::from_fd(fd_in)?;
+    let f_out = File::from_fd(fd_out)?;
+    let mi = f_in.inner().location().metadata()?;
+    let mo = f_out.inner().location().metadata()?;
+    if mi.node_type != NodeType::RegularFile || mo.node_type != NodeType::RegularFile {
+        return Err(AxError::InvalidInput);
+    }
+    if (fd_in == fd_out || (mi.inode == mo.inode && mi.device == mo.device)) && len > 0 {
+        let in_start = if off_in.is_null() {
+            f_in.inner().seek(SeekFrom::Current(0))?
+        } else {
+            off_in.vm_read()?
+        };
+        let out_start = if off_out.is_null() {
+            f_out.inner().seek(SeekFrom::Current(0))?
+        } else {
+            off_out.vm_read()?
+        };
+        let in_end = in_start
+            .checked_add(len as u64)
+            .ok_or(AxError::InvalidInput)?;
+        let out_end = out_start
+            .checked_add(len as u64)
+            .ok_or(AxError::InvalidInput)?;
+        if in_start < out_end && out_start < in_end {
+            return Err(AxError::InvalidInput);
+        }
+    }
 
     let src = if !off_in.is_null() {
         SendFile::Offset(File::from_fd(fd_in)?, off_in)
