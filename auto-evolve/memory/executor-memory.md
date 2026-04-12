@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-16：issue-050 resolved（**`renameat2`**：**`flags`** 掩码 **`RENAME_NOREPLACE|EXCHANGE|WHITEOUT`**，未知位 **`EINVAL`**；**`NOREPLACE`** 目标存在 **`EEXIST`**；**`EXCHANGE`** 三次 **`rename`**；**`WHITEOUT`** 无 overlay **`EINVAL`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过）
 - 日期：2026-04-13：issue-033 resolved（**`setitimer`/`getitimer`**：**`ITIMER_REAL`** 独占 wall **`alarm_task`**；**`last_wall_ns`** 初值单调时钟；**`ITIMER_VIRTUAL`/`PROF`** 仅 **`poll`** 推进；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过）
 - 日期：2026-04-13：issue-031 resolved（**`ioctl`**：非字符设备上对 TTY 驱动 ioctl 提前 **`ENOTTY`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过）
 - 日期：2026-04-12：issue-023 resolved（**`get_mempolicy`**：写入 **`MPOL_DEFAULT`** + 可选 **`nodemask`** 清零）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过
@@ -21,6 +22,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-050 | renameat2 flags 校验与 NOREPLACE/EXCHANGE | resolved | 2026-04-16 |
 | issue-033 | setitimer 虚拟/剖析与 wall alarm 解耦 | resolved | 2026-04-13 |
 | issue-031 | ioctl 非 TTY 终端命令 ENOTTY | resolved | 2026-04-13 |
 | issue-023 | get_mempolicy 写入 MPOL_DEFAULT | resolved | 2026-04-12 |
@@ -70,6 +72,7 @@
 - 全核 membarrier（多 hart）在 Linux 上依赖 IPI；若未来启用 `axfeat/smp` + `axfeat/ipi`，可在各核 IPI handler 中执行与 `sys_membarrier` 相同的 fence，并用同步原语等待全部完成。
 - `rt_sigreturn` 通过 `block_next_signal` 标记「下一次回到用户循环时跳过一次 `check_signals`」；该标志必须是 **per-thread**（`Thread::skip_next_signal_check`），不可用进程级或全局 AtomicBool。
 - timerfd：`TimerFd` 实现 `FileLike` + `Pollable`；到期逻辑在 `process_expirations` 中根据时钟纳秒与 `next_deadline_nanos` 比较；通过 `axtask::register_timer_callback`（首次创建时注册）在每次内核 timer tick 中扫描弱引用列表并 `wake` `PollSet`；创建 fd 用 `add_file_like`（与 eventfd2 相同），勿对 `Arc<TimerFd>` 误用 `add_to_fd_table(self)`。
+- **`renameat2(2)`**：**`flags`** 须为 **`linux_raw_sys::general`** 中 **`RENAME_NOREPLACE|RENAME_EXCHANGE|RENAME_WHITEOUT`** 的子集，否则 **`EINVAL`**；**`NOREPLACE`+`EXCHANGE`** 互斥亦 **`EINVAL`**；**`WHITEOUT`** 未建模 overlay → **`EINVAL`**。**`RENAME_NOREPLACE`** 且 **`new_dir.lookup_no_follow(new_name)`** 已存在 → **`EEXIST`**。**`RENAME_EXCHANGE`**：两端须存在（否则 **`ENOENT`**）；同目录同名 → **`EINVAL`**；交换以临时名三次 **`Location::rename`**（非崩溃原子）。**`new_path`** 用 **`resolve_parent`**。
 - **`setitimer`/`getitimer`**：**`ITIMER_REAL`** 独占 wall 时钟 **`alarm_task`**（**`ITimer::schedule_wall_alarm`**）；**`ITIMER_VIRTUAL`/`PROF`** 仅在 **`TimeManager::poll`** 中按 **`TimerState::User`/`Kernel`** 推进 **`remained_ns`**，**`set_itimer`** 与周期重载不再为二者注册 wall alarm。**`last_wall_ns`** 在 **`TimeManager::new`** 中初始化为 **`monotonic_time_nanos()`**，避免首次 **`delta`** 近似为开机时长。抢占与内核内 steal 时间仍弱于 Linux（TODO）。
 - **`ioctl`（`kernel/src/file/fs.rs` 的 `File`）**：与 **`Tty`** 驱动已实现的终端/PTY 命令（**`TCGETS`**/**`TCSETS`** 族、**`TIOCGWINSZ`**、**`TIOCGPGRP`**、**`TIOCSCTTY`** 等）在 **`NodeType != CharacterDevice`** 时于转发 **`location().ioctl`** 前返回 **`NotATty`（ENOTTY）**；字符设备仍走 **`Device`**/**`DeviceOps`**（TTY 与其它设备各自处理）。
 - **`clock_gettime` / `clock_getres`**：未实现的 **`clockid_t`** 须 **`EINVAL`**，**勿**对未知 id 回退 **`wall_time()`**。**`clock_id_supported`** 与已实现时钟一致（**REALTIME/REALTIME_COARSE、MONOTONIC/RAW/COARSE、BOOTTIME、CPUTIME_ID** 等）；**`clock_getres`** 对不支持 id 同样 **`EINVAL`**（即使 **`res==NULL`**）。

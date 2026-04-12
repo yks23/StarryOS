@@ -1,4 +1,4 @@
-use alloc::{ffi::CString, vec, vec::Vec};
+use alloc::{ffi::CString, format, vec, vec::Vec};
 use core::{
     ffi::{c_char, c_int},
     mem::offset_of,
@@ -7,8 +7,8 @@ use core::{
 
 use axerrno::{AxError, AxResult};
 use axfs::{FS_CONTEXT, FsContext};
-use axfs_ng_vfs::{MetadataUpdate, NodePermission, NodeType, path::Path};
-use axhal::time::wall_time;
+use axfs_ng_vfs::{Location, MetadataUpdate, NodePermission, NodeType, path::Path};
+use axhal::time::{monotonic_time_nanos, wall_time};
 use axtask::current;
 use linux_raw_sys::{
     general::*,
@@ -506,12 +506,73 @@ pub fn sys_renameat2(
          new_path: {new_path}, flags: {flags}"
     );
 
-    let (old_dir, old_name) = with_fs(old_dirfd, |fs| fs.resolve_parent(Path::new(&old_path)))?;
-    let (new_dir, new_name) =
-        with_fs(new_dirfd, |fs| fs.resolve_nonexistent(Path::new(&new_path)))?;
+    const RENAME_FLAGS_MASK: u32 = RENAME_NOREPLACE | RENAME_EXCHANGE | RENAME_WHITEOUT;
+    if flags & !RENAME_FLAGS_MASK != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    if flags & RENAME_NOREPLACE != 0 && flags & RENAME_EXCHANGE != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    if flags & RENAME_WHITEOUT != 0 {
+        // Overlay whiteout; not modeled in this VFS.
+        return Err(AxError::InvalidInput);
+    }
 
-    old_dir.rename(&old_name, &new_dir, new_name)?;
+    let (old_dir, old_name) = with_fs(old_dirfd, |fs| fs.resolve_parent(Path::new(&old_path)))?;
+    let (new_dir, new_name) = with_fs(new_dirfd, |fs| fs.resolve_parent(Path::new(&new_path)))?;
+    let old_name = old_name.as_ref();
+    let new_name = new_name.as_ref();
+
+    if flags & RENAME_EXCHANGE != 0 {
+        if old_dir.ptr_eq(&new_dir) && old_name == new_name {
+            return Err(AxError::InvalidInput);
+        }
+        return renameat2_exchange(&old_dir, old_name, &new_dir, new_name).map(|_| 0);
+    }
+
+    if flags & RENAME_NOREPLACE != 0 && new_dir.lookup_no_follow(new_name).is_ok() {
+        return Err(AxError::AlreadyExists);
+    }
+
+    old_dir.rename(old_name, &new_dir, new_name)?;
     Ok(0)
+}
+
+/// `RENAME_EXCHANGE`: swap two names (same semantics as Linux; three renames, not atomic vs crash).
+fn renameat2_exchange(
+    old_dir: &Location,
+    old_name: &str,
+    new_dir: &Location,
+    new_name: &str,
+) -> AxResult<()> {
+    old_dir.lookup_no_follow(old_name)?;
+    new_dir.lookup_no_follow(new_name)?;
+
+    let mut tmp = format!(".starry_exchange_{:x}", monotonic_time_nanos());
+    for _ in 0..16u32 {
+        if old_dir.lookup_no_follow(&tmp).is_err() {
+            break;
+        }
+        tmp = format!(
+            ".starry_exchange_{:x}_{}",
+            monotonic_time_nanos(),
+            monotonic_time_nanos()
+        );
+    }
+    if old_dir.lookup_no_follow(&tmp).is_ok() {
+        return Err(AxError::ResourceBusy);
+    }
+
+    if old_dir.ptr_eq(new_dir) {
+        old_dir.rename(old_name, old_dir, &tmp)?;
+        old_dir.rename(new_name, new_dir, old_name)?;
+        old_dir.rename(&tmp, new_dir, new_name)?;
+    } else {
+        old_dir.rename(old_name, old_dir, &tmp)?;
+        new_dir.rename(new_name, old_dir, old_name)?;
+        old_dir.rename(&tmp, new_dir, new_name)?;
+    }
+    Ok(())
 }
 
 pub fn sys_sync() -> AxResult<isize> {
