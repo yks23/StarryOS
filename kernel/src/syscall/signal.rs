@@ -225,6 +225,11 @@ pub fn sys_rt_sigtimedwait(
 ) -> AxResult<isize> {
     check_sigset_size(sigsetsize)?;
 
+    if set.is_null() {
+        // Linux `rt_sigtimedwait(2)`: `set` must be readable; NULL → EFAULT.
+        return Err(AxError::BadAddress);
+    }
+
     let set = unsafe { set.vm_read_uninit()?.assume_init() };
 
     let timeout = if let Some(ts) = timeout.nullable() {
@@ -279,6 +284,11 @@ pub fn sys_rt_sigsuspend(
     sigsetsize: usize,
 ) -> AxResult<isize> {
     check_sigset_size(sigsetsize)?;
+
+    if set.is_null() {
+        // Linux `rt_sigsuspend(2)` / `sigsuspend`: `set` must be readable; NULL → EFAULT.
+        return Err(AxError::BadAddress);
+    }
 
     let curr = current();
     let thr = curr.as_thread();
