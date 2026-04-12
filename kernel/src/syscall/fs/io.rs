@@ -511,6 +511,12 @@ pub fn sys_splice(
     if flags & !SPLICE_F_MASK != 0 {
         return Err(AxError::InvalidInput);
     }
+    // `SPLICE_F_NONBLOCK`/`MOVE`/`MORE`/`GIFT` are not honored by `do_send` (no EAGAIN from flags
+    // alone); reject non-zero flags until splice implements them (issue-247), like optional
+    // `copy_file_range` flags (issue-246).
+    if flags != 0 {
+        return Err(AxError::OperationNotSupported);
+    }
 
     // Linux `splice(2)` / `do_splice`: input and output must not be the same file descriptor → EINVAL.
     if fd_in == fd_out {
