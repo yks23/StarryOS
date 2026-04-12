@@ -190,6 +190,11 @@ impl DirBuffer {
 pub fn sys_getdents64(fd: i32, buf: *mut u8, len: usize) -> AxResult<isize> {
     debug!("sys_getdents64 <= fd: {fd}, buf: {buf:?}, len: {len}");
 
+    // Output buffer before `read_dir` / `vm_write_slice` (issue-284; same class as issue-281).
+    if len > 0 && buf.is_null() {
+        return Err(AxError::BadAddress);
+    }
+
     let mut buffer = DirBuffer::new(len);
 
     let dir = Directory::from_fd(fd)?;

@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-284 resolved（**`getdents64`**：**`len > 0`** 且 **`buf == NULL`** → **`BadAddress`（EFAULT）**，先于 **`Directory::from_fd`/`read_dir`**；**`fs/ctl.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-283 resolved（**`fstatat`/`statx`**：**`statbuf`/`statxbuf == NULL`** → **`BadAddress`（EFAULT）**，先于 **`resolve_at`**；**`fs/stat.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-282 resolved（**`readlink`/`readlinkat`**：**`size>0`** 时 **`buf == NULL`** → **`BadAddress`（EFAULT）**，先于 **`vm_load_string`/`resolve_no_follow`/`read_link`**；**`fs/ctl.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-281 resolved（**`statfs`/`fstatfs`**：**`buf == NULL`** → **`BadAddress`（EFAULT）**，先于 **`resolve`**/**`location_from_fd`**；**`fs/stat.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -307,6 +308,7 @@
 | issue-271 | mlock/mlock2 addr 须页对齐 EINVAL | resolved | 2026-04-12 |
 | issue-272 | lseek SEEK_SET 负 offset EINVAL | resolved | 2026-04-12 |
 | issue-273 | prlimit64 跨 pid 权限 EPERM | resolved | 2026-04-12 |
+| issue-284 | getdents64 len>0 NULL buf 先 EFAULT | resolved | 2026-04-13 |
 | issue-283 | fstatat/statx NULL 输出 buf 先 EFAULT | resolved | 2026-04-13 |
 | issue-282 | readlinkat NULL buf 先 EFAULT | resolved | 2026-04-13 |
 | issue-281 | statfs/fstatfs NULL buf 先 EFAULT | resolved | 2026-04-12 |
@@ -565,7 +567,7 @@
 - **`syslog(2)`/`klogctl`**：**`action`** 须在 **`SYSLOG_ACTION_CLOSE`..=`SIZE_BUFFER`（0..=10）**，否则 **`InvalidInput`**。无 printk 环：**`READ`/`READ_ALL`/`READ_CLEAR`** 与 **`CLEAR`/`CONSOLE_*`** → **`Unsupported`**；**`SIZE_UNREAD`/`SIZE_BUFFER`** 返回 **0**（空环）；**`OPEN`/`CLOSE`** → **`Ok(0)`**。勿对任意参数无条件 **`Ok(0)`**。
 - **`splice(2)` / `copy_file_range(2)`**：**`flags`** 须在 Linux 已知掩码内（**`SPLICE_F_MOVE|NONBLOCK|MORE|GIFT`**；**`copy_file_range`** 为 **`COPY_FILE_RANGE_COMPRESS|DEDUPE`**），否则 **`EINVAL`**。**`copy_file_range`**：**`flags!=0`**（压缩/去重请求）→ **`OperationNotSupported`**（**EOPNOTSUPP**），直至实现对应语义，勿静默普通 **`do_send`**（issue-246）。**`splice`**：**`flags!=0`** → **`OperationNotSupported`**（**EOPNOTSUPP**），直至 **`SPLICE_F_*`** 参与 **`do_send`**（issue-247）。**`fd_in == fd_out` → `InvalidInput`**（**EINVAL**）（issue-236）。**`splice`**：**`off_in`/`off_out` 非空**时须先 **`File::from_fd`**（**`EBADF`**）再读用户偏移（**EFAULT** 类），与 **Linux `do_splice`** / **issue-122** 同类顺序。**`sendfile(2)`**：**`in_fd == out_fd` → `InvalidInput`**（**EINVAL**）（issue-235）。**`offset` 非空**时同样先 **`File::from_fd(in_fd)`** 再 **`offset.vm_read`**（**`offset==NULL`** 分支仍为 **`get_file_like(in_fd)`** 在前）。
 - **`fallocate(2)`**：**`mode`** 未知 **`FALLOC_FL_*`** 位 → **`EINVAL`**；**`mode == 0`** 仅扩展逻辑长度（**`set_len(max(current, offset+len))`**）；其它已知标志（**`KEEP_SIZE`/打洞/零范围等**）尚无稀疏 extent → **`EOPNOTSUPP`**（issue-225），勿与非法位混为同一 **`EINVAL`**。
-- **`getdents64(2)`**：**`linux_dirent64`** 中 **`d_name`** 长度 ≤ **`NAME_MAX`**；记录总长 **`d_reclen`** 用 **`u16::try_from(aligned_len)`**，目录 cookie **`d_off`** 用 **`i64::try_from(VFS offset)`**，溢出/超长 → **`EINVAL`**（issue-221）；**`unsafe`** 写入前有 **`SAFETY`** 说明。
+- **`getdents64(2)`**：**`linux_dirent64`** 中 **`d_name`** 长度 ≤ **`NAME_MAX`**；记录总长 **`d_reclen`** 用 **`u16::try_from(aligned_len)`**，目录 cookie **`d_off`** 用 **`i64::try_from(VFS offset)`**，溢出/超长 → **`EINVAL`**（issue-221）；**`unsafe`** 写入前有 **`SAFETY`** 说明。**`len > 0`** 时 **`buf == NULL`** → **`BadAddress`（EFAULT）**，先于 **`from_fd`/`read_dir`**（issue-284）。
 - **`pwrite64(2)`**：**`offset < 0` → `InvalidInput`**（issue-108）；**`len == 0`** 仍须先 **`File::from_fd`** 再 **`Ok(0)`**，勿在 **`from_fd`** 前早退，以便无效 fd 得 **EBADF**（issue-125，对齐 Linux **`vfs_write`/`fget`**）。
 - **`preadv2(2)` / `pwritev2(2)`**：**`flags`**（**`RWF_*`**）须为 **`linux_raw_sys::general`** 中 **`RWF_HIPRI|DSYNC|SYNC|NOWAIT|APPEND`** 子集，否则 **`InvalidInput`**（**EINVAL**）；**`flags!=0`** → **`OperationNotSupported`**（**EOPNOTSUPP**），直至实现对应 **`RWF_*`** 语义（issue-248）。**`preadv`/`pwritev`** 经 **`flags=0`** 调用 **v2**。
 - **`truncate(2)`**：**`length < 0` → `InvalidInput`** 须先于 **`path.get_as_str()`**，以便坏 **`path`** 与负长度组合时优先 **EINVAL**（issue-126，与 **`ftruncate`** 及 Linux **`do_truncate`** 一致）。
