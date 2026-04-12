@@ -25,14 +25,16 @@ pub fn sys_prlimit64(
     new_limit: *const rlimit64,
     old_limit: *mut rlimit64,
 ) -> AxResult<isize> {
-    if resource >= RLIM_NLIMITS {
-        return Err(AxError::InvalidInput);
-    }
-
+    // Linux do_prlimit: resolve task / permission before validating resource index (ESRCH/EPERM
+    // before EINVAL for resource >= RLIM_NLIMITS; issue-327).
     let proc_data = get_process_data(pid)?;
     let caller_pd = current().as_thread().proc_data.clone();
     if !may_peer_process_by_cred(&caller_pd, &proc_data) {
         return Err(AxError::OperationNotPermitted);
+    }
+
+    if resource >= RLIM_NLIMITS {
+        return Err(AxError::InvalidInput);
     }
 
     // Linux do_prlimit: copy_from_user(new) + validate + apply before copy_to_user(old), so

@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-05-06：issue-327 resolved（**`prlimit64`**：**`get_process_data`/`may_peer_process_by_cred`** **先于** **`resource >= RLIM_NLIMITS`**，**`ESRCH`/`EPERM`** **先于** **越界** **`resource`** **的** **`EINVAL`**；**`resources.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-05-05：issue-326 resolved（**`sendfile`**：**`get_file_like(in/out)`** **先于** **`in_fd == out_fd`**，**`EBADF`** **先于** **同** **fd** **`EINVAL`**；**`fs/io.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-05-04：issue-325 resolved（**`execve`**：**`argv.is_null()`** **先于** **`vm_load_string(path)`**，**`EFAULT`** **（NULL argv）** **先于** **坏** **`filename`**；**`execve.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-05-03：issue-324 resolved（**`close_range`**：**`CloseRangeFlags::from_bits(flags)`** **先于** **`first`/`last`** **区间**，**`EINVAL`** **（非法 flags）** **先于** **区间** **`EINVAL`**；**`fd_ops.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -350,6 +351,7 @@
 | issue-271 | mlock/mlock2 addr 须页对齐 EINVAL | resolved | 2026-04-12 |
 | issue-272 | lseek SEEK_SET 负 offset EINVAL | resolved | 2026-04-12 |
 | issue-273 | prlimit64 跨 pid 权限 EPERM | resolved | 2026-04-12 |
+| issue-327 | prlimit64 pid/凭证 先于 resource 边界 | resolved | 2026-05-06 |
 | issue-326 | sendfile get_file_like 先于 in_fd==out_fd | resolved | 2026-05-05 |
 | issue-325 | execve argv NULL 先于 vm_load_string(path) | resolved | 2026-05-04 |
 | issue-324 | close_range from_bits 先于 first/last 区间 | resolved | 2026-05-03 |
@@ -599,7 +601,7 @@
 - **`getrusage(RUSAGE_CHILDREN)`**：须为 **`wait`** 回收子进程的 **CPU** 累计（**`ProcessData::child_utime_ns`/`child_stime_ns`**），与 **`times`/`waitpid`** 累加路径一致；**勿**把 **`proc.threads()`** 中除当前线程外的 **pthread** 当作子进程。
 - **`getrusage(2)`**：**`who`** 非法 → **`InvalidInput`**（**EINVAL**）；**`usage`** 为 **NULL** → **`BadAddress`**（**EFAULT**），须在聚合 **`Rusage`** 之前检查，与 Linux 顺序一致。
 - **`uname(2)`/`sysinfo(2)`**：输出结构体指针 **必填可写**；**`NULL` → `BadAddress`**（**EFAULT**），在 **`vm_write`** 前显式检查（issue-230；与 **`getrusage`** 一致）。**`struct utsname` `domainname`**：**`(none)`**，与 **Linux** **NIS/YP** **域名** **未** **设置** **时** **常见** **表示** **一致**；**勿** **填** **HTTP(S)** **URL**（**issue-312**）。
-- **`prlimit64`**：对齐 Linux **`do_prlimit`**（issue-141）：**`old_limit` 非空**时先在进程内保存变更前的 **`rlimit64`**；**`new_limit` 非空**时先 **`vm_read`** 并校验（**`rlim_cur`≤`rlim_max`**、非法抬高硬上限 **`EPERM`**，同 issue-044），成功后再更新内核 **`rlimit`**；最后再 **`vm_write(old_limit)`** 写出快照。**`new_limit`** 读/校验失败时不应已写出 **`old`**。可降低硬上限或保持不变并更新 **`rlim_cur`**（在 **`rlim_cur <= rlim_max`** 前提下）。跨 **`pid`**（非同一 **`ProcessData`**）须 **`euid==0`**、有效 **`CAP_SYS_RESOURCE`**（位 **24**），或与目标 **`ruid` 相同**，否则 **`EPERM`**（issue-273；无 user namespace）。
+- **`prlimit64`**：**`get_process_data(pid)`**/**`may_peer_process_by_cred`** **先于** **`resource >= RLIM_NLIMITS`**，**`ESRCH`/`EPERM`** **先于** **越界** **`resource`** **的** **`EINVAL`**（**issue-327**；**Linux** **`do_prlimit`** **任务**/**凭证** **顺序**）。对齐 Linux **`do_prlimit`**（issue-141）：**`old_limit` 非空**时先在进程内保存变更前的 **`rlimit64`**；**`new_limit` 非空**时先 **`vm_read`** 并校验（**`rlim_cur`≤`rlim_max`**、非法抬高硬上限 **`EPERM`**，同 issue-044），成功后再更新内核 **`rlimit`**；最后再 **`vm_write(old_limit)`** 写出快照。**`new_limit`** 读/校验失败时不应已写出 **`old`**。可降低硬上限或保持不变并更新 **`rlim_cur`**（在 **`rlim_cur <= rlim_max`** 前提下）。跨 **`pid`**（非同一 **`ProcessData`**）须 **`euid==0`**、有效 **`CAP_SYS_RESOURCE`**（位 **24**），或与目标 **`ruid` 相同**，否则 **`EPERM`**（issue-273；无 user namespace）。
 - **`ioctl(FIONBIO)`**：第三参为 **`int *`**（Linux）；用 **`(arg as *const c_int).vm_read()`** 读整型，**`set_nonblocking(value != 0)`**；勿只读单字节、勿将取值限制为 0/1（**`2`**、**`256`** 等小端首字节为 0 的非零值须启用 **`O_NONBLOCK`**）。
 - **`getrandom(2)`**：**`flags`** 须为 **`linux_raw_sys::general`** 中 **`GRND_NONBLOCK|GRND_RANDOM|GRND_INSECURE`** 的子集（与 **`uapi/linux/random.h`** 一致），否则 **`EINVAL`**；掩码校验须先于 **`len==0`** 的 **`Ok(0)`** 早退（issue-151，与 issue-042 互补）。勿用 **`from_bits_retain`** 静默丢弃未知位。**`len > 0`** 时 **`buf == NULL`** → **`BadAddress`（EFAULT）**，先于 **`resolve`/`read_at`**（issue-285）。
 - **`fadvise64`**：先 **`get_file_like(fd)?`**（非法 fd → **EBADF**）。**`Pipe`** → **`ESPIPE`**（不可定位，非 **`EPIPE`**；issue-040）；仅 **`File`**/**`MemfdCreatedFile`** 在 **`advice`/`offset`/`len`** 校验通过后桩 **`Ok(0)`**；socket/timerfd/epoll/eventfd/directory 等其它 **`FileLike`** → **`InvalidInput`（EINVAL）**（issue-290，对齐 Linux **`vfs_fadvise`** 仅常规文件）。真 **`fadvise`** 语义仍为桩；**`advice`** 须 **≤ `POSIX_FADV_WIPEONFORK`（7）**（issue-239）；**`offset`/`len`** 非负且 **`u64` `checked_add`** 不溢出（issue-114），与 **`sys_fallocate`** 区间校验一致。
