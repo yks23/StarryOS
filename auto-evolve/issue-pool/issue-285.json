@@ -1,0 +1,27 @@
+{
+  "id": "issue-285",
+  "title": "getrandom：`buf` 非法且 `len > 0` 时仍先 `resolve`/`read_at`，错误顺序可与 Linux 分叉",
+  "status": "resolved",
+  "created_at": "2026-04-13T00:36:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_getrandom`：在 `len==0` 成功早退之后、`resolve`/`read_at` 之前，若 `buf.is_null()` 则 `BadAddress`（此时已保证 `len>0`）。与 issue-281 类输出缓冲早退一致。",
+  "files_changed": ["kernel/src/syscall/sys.rs"],
+  "description": "**`kernel/src/syscall/sys.rs`** **`sys_getrandom`**（约 **310–350** 行）在校验 **`GRND_*`** **、** **`len == 0`** **早退** **成功** **后** **，** **经** **`FS_CONTEXT.lock().resolve(path)?`** **打开** **`/dev/random`** **或** **`/dev/urandom`** **，** **`read_at`** **填入** **内核** **`kbuf`** **，** **最后** **`vm_write_slice(buf, &kbuf)?`** **。**\n\n**当** **`len > 0`** **且** **`buf`** **为** **NULL** **（** **或** **不可写** **）** **时** **，** **失败** **发生** **在** **VFS** **解析** **与** **读** **设备** **成功** **之后** **。** **Linux** **`getrandom(2)`** **路径** **通常** **在** **向** **用户** **拷贝** **前** **对** **`buf`****做** **`access_ok`/`copy_to_user`** **探测** **；** **`EFAULT`** **与** **`ENOENT`/`EACCES`** **（** **路径** **/****权限** **）** **的** **先后** **可能** **与** **「** **先** **`resolve`+`read`** **再** **`EFAULT`****」** **不同** **（** **与** **issue-281**/**282**/**283** **已** **修复** **的** **输出** **缓冲** **早退** **、** **issue-284** **`getdents64`** **同类** **）** **。**\n\n**注意**：**`len == 0`** **分支** **在** **触及** **`buf`** **前** **返回** **`Ok(0)`** **，** **与** **Linux** **短** **路** **一致** **；** **本** **条** **针对** **`len > 0`** **。**\n\n**建议**：在 **`resolve(path)?`** **之前** **（** **flags** **与** **`len`** **校验** **之后** **）** **若** **`len > 0 && buf.is_null()`** **则** **`BadAddress`** **；** **或** **在** **`vm_write_slice`** **前** **对** **`buf..buf+len`** **做** **等价** **可写** **检查** **并** **尽量** **提前** **失败** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["getrandom"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/sys.rs:310-350"],
+    "related_files": [],
+    "key_insight": "getrandom len>0 时先 resolve 随机设备再 vm_write，非法 buf 时错误顺序与 Linux 可能不同"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 Linux getrandom 对用户缓冲区的校验顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "非法 buf 且 len>0 时错误码与顺序与目标 Linux 一致，或显式文档化差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `resolve`/`read_at` 之前对 `buf` 做 `len > 0` 时的非空/可写早退。",
+  "references": ["man 2 getrandom", "kernel/src/syscall/sys.rs", "issue-281", "issue-284"]
+}

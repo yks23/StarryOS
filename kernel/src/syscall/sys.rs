@@ -315,6 +315,10 @@ pub fn sys_getrandom(buf: *mut u8, len: usize, flags: u32) -> AxResult<isize> {
     if len == 0 {
         return Ok(0);
     }
+    // Output buffer before `resolve`/`read_at` (issue-285; same class as issue-281).
+    if buf.is_null() {
+        return Err(AxError::BadAddress);
+    }
     let flags = GetRandomFlags::from_bits_truncate(flags);
 
     debug!("sys_getrandom <= buf: {buf:p}, len: {len}, flags: {flags:?}");
