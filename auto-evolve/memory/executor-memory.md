@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-203 resolved（**`membarrier`**：**`QUERY` `SUPPORTED_COMMANDS`** 去掉 **`GLOBAL*`**/**`REGISTER_GLOBAL_EXPEDITED`**；仅宣称 **`PRIVATE_*` + 对应 `REGISTER_*`**；**`GLOBAL*`** → **`EINVAL`**；删 **`membarrier_reg_global_expedited`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-200 resolved（**`get_mempolicy`**：**`linux-raw-sys` `mempolicy`** **`MPOL_F_*`** 掩码 + **`addr`/`flags`** 组合校验；**`MPOL_F_ADDR`** 要求 **`AddrSpace::find_area`**；非法 → **`EINVAL`/`EFAULT`**；仍为 **`MPOL_DEFAULT` stub**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-199 resolved（**`IoVectorBuf`**：**`Vec<IoVec>`** 快照用户 **`iovec`**；**`read_with`/`IoVectorBufIo`** 不再对用户表二次 **`vm_read`**；对齐 **`import_iovec`** 固定描述；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-198 resolved（**`recvmsg`**：**`msghdr`** 快照 + **`offset_of!` `UserPtr`** 写 **`msg_namelen`/`msg_controllen`/`msg_flags`**；**`CMsgBuilder`**用 **`UserPtr<usize>`**替代 **`&mut msg.msg_controllen`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）

@@ -3,12 +3,14 @@
 //! Non-`QUERY` commands that actually order memory use a **CPU** [`atomic::fence`] with
 //! [`Ordering::SeqCst`], not `compiler_fence`, so the hardware enforces ordering on this hart.
 //!
-//! **SMP:** A full `MEMBARRIER_CMD_GLOBAL` on Linux runs barriers on **all** CPUs via IPI; this
-//! kernel does not implement cross-CPU synchronization yet. The local fence is the best
-//! available approximation until an IPI-based global barrier exists.
+//! **SMP / QUERY:** Linux `MEMBARRIER_CMD_GLOBAL` and `MEMBARRIER_CMD_GLOBAL_EXPEDITED` order
+//! memory across **all** CPUs (IPI). This kernel has no cross-hart barrier yet, so
+//! **`MEMBARRIER_CMD_QUERY` does not advertise those bits** — only commands whose implementation
+//! is local-hart (`PRIVATE_*` + their `REGISTER_*`). Unadvertised command bits still return
+//! **`EINVAL`** if invoked. See issue-203.
 //!
-//! **Registration:** `*_EXPEDITED` / `*_SYNC_CORE` execution commands require a prior matching
-//! `REGISTER_*` on the calling process (**`EINVAL`** otherwise), matching Linux `membarrier.c`.
+//! **Registration:** `PRIVATE_*` expedited commands require a prior matching `REGISTER_*` on the
+//! calling process (**`EINVAL`** otherwise), matching Linux `membarrier.c`.
 
 use core::sync::atomic::{self, Ordering};
 
@@ -19,12 +21,6 @@ use crate::task::AsThread;
 
 /// `MEMBARRIER_CMD_QUERY`
 const MEMBARRIER_CMD_QUERY: i32 = 0;
-/// `MEMBARRIER_CMD_GLOBAL` — `(1 << 0)`
-const MEMBARRIER_CMD_GLOBAL: i32 = 1 << 0;
-/// `MEMBARRIER_CMD_GLOBAL_EXPEDITED` — `(1 << 1)`
-const MEMBARRIER_CMD_GLOBAL_EXPEDITED: i32 = 1 << 1;
-/// `MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED` — `(1 << 2)`
-const MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED: i32 = 1 << 2;
 /// `MEMBARRIER_CMD_PRIVATE_EXPEDITED` — `(1 << 3)`
 const MEMBARRIER_CMD_PRIVATE_EXPEDITED: i32 = 1 << 3;
 /// `MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED` — `(1 << 4)`
@@ -34,11 +30,9 @@ const MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE: i32 = 1 << 5;
 /// `MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE` — `(1 << 6)`
 const MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE: i32 = 1 << 6;
 
-/// Bitmask returned by `MEMBARRIER_CMD_QUERY` for commands implemented here.
-const SUPPORTED_COMMANDS: i32 = MEMBARRIER_CMD_GLOBAL
-    | MEMBARRIER_CMD_GLOBAL_EXPEDITED
-    | MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED
-    | MEMBARRIER_CMD_PRIVATE_EXPEDITED
+/// Bitmask returned by `MEMBARRIER_CMD_QUERY`: **only** commands with correct local-hart semantics
+/// here (no `GLOBAL*` / `REGISTER_GLOBAL_EXPEDITED` until SMP-wide barriers exist; issue-203).
+const SUPPORTED_COMMANDS: i32 = MEMBARRIER_CMD_PRIVATE_EXPEDITED
     | MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED
     | MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE
     | MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE;
@@ -82,11 +76,6 @@ pub fn sys_membarrier(cmd: i32, flags: u32, _cpu_id: i32) -> AxResult<isize> {
     let pd = &*task.as_thread().proc_data;
 
     match cmd {
-        MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED => {
-            pd.membarrier_reg_global_expedited
-                .store(true, Ordering::Relaxed);
-            Ok(0)
-        }
         MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED => {
             pd.membarrier_reg_private_expedited
                 .store(true, Ordering::Relaxed);
@@ -95,22 +84,6 @@ pub fn sys_membarrier(cmd: i32, flags: u32, _cpu_id: i32) -> AxResult<isize> {
         MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE => {
             pd.membarrier_reg_private_expedited_sync_core
                 .store(true, Ordering::Relaxed);
-            Ok(0)
-        }
-
-        MEMBARRIER_CMD_GLOBAL => {
-            membarrier_cpu_local_fence();
-            Ok(0)
-        }
-
-        MEMBARRIER_CMD_GLOBAL_EXPEDITED => {
-            if !pd
-                .membarrier_reg_global_expedited
-                .load(Ordering::Relaxed)
-            {
-                return Err(AxError::InvalidInput);
-            }
-            membarrier_cpu_local_fence();
             Ok(0)
         }
 
