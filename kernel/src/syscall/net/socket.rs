@@ -117,6 +117,12 @@ pub fn sys_accept4(
 ) -> AxResult<isize> {
     debug!("sys_accept <= fd: {fd}, flags: {flags}");
 
+    // Linux accept4(2): only SOCK_CLOEXEC/SOCK_NONBLOCK (same values as O_CLOEXEC/O_NONBLOCK).
+    const VALID_ACCEPT4_FLAGS: u32 = O_CLOEXEC | O_NONBLOCK;
+    if flags & !VALID_ACCEPT4_FLAGS != 0 {
+        return Err(AxError::InvalidInput);
+    }
+
     let cloexec = flags & O_CLOEXEC != 0;
 
     let socket = Socket::from_fd(fd)?;
