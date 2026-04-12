@@ -84,6 +84,15 @@ pub struct CowBackend {
 }
 
 impl CowBackend {
+    /// Same COW mapping with an updated VMA start (for `mremap`).
+    pub(crate) fn with_virt_start(&self, new_start: VirtAddr) -> Self {
+        Self {
+            start: new_start,
+            size: self.size,
+            file: self.file.clone(),
+        }
+    }
+
     fn alloc_new_frame(&self, zeroed: bool) -> AxResult<PhysAddr> {
         let frame = alloc_frame(zeroed, self.size)?;
         FRAME_TABLE.lock().init_frame(frame);
