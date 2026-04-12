@@ -243,13 +243,14 @@ pub fn sys_sched_getscheduler(pid: i32) -> AxResult<isize> {
 
 pub fn sys_sched_setscheduler(pid: i32, policy: i32, param: *const ()) -> AxResult<isize> {
     let param = param.cast::<SchedParam>();
-    let Some(param_ptr) = param.nullable() else {
-        return Err(AxError::InvalidInput);
-    };
-    // Linux: find task (ESRCH) before copy_from_user(sched_param) (EFAULT); NULL param → EINVAL above.
+    // Linux: resolve `pid` (ESRCH) before `copy_from_user(sched_param)`; NULL `param` → EFAULT
+    // (`BadAddress`), not EINVAL (issue-380; `sched_setaffinity` copy order theme).
     let task = sched_resolve_task(pid)?;
     let thr = task.try_as_thread().ok_or(AxError::InvalidInput)?;
-    let user_param = read_sched_param_user(param_ptr)?;
+    if param.is_null() {
+        return Err(AxError::BadAddress);
+    }
+    let user_param = read_sched_param_user(param)?;
     validate_sched_user_param(policy, user_param.sched_priority)?;
     thr.set_sched_policy_param(policy, user_param.sched_priority);
     Ok(0)
