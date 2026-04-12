@@ -61,8 +61,11 @@ fn send_on_socket(
     addrlen: socklen_t,
     cmsg: Vec<CMsgData>,
 ) -> AxResult<isize> {
-    let addr = if addr.is_null() || addrlen == 0 {
+    // Linux `move_addr_to_kernel`: non-NULL `msg_name`/`dest_addr` with `addrlen == 0` → EINVAL.
+    let addr = if addr.is_null() {
         None
+    } else if addrlen == 0 {
+        return Err(AxError::InvalidInput);
     } else {
         Some(SocketAddrEx::read_from_user(addr, addrlen)?)
     };

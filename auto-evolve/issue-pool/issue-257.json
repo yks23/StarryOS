@@ -1,0 +1,27 @@
+{
+  "id": "issue-257",
+  "title": "sendto/sendmsg：`msg_name`/`addr` 非空且 `addrlen==0` 时被当作「无目的地址」，与 Linux EINVAL 不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`send_on_socket`：`msg_name`/`addr` 非空且 `addrlen==0` → `InvalidInput`（EINVAL）；仅 `addr.is_null()` 时 `to: None`，不再把「非空指针 + 零长度」当作无目的地址。",
+  "files_changed": ["kernel/src/syscall/net/io.rs"],
+  "description": "**`kernel/src/syscall/net/io.rs`** **`send_on_socket`**（约 **54–81** 行）将 **`addr.is_null() || addrlen == 0`** 一并视为 **`to: None`**（不向 **`read_from_user`** 解析地址）。\n\n**Linux `sendto(2)` / `sendmsg(2)`**：若用户传入 **非 NULL** 的 **`dest_addr`/`msg_name`**，则 **`addrlen`/`msg_namelen`** 必须描述有效 **`sockaddr`**（至少能读出 **family**）；**`addrlen == 0`** 且 **地址指针非空** 时，**`move_addr_to_kernel`** 路径上多为 **`EINVAL`**（**非**「忽略地址、按无地址发送」）。\n\n**当前**：**`addr != NULL` 且 `addrlen == 0`** 时 **Starry** 与 **`addr == NULL`** 相同，**未连接 UDP** 等场景可能 **未** 返回 **EINVAL**，且 **语义** 与 **Linux** 分叉。\n\n**建议**：若 **`!addr.is_null()`** 且 **`addrlen == 0`** → **`InvalidInput`（EINVAL）**；仅 **`addr.is_null()`**（或文档化允许的 **`addrlen==0`** 组合）才走 **`to: None`**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["sendto", "sendmsg"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/io.rs:54-81", "kernel/src/syscall/net/io.rs:148-156"],
+    "related_files": [],
+    "key_insight": "addrlen==0 与 addr==NULL 合并处理"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；未连接 UDP `sendto(fd, buf, len, flags, &sa, 0)` 与 Linux 对照。",
+    "expected_output_contains": "",
+    "pass_criteria": "非空 addr 且 addrlen==0 → EINVAL（与 Linux）。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0）"
+  },
+  "suggested_fix": "区分 `addr.is_null()` 与 `addrlen==0`：指针非空且长度为 0 → EINVAL。",
+  "references": ["man 2 sendto", "man 2 sendmsg", "Linux net/socket.c"]
+}
