@@ -48,7 +48,9 @@ pub fn sys_clock_gettime(clock_id: __kernel_clockid_t, ts: *mut timespec) -> AxR
 }
 
 pub fn sys_gettimeofday(ts: *mut timeval) -> AxResult<isize> {
-    ts.vm_write(timeval::from_time_value(wall_time()))?;
+    if let Some(ts) = ts.nullable() {
+        ts.vm_write(timeval::from_time_value(wall_time()))?;
+    }
     Ok(0)
 }
 
@@ -86,12 +88,14 @@ pub fn sys_times(tms: *mut Tms) -> AxResult<isize> {
     let cutime = time_value_from_nanos(cu_ns).as_micros() as usize;
     let cstime = time_value_from_nanos(cs_ns).as_micros() as usize;
 
-    tms.vm_write(Tms {
-        tms_utime: utime,
-        tms_stime: stime,
-        tms_cutime: cutime,
-        tms_cstime: cstime,
-    })?;
+    if let Some(tms) = tms.nullable() {
+        tms.vm_write(Tms {
+            tms_utime: utime,
+            tms_stime: stime,
+            tms_cutime: cutime,
+            tms_cstime: cstime,
+        })?;
+    }
     Ok(nanos_to_ticks(monotonic_time_nanos()) as _)
 }
 
