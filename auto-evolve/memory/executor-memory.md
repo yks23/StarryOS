@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-14：issue-388 resolved（**`fspick`**：**`from_fd`** **后** **`get_as_str`** **前** **`flags & !FSPICK_KNOWN`** **→** **`InvalidInput`**；**`AT_SYMLINK_NOFOLLOW`/`AT_NO_AUTOMOUNT`/`AT_EMPTY_PATH`**；**`mount.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-387 resolved（**`open_tree`**：**`from_fd`** **后** **`get_as_str`** **前** **`flags & !OPEN_TREE_KNOWN`** **→** **`InvalidInput`**；**`CLONE`/`ITERATIVE`/`O_CLOEXEC`**；**`mount.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-386 resolved（**`fsopen`**：**`flags & !FSOPEN_KNOWN`** **先于** **`get_as_str`** **→** **`InvalidInput`**；**`FSOPEN_CLOEXEC=1`**；**`mount.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-385 resolved（**`riscv_flush_icache`** **`LOCAL`**：**`check_access`** **失败** **→** **`BadAddress`**；**`sys.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）

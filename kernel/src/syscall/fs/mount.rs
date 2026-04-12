@@ -3,7 +3,8 @@ use core::ffi::{c_char, c_void};
 use axerrno::{AxError, AxResult};
 use axfs::FS_CONTEXT;
 use linux_raw_sys::general::{
-    AT_FDCWD, MNT_DETACH, MNT_EXPIRE, MNT_FORCE, O_CLOEXEC, UMOUNT_NOFOLLOW,
+    AT_EMPTY_PATH, AT_FDCWD, AT_NO_AUTOMOUNT, AT_SYMLINK_NOFOLLOW, MNT_DETACH, MNT_EXPIRE,
+    MNT_FORCE, O_CLOEXEC, UMOUNT_NOFOLLOW,
 };
 
 use crate::{
@@ -138,11 +139,18 @@ pub fn sys_fsopen(fsname: UserConstPtr<c_char>, flags: u32) -> AxResult<isize> {
     Err(AxError::NoSuchDevice)
 }
 
+/// Linux `FSPICK_*` == these `AT_*` bits (`uapi/linux/mount.h`).
+const FSPICK_KNOWN_FLAGS: u32 = AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT | AT_EMPTY_PATH;
+
 /// `fspick`: unimplemented; **ENOSYS**.
-pub fn sys_fspick(dfd: i32, pathname: UserConstPtr<c_char>, _flags: u32) -> AxResult<isize> {
+pub fn sys_fspick(dfd: i32, pathname: UserConstPtr<c_char>, flags: u32) -> AxResult<isize> {
     // Linux fspick: fdget(dfd) before copy_from_user(pathname) → EBADF first (issue-166).
     if dfd != AT_FDCWD {
         let _ = <Directory as FileLike>::from_fd(dfd)?;
+    }
+    // After `from_fd` (EBADF), before pathname: unknown `FSPICK_*` → EINVAL (issue-388).
+    if flags & !FSPICK_KNOWN_FLAGS != 0 {
+        return Err(AxError::InvalidInput);
     }
     let path = pathname.get_as_str()?;
     debug!("sys_fspick <= dfd: {dfd}, path: {path:?} (unsupported)");
