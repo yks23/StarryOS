@@ -80,6 +80,12 @@ pub fn sys_mount(
 
     validate_mount_flags(flags)?;
 
+    // Linux rejects empty mountpoint with EINVAL before path resolution (issue-404; issue-403/402
+    // theme; `source` may be empty for some fs types — orthogonal, issue-393; string order issue-303).
+    if target.is_empty() {
+        return Err(AxError::InvalidInput);
+    }
+
     debug!("sys_mount <= source: {source:?}, target: {target:?}, fs_type: {fs_type:?}, flags: {flags}");
 
     validate_fs_type(&fs_type)?;
