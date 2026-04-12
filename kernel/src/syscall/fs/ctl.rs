@@ -511,6 +511,27 @@ fn update_times(
     Ok(())
 }
 
+/// Read one user `timespec` field-by-field (issue-201 / no bulk `assume_init` on padding).
+fn read_timespec_user(p: *const timespec) -> AxResult<timespec> {
+    // SAFETY: `p` is userspace; addresses are those of `repr(C)` fields only.
+    unsafe {
+        Ok(timespec {
+            tv_sec: core::ptr::addr_of!((*p).tv_sec).vm_read()?,
+            tv_nsec: core::ptr::addr_of!((*p).tv_nsec).vm_read()?,
+        })
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+fn read_timeval_user(p: *const timeval) -> AxResult<timeval> {
+    unsafe {
+        Ok(timeval {
+            tv_sec: core::ptr::addr_of!((*p).tv_sec).vm_read()?,
+            tv_usec: core::ptr::addr_of!((*p).tv_usec).vm_read()?,
+        })
+    }
+}
+
 #[cfg(target_arch = "x86_64")]
 #[allow(non_camel_case_types)]
 #[repr(C)]
@@ -522,8 +543,12 @@ pub struct utimbuf {
 #[cfg(target_arch = "x86_64")]
 pub fn sys_utime(path: *const c_char, times: *const utimbuf) -> AxResult<isize> {
     let (atime, mtime) = if let Some(times) = times.nullable() {
-        // FIXME: AnyBitPattern
-        let times = unsafe { times.vm_read_uninit()?.assume_init() };
+        let times = unsafe {
+            utimbuf {
+                actime: core::ptr::addr_of!((*times).actime).vm_read()?,
+                modtime: core::ptr::addr_of!((*times).modtime).vm_read()?,
+            }
+        };
         (
             Duration::from_secs(times.actime as _),
             Duration::from_secs(times.modtime as _),
@@ -542,8 +567,9 @@ pub fn sys_utimes(
     times: *const [linux_raw_sys::general::timeval; 2],
 ) -> AxResult<isize> {
     let (atime, mtime) = if let Some(times) = times.nullable() {
-        // FIXME: AnyBitPattern
-        let [atime, mtime] = unsafe { times.vm_read_uninit()?.assume_init() };
+        let p: *const timeval = times.cast();
+        let atime = read_timeval_user(p)?;
+        let mtime = read_timeval_user(p.wrapping_add(1))?;
         (atime.try_into_time_value()?, mtime.try_into_time_value()?)
     } else {
         let time = wall_time();
@@ -576,8 +602,9 @@ pub fn sys_utimensat(
     }
 
     let (atime, mtime) = if let Some(times) = times.nullable() {
-        // FIXME: AnyBitPattern
-        let [atime, mtime] = unsafe { times.vm_read_uninit()?.assume_init() };
+        let p: *const timespec = times.cast();
+        let atime = read_timespec_user(p)?;
+        let mtime = read_timespec_user(p.wrapping_add(1))?;
         (
             utime_to_duration(&atime).transpose()?,
             utime_to_duration(&mtime).transpose()?,
