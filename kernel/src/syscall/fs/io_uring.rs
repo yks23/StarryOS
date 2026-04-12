@@ -3,7 +3,7 @@ use alloc::sync::Arc;
 use axerrno::{AxError, AxResult};
 use starry_vm::{VmMutPtr, VmPtr};
 
-use crate::file::{IoUringFd, add_file_like};
+use crate::file::{IoUringFd, add_file_like, close_file_like};
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -51,6 +51,9 @@ pub(crate) struct IoUringParams {
 ///
 /// On success, **`sq_off` / `cq_off` / `resv`** and thread fields are **zeroed** — there is no
 /// kernel ring layout to expose; userland must not `mmap` using garbage echoed from input.
+///
+/// Linux-style ordering: allocate the **`io_uring` fd first; only after that succeeds do we
+/// **`copy_to_user`** **`params`** (issue-145). If **`vm_write`** fails, the fd is closed again.
 pub fn sys_io_uring_setup(entries: u32, params: *mut IoUringParams) -> AxResult<isize> {
     if params.is_null() {
         return Err(AxError::InvalidInput);
@@ -72,6 +75,11 @@ pub fn sys_io_uring_setup(entries: u32, params: *mut IoUringParams) -> AxResult<
     p.resv = [0; 3];
     p.sq_off = IoSqringOffsets::default();
     p.cq_off = IoCqringOffsets::default();
-    params.vm_write(p)?;
-    add_file_like(Arc::new(IoUringFd), false).map(|fd| fd as isize)
+
+    let fd = add_file_like(Arc::new(IoUringFd), false)?;
+    if let Err(e) = params.vm_write(p) {
+        let _ = close_file_like(fd);
+        return Err(e.into());
+    }
+    Ok(fd as isize)
 }
