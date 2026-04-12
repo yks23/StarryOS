@@ -1,0 +1,28 @@
+{
+  "id": "issue-114",
+  "title": "fadvise64 桩实现未校验 offset/len 非负，负区间仍 Ok(0)，与 Linux EINVAL 不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "resolved_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`sys_fadvise64`**：在桩 **`Ok(0)`** 前对齐 **`sys_fallocate`** — **`offset`/`len` 非负**、**`offset as u64` + `len as u64`** **`checked_add`** 溢出 → **`InvalidInput`**；注释标明尚无 VFS **`fadvise`** 钩子。",
+  "files_changed": ["kernel/src/syscall/fs/io.rs"],
+  "description": "**`sys_fadvise64`**（`kernel/src/syscall/fs/io.rs`）在排除 **pipe**（**`ESPIPE`**）与 **`advice > 5`** 后直接 **`Ok(0)`**，**不**读取 **`File`**、**不**使用 **`offset`/`len`**。因此 **`offset < 0`** 或 **`len < 0`**（**`__kernel_off_t`**）仍返回成功。**Linux `fadvise64`/`posix_fadvise`** 对非法区间（含负 **`offset`**、负 **`len`** 及溢出）通常 **`EINVAL`**（见 **`vfs_fadvise`** 路径）。与同文件 **`sys_fallocate`**/**`sys_pread64`** 等对负 **`off_t`** 的前置 **`InvalidInput`** 不一致。当前为「全桩」时，至少应对 **`offset`/`len`** 做非负与 **`checked_add`** 校验再 **`Ok(0)`**，以免与 **Linux** 及依赖 **`EINVAL`** 的程序行为偏离；若长期不实现 **`fadvise`** 语义，宜在注释或返回码上明确为桩。",
+  "category": "syscall-stub",
+  "affected_syscalls": ["fadvise64"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/io.rs:186-201"],
+    "related_files": [],
+    "key_insight": "仅 pipe/advice 检查；忽略 offset/len，负值仍成功"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "对普通文件 **`syscall(SYS_fadvise64, fd, -1, 4096, POSIX_FADV_NORMAL)`** 或 **`len < 0`**；Linux **`EINVAL`**；Starry 若 **`Ok(0)`** 则记偏差。",
+    "expected_output_contains": "",
+    "pass_criteria": "**`offset < 0` 或 `len < 0`** → **`InvalidInput`**；**`offset+len`** 溢出 → **`InvalidInput`**（与 **`fallocate`** 对齐）；或文档化桩语义。",
+    "last_result": "2026-04-12：修复后负 **`offset`/`len`** 与 **`offset+len`** 溢出 → **`InvalidInput`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** PASS；QEMU 未测"
+  },
+  "suggested_fix": "在 **`Ok(0)`** 前增加 **`offset >= 0 && len >= 0`**（及可选 **`checked_add`**）；若保持无 VFS 钩子，可仍 **`Ok(0)`** 但须拒绝非法区间。",
+  "references": ["man 2 posix_fadvise", "Linux mm/fadvise.c"]
+}

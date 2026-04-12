@@ -197,6 +197,15 @@ pub fn sys_fadvise64(
     if advice > 5 {
         return Err(AxError::InvalidInput);
     }
+    // Stub: no VFS hook yet, but reject invalid intervals like Linux `vfs_fadvise` (EINVAL).
+    if offset < 0 || len < 0 {
+        return Err(AxError::InvalidInput);
+    }
+    let offset_u = offset as u64;
+    let len_u = len as u64;
+    if offset_u.checked_add(len_u).is_none() {
+        return Err(AxError::InvalidInput);
+    }
     Ok(0)
 }
 
