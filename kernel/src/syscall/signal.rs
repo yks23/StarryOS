@@ -436,12 +436,14 @@ pub fn sys_rt_sigsuspend(
     set: *const SignalSet,
     sigsetsize: usize,
 ) -> AxResult<isize> {
-    check_sigset_size(sigsetsize)?;
-
+    // Linux `do_rt_sigsuspend` / `copy_sigset_from_user`: NULL `set` → EFAULT before bad
+    // `sigsetsize` → EINVAL (issue-356; same ordering as `sys_rt_sigtimedwait`, issue-338).
     if set.is_null() {
         // Linux `rt_sigsuspend(2)` / `sigsuspend`: `set` must be readable; NULL → EFAULT.
         return Err(AxError::BadAddress);
     }
+
+    check_sigset_size(sigsetsize)?;
 
     let curr = current();
     let thr = curr.as_thread();
