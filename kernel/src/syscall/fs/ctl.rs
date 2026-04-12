@@ -36,6 +36,8 @@ use crate::{
 #[cfg(target_arch = "x86_64")]
 use crate::time::read_timeval_user;
 
+use super::at_path::reject_empty_pathname_without_empty_path_flag;
+
 /// The ioctl() system call manipulates the underlying device parameters
 /// of special files.
 pub fn sys_ioctl(fd: i32, cmd: u32, arg: usize) -> AxResult<isize> {
@@ -565,21 +567,6 @@ pub fn sys_fchmodat(dirfd: i32, path: *const c_char, mode: u32, flags: u32) -> A
             ..Default::default()
         })?;
     Ok(0)
-}
-
-/// Linux *at syscalls: empty pathname requires `AT_EMPTY_PATH`; otherwise EINVAL (issue-399;
-/// orthogonality with NULL + `AT_EMPTY_PATH`, issue-331; issue-393 theme).
-fn reject_empty_pathname_without_empty_path_flag(
-    path: &Option<String>,
-    flags: u32,
-) -> AxResult<()> {
-    if let Some(p) = path
-        && p.is_empty()
-        && flags & AT_EMPTY_PATH == 0
-    {
-        return Err(AxError::InvalidInput);
-    }
-    Ok(())
 }
 
 fn update_times(

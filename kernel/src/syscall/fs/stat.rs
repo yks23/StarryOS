@@ -14,6 +14,8 @@ use crate::{
     mm::vm_load_string,
 };
 
+use super::at_path::reject_empty_pathname_without_empty_path_flag;
+
 /// Get the file metadata by `path` and write into `statbuf`.
 ///
 /// Return 0 if success.
@@ -60,6 +62,9 @@ pub fn sys_fstatat(
     }
 
     let path = path.nullable().map(vm_load_string).transpose()?;
+
+    // Empty pathname requires AT_EMPTY_PATH; otherwise EINVAL (issue-401; issue-399 theme).
+    reject_empty_pathname_without_empty_path_flag(&path, flags)?;
 
     debug!("sys_fstatat <= dirfd: {dirfd}, path: {path:?}, flags: {flags}");
 
@@ -123,6 +128,10 @@ pub fn sys_statx(
     }
 
     let path = path.nullable().map(vm_load_string).transpose()?;
+
+    // Empty pathname requires AT_EMPTY_PATH; otherwise EINVAL (issue-401; situation 4 vs issue-331).
+    reject_empty_pathname_without_empty_path_flag(&path, flags)?;
+
     debug!("sys_statx <= dirfd: {dirfd}, path: {path:?}, flags: {flags}, mask: {mask}");
 
     if statxbuf.is_null() {
@@ -157,6 +166,10 @@ pub fn sys_faccessat2(dirfd: c_int, path: *const c_char, mode: u32, flags: u32) 
     }
 
     let path = path.nullable().map(vm_load_string).transpose()?;
+
+    // Empty pathname requires AT_EMPTY_PATH; otherwise EINVAL (issue-401; issue-399 theme).
+    reject_empty_pathname_without_empty_path_flag(&path, flags)?;
+
     debug!("sys_faccessat2 <= dirfd: {dirfd}, path: {path:?}, mode: {mode}, flags: {flags}");
 
     let file = resolve_at(dirfd, path.as_deref(), flags)?;

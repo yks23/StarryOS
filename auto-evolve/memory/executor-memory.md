@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-401 resolved（**`fstatat`/`statx`/`faccessat2`**（及 **`stat`/`lstat`/`access`** **封装**）：**`Some(\"\")`** **无** **`AT_EMPTY_PATH`** **`resolve_at`** **前** **→** **`InvalidInput`**；**`at_path.rs`** **`reject_empty_pathname_without_empty_path_flag`** **上提**；**`ctl.rs`/`stat.rs`/`mod.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-400 resolved（**`linkat`/`link`**：**`old_path`=`Some(\"\")`** **且** **无** **`AT_EMPTY_PATH`** **`resolve_at`** **前** **→** **`InvalidInput`**；**`reject_empty_pathname_without_empty_path_flag`**（**issue-399** **复用**）；**`new_path`** **空** **仍** **issue-398**；**`ctl.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-399 resolved（**`fchownat`/`fchmodat`/`utimensat`/`utimes`/`utime`**：**`Some(\"\")`** **且** **无** **`AT_EMPTY_PATH`** **`resolve_at`** **前** **→** **`InvalidInput`**；**`reject_empty_pathname_without_empty_path_flag`**；**`ctl.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-398 resolved（**`linkat`/`link`**：**`new_path.is_empty()`** **`resolve_nonexistent`** **前** **→** **`InvalidInput`**；**`old_path`** **`AT_EMPTY_PATH`** **未** **改动**；**`ctl.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
