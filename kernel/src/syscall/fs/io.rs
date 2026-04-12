@@ -147,10 +147,13 @@ pub fn sys_lseek(fd: c_int, offset: __kernel_off_t, whence: c_int) -> AxResult<i
 }
 
 pub fn sys_truncate(path: UserConstPtr<c_char>, length: __kernel_off_t) -> AxResult<isize> {
+    // Resolve user `path` before `length` so **EFAULT** (bad pointer) precedes **EINVAL** for
+    // negative `length` when both apply (Linux `do_truncate`/`user_path_at_empty` order; issue-318).
+    // `ftruncate` is different: **fd** before `length` (issue-316).
+    let path = path.get_as_str()?;
     if length < 0 {
         return Err(AxError::InvalidInput);
     }
-    let path = path.get_as_str()?;
     debug!("sys_truncate <= {path:?} {length}");
     let file = OpenOptions::new()
         .write(true)
