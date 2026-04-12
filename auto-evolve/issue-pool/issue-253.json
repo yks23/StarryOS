@@ -1,0 +1,27 @@
+{
+  "id": "issue-253",
+  "title": "brk：非页对齐 `addr` 被接受并作为 program break 返回，与 Linux 常见 EINVAL/对齐语义不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_brk`：在 `USER_HEAP_BASE`/`heap_limit` 校验之后，对非零 `addr` 要求 `VirtAddr::is_aligned(PAGE_SIZE_4K)`，否则 `InvalidInput`（EINVAL）；与 Linux 常见页对齐 program break 一致，`set_heap_top`/`Ok(addr)` 仅在对齐地址上成功。",
+  "files_changed": ["kernel/src/syscall/mm/brk.rs"],
+  "description": "**`kernel/src/syscall/mm/brk.rs`** **`sys_brk`**（约 **12–63** 行）在 **`addr != 0`** 时仅用 **`align_up_4k`** 计算 **`new_top_aligned`**/**`current_top_aligned`** 以 **`map`/`unmap`**，但 **`proc_data.set_heap_top(addr)`** 与 **`Ok(addr as isize)`** 使用**原始** **`addr`**。\n\n**Linux `brk(2)`**（架构相关）：**`addr`** 常须**页对齐**；未对齐时多返回 **`EINVAL`**，或内核将**断点**对齐后通过**返回值**暴露**对齐后** program break。**当前** 对**非页对齐** **`addr`** **不** **`InvalidInput`**，且**成功路径**返回**未对齐** **`addr`**，与依赖 **`sbrk(0)`/`brk` 返回值** 为**页边界** 的 **`libc`** 假设可能分叉。\n\n**建议**：在 **`addr != 0`** 时 **`if !VirtAddr::from(addr).is_aligned(PAGE_SIZE_4K) { return Err(InvalidInput); }`**（或 **`PAGE_SIZE`** 与 **`USER_HEAP`** 策略一致）；或**文档化**「**Starry** 允许非对齐 **`addr`**，**映射**按页、**存储**按用户值」。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["brk"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/mm/brk.rs:12-63"],
+    "related_files": [],
+    "key_insight": "`set_heap_top`/`Ok(addr)` 未对齐"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；`brk(addr)` 非页对齐与 Linux 对照。",
+    "expected_output_contains": "",
+    "pass_criteria": "未对齐 → EINVAL 或返回对齐 break，与 Linux。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0）"
+  },
+  "suggested_fix": "拒绝非页对齐 `addr`；或对齐后 `set_heap_top`/`return`。",
+  "references": ["man 2 brk", "Linux mm/mmap.c do_brk"]
+}

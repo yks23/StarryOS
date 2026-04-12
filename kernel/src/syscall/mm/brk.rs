@@ -1,7 +1,7 @@
 use axerrno::{AxError, AxResult};
 use axhal::paging::{MappingFlags, PageSize};
 use axtask::current;
-use memory_addr::{VirtAddr, align_up_4k};
+use memory_addr::{MemoryAddr, PAGE_SIZE_4K, VirtAddr, align_up_4k};
 
 use crate::{
     config::{USER_HEAP_BASE, USER_HEAP_SIZE, USER_HEAP_SIZE_MAX},
@@ -26,6 +26,10 @@ pub fn sys_brk(addr: usize) -> AxResult<isize> {
     }
     if addr > heap_limit {
         return Err(AxError::NoMemory);
+    }
+    // Linux `brk(2)`: program break must be page-aligned on common ports; unaligned `addr` → EINVAL.
+    if !VirtAddr::from(addr).is_aligned(PAGE_SIZE_4K) {
+        return Err(AxError::InvalidInput);
     }
 
     let new_top_aligned = align_up_4k(addr);
