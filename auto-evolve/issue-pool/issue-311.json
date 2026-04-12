@@ -1,0 +1,27 @@
+{
+  "id": "issue-311",
+  "title": "`msgsnd(2)`/`msgrcv(2)`：`sys_msgsnd`/`sys_msgrcv` 在通过 `addr_of!((*msgp).mtype)` / `vm_read` / `vm_write` 访问用户 `struct msgbuf` 前未对 `msgp == NULL` 显式返回 `BadAddress`，与 Linux `EFAULT` 及 `capget`/`clone3`/`arch_prctl` GET（issue-304/308/309）等显式早退风格不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T12:00:00Z",
+  "severity": "low",
+  "fix_summary": "在 `sys_msgsnd`/`sys_msgrcv` 中于 `get_queue_by_msqid` 成功之后、`vm_read`/`addr_of!((*msgp))`/`vm_write` 之前增加 `msgp.is_null()` → `AxError::BadAddress`，并注释与 issue-304/308/309 一致及无效 msqid 的 EINVAL 优先。更新 `executor-memory` 与 `issue-311.json`。",
+  "files_changed": ["kernel/src/syscall/ipc/msg.rs", "auto-evolve/memory/executor-memory.md"],
+  "description": "**`kernel/src/syscall/ipc/msg.rs`** **`sys_msgsnd`** **（** **约** **506–515** **行** **）** **在** **`msgsz`** **上界** **与** **队列** **查找** **之后** **，** **直接** **`addr_of!((*msgp).mtype).vm_read()`** **及** **`vm_load(mtext …)`** **，** **无** **`msgp.is_null()`** **→** **`BadAddress`** **。** **`sys_msgrcv`** **（** **约** **654–661** **行** **）** **在** **加锁** **/** **匹配** **消息** **后** **`mtype_ptr.vm_write`/`vm_write_slice`** **，** **同样** **未** **在** **入口** **拒绝** **`msgp == NULL`** **。** **Linux** **`msgsnd`/`msgrcv`** **对** **`NULL`** **消息** **指针** **返回** **`EFAULT`** **；** **依赖** **`vm_*`** **隐式** **失败** **时** **可读性** **与** **错误** **路径** **与** **仓库** **内** **同类** **syscall** **不** **统一** **。**\n\n**建议** **：** **在** **两** **入口** **尽早** **`if msgp.is_null() { return Err(AxError::BadAddress); }`** **（** **或** **等价** **`UserPtr`** **封装** **）** **，** **位置** **可** **参考** **`msgsz`/`msqid`** **校验** **与** **Linux** **`EFAULT`** **相对** **`EINVAL`** **的** **顺序** **（** **可** **对照** **上游** **`ipc/msg.c`** **）** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["msgsnd", "msgrcv"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/ipc/msg.rs:480-517", "kernel/src/syscall/ipc/msg.rs:556-661"],
+    "related_files": [],
+    "key_insight": "msgsnd/msgrcv msgp NULL 未显式 BadAddress"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：用户态 `msgsnd(msqid, NULL, …)` / `msgrcv(…, NULL, …)` 对照 Linux EFAULT。",
+    "expected_output_contains": "",
+    "pass_criteria": "`msgp == NULL` 时显式 `BadAddress`，或与上游 `EFAULT` 顺序一致并有注释。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `sys_msgsnd`、`sys_msgrcv` 开始访问 `*msgp` 之前增加 `msgp.is_null()` 检查并返回 `AxError::BadAddress`。",
+  "references": ["man 2 msgsnd", "man 2 msgrcv", "kernel/src/syscall/ipc/msg.rs", "issue-304", "issue-308"]
+}

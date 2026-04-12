@@ -502,6 +502,12 @@ pub fn sys_msgsnd(
             .ok_or(AxError::from(LinuxError::EINVAL))? // EINVAL - queue does not exist
     };
 
+    // NULL `msgp` → **EFAULT** (`BadAddress`), after `msqid` resolve so **EINVAL** for bad id
+    // still wins (same theme as `capget`/`clone3`, issue-304, issue-308, issue-311).
+    if msgp.is_null() {
+        return Err(AxError::BadAddress);
+    }
+
     // read message from user space
     let mtype_ptr = unsafe { core::ptr::addr_of!((*msgp).mtype) };
     let mtype: i64 = mtype_ptr.vm_read()?;
@@ -587,6 +593,12 @@ pub fn sys_msgrcv(
             .get_queue_by_msqid(msqid)
             .ok_or(AxError::from(LinuxError::EINVAL))? // EINVAL
     };
+
+    // NULL `msgp` → **EFAULT** (`BadAddress`), after `msqid` resolve so **EINVAL** for bad id
+    // still wins (issue-311; same as `sys_msgsnd`).
+    if msgp.is_null() {
+        return Err(AxError::BadAddress);
+    }
 
     let mut msg_queue = queue_arc.lock();
 
