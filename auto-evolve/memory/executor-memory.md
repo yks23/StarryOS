@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-149 resolved（**`accept4`/`accept`**：**`addr` 非空**时先 **`write_to_user`** 再 **`add_to_fd_table`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-148 resolved（**`pipe2`**：**`fds.vm_write`** 失败时 **`close_file_like`** 读/写两端；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-147 resolved（**`rt_sigaction`**：**`act` 非空**时先 **`vm_read(act)`** 再 **`vm_write(oldact)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-146 resolved（**`rt_sigprocmask`**：**`set` 非空**时先 **`how`**/**`vm_read(set)`**，再 **`vm_write(oldset)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -129,6 +130,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-149 | accept4先写 sockaddr 再装 fd | resolved | 2026-04-12 |
 | issue-148 | pipe2 vm_write 失败关闭两端 fd | resolved | 2026-04-12 |
 | issue-147 | rt_sigaction oldact after vm_read(act) | resolved | 2026-04-12 |
 | issue-146 | rt_sigprocmask oldset after how/set校验 | resolved | 2026-04-12 |
@@ -321,7 +323,7 @@
 - 进程凭证：`ProcessData` 中 **`ruid/euid/suid`** 与 **`rgid/egid/sgid`**（`AtomicU32`）；`getuid`→`ruid`，`geteuid`→`euid`，gid 同理；**`get_resuid`/`get_resgid`** 供 **`getresuid(2)`/`getresgid(2)`** 一次读三组；`setuid`/`setgid` 为三 ID 同步设置；`setresuid`/`setresgid` 中 **`CRED_NO_CHANGE`=`u32::MAX`** 表示不改；**`euid==0`（或 `egid==0`）** 视为特权可任意改，否则新值须属于当前 `{r,e,s}` 之一否则 **`PermissionDenied`**。`clone` 新建进程在 `ProcessData::new` 后 **`copy_credentials_from`** 父 `ProcessData`。完整 Linux 能力集与 setfsuid 等仍未建模。
 - 补充组：**`supplementary_gids`**（`Mutex<Vec<u32>>`，上限 **`SUPP_GROUPS_MAX`**）；`getgroups` 仅列补充组不含主 `rgid`；`setgroups` 需 **`euid==0`**；`getgroups(0,…)` 返回个数。**`seccomp(2)`** 未实现时 **`Unsupported`（ENOSYS）**。**`prctl(PR_SET_SECCOMP)`**：**`arg2`>2**（非 **`SECCOMP_MODE_*`**）→ **`EINVAL`**；mode **0/1/2** 未实现 → **`Unsupported`**。**`prctl(PR_MCE_KILL)`**：**`arg2`** 须 **`CLEAR`/`SET`**；**`SET`** 时 **`arg3`**≤**`DEFAULT`**，否则 **`EINVAL`**；合法组合未实现 → **`Unsupported`**。
 - **`execve` 多线程**：在替换映像前若 **`proc.threads().len() > 1`**，对其余 tid **`SIGKILL`** 并 **`yield_now`** 直至仅剩当前线程（对齐 Linux 先杀线程组再 exec）；长时间未收敛则 **`WouldBlock`**。非 vfork/线程本地存储析构等细语义仍弱于 Linux。
-- **`accept` / `accept4`**：向用户写入的 sockaddr 必须是 **`peer_addr()`**（远端），勿用 **`local_addr()`**（本端监听地址）；与 **`getpeername(accepted_fd)`** 一致。**`accept4`** 第四参 **`flags`** 须为 **`O_CLOEXEC | O_NONBLOCK`**（与 Linux **`SOCK_CLOEXEC`/`SOCK_NONBLOCK`** 同值），否则 **`EINVAL`**。
+- **`accept` / `accept4`**：向用户写入的 sockaddr 必须是 **`peer_addr()`**（远端），勿用 **`local_addr()`**（本端监听地址）；与 **`getpeername(accepted_fd)`** 一致。**`accept4`** 第四参 **`flags`** 须为 **`O_CLOEXEC | O_NONBLOCK`**（与 Linux **`SOCK_CLOEXEC`/`SOCK_NONBLOCK`** 同值），否则 **`EINVAL`**。**`addr` 非空**时须先 **`write_to_user`**/**`addrlen`**（**`get_as_mut`**）再 **`add_to_fd_table`**，避免 **`copy_to_user`** 失败时已装新 **fd** 却未返回 **fd** 号（issue-149，与 issue-148 **`pipe2`** 同类）。**`addr==NULL`** 无地址写回，仍直接装表。
 - **`getsockname`/`getpeername`**（**`net/name.rs`**）：**`addrlen.get_as_mut()`** 须在 **`local_addr`/`peer_addr`** 之前，使 **NULL** 或不可写的 **`addrlen`** 尽早 **EFAULT**，再取内核地址并 **`write_to_user`**（**`addr`** 仍在 **`fill_addr`** 写回时访问）。
 - **`socket(2)`/`socketpair(2)`**：**`type`** 仅允许 **`SOCK_TYPE_MASK`（0xf）** 内 **`SOCK_*`** 与 **`O_CLOEXEC|O_NONBLOCK`**；其它位 **`InvalidInput`**（对齐 Linux **`EINVAL`**）。**`ty`** 取 **`raw_ty & SOCK_TYPE_MASK`**。
 - **`setsockopt(2)`**：**`optlen`** 须 **`>=`** 选项值 **`sizeof(T)`**（与 Linux / **`getsockopt`** 侧一致），只使用缓冲区前 **`sizeof(T)`** 字节；**`optlen < sizeof(T)`** → **`EINVAL`**。
@@ -378,6 +380,7 @@
 - issue-146：**`rt_sigprocmask`**：**`set` 非空** + 非法 **`how`** + **`oldset` 非空**：**`EINVAL`** 时 **`oldset`** 不应被写入。
 - issue-147：**`rt_sigaction`**：**`act`/`oldact` 均非空** + 不可读 **`act`**：**`EFAULT`** 时 **`oldact`** 不应被写入。
 - issue-148：**`pipe2`** +坏 **`fds`**：**`vm_write`** 失败不应泄漏两个管道 **fd**。
+- issue-149：**`accept4`** **`addr` 非空** + 坏 **`sockaddr`/`addrlen`**：**`EFAULT`** 不应多出新 **socket fd**。
 - issue-053：请跑 **`/bin/test_memfd_create_invalid_flags`**（**`memfd_create(..., 0x80000000)`** → **`EINVAL`**）。
 - issue-052：请跑 **`/bin/test_fchownat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`uid`/`gid`** 不变）。
 - issue-051：请跑 **`/bin/test_utimensat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`mtime`** 不变）。

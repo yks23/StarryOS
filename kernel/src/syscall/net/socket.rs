@@ -151,12 +151,15 @@ pub fn sys_accept4(
     }
 
     let remote_addr = socket.peer_addr()?;
-    let fd = socket.add_to_fd_table(cloexec).map(|fd| fd as isize)?;
-    debug!("sys_accept => fd: {fd}, addr: {remote_addr:?}");
 
+    // Linux __sys_accept4: copy peer address before installing the new fd; if copy_to_user fails,
+    // do not leave an orphan accepted socket in the fd table (issue-149).
     if !addr.is_null() {
         remote_addr.write_to_user(addr, addrlen.get_as_mut()?)?;
     }
+
+    let fd = socket.add_to_fd_table(cloexec).map(|fd| fd as isize)?;
+    debug!("sys_accept => fd: {fd}, addr: {remote_addr:?}");
 
     Ok(fd)
 }

@@ -1,0 +1,27 @@
+{
+  "id": "issue-149",
+  "title": "accept4/accept 在 write_to_user(addr) 失败时已 add_to_fd_table，导致已接受连接的 socket fd 泄漏",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "medium",
+  "fix_summary": "`sys_accept4` 在 `addr` 非空时先 `remote_addr.write_to_user`/`addrlen.get_as_mut`，成功后再 `add_to_fd_table`；`addr==NULL` 路径不变。`accept` 委托 `accept4`，一并修复。避免 `copy_to_user` 失败时已安装新 fd 却未返回 fd 号的泄漏。",
+  "files_changed": ["kernel/src/syscall/net/socket.rs"],
+  "description": "**`sys_accept4`**（`kernel/src/syscall/net/socket.rs`）在校验 **`flags`** 后 **`Socket::from_fd`**、**`accept`** 得到新 **`Socket`**，再按需 **`set_nonblocking`**，随后 **`socket.add_to_fd_table(cloexec)`** 将已连接 **socket** 装入 **fd 表**并得到 **`fd`**，最后若 **`addr`** 非空才 **`remote_addr.write_to_user(addr, addrlen.get_as_mut()?)`**。当对 **`sockaddr`**/**`addrlen`** 的写回失败（**`EFAULT`** 等）时，系统调用返回错误，但新 **fd** 已存在于进程表中且调用者未收到返回值中的 **fd 编号**，形成**孤儿 fd**；与 **Linux **`accept4`** 在 **`copy_to_user`** 失败路径上通常不保留已安装 **fd**（或等价回滚）的常见语义不一致，与 **issue-148** **`pipe2`** 同类。若 **`addr.is_null()`** 则跳过后写，无此泄漏路径。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["accept", "accept4"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/socket.rs:131-161"],
+    "related_files": [],
+    "key_insight": "`add_to_fd_table` 早于 `write_to_user`（`addr` 非空路径）"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "监听 **socket** 上 **`accept4`**，**`addr`** 非空指向不可写内存或 **`addrlen`** 无效；使 **`write_to_user`** 失败；检查错误返回后 **fd** 表是否多出无名 **socket**。",
+    "expected_output_contains": "",
+    "pass_criteria": "**`write_to_user`** 成功后再 **`add_to_fd_table`**，或失败时 **`close_file_like(new_fd)`**，与 **Linux** 无泄漏行为一致。",
+    "last_result": "`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` 通过（2026-04-12）。"
+  },
+  "suggested_fix": "在已得 **`remote_addr`** 的前提下，若 **`addr`** 非空则先 **`write_to_user`**（及 **`addrlen`** 更新），成功后再 **`add_to_fd_table`**；若仍须先 **`add_to_fd_table`** 才能返回 **fd**，则 **`write_to_user`** 失败时 **`close_file_like(fd)`** 再返回错误。",
+  "references": ["man 2 accept4", "Linux __sys_accept4"]
+}
