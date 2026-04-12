@@ -1,0 +1,27 @@
+{
+  "id": "issue-186",
+  "title": "sendmsg：遍历 `msg_control` 时 `ptr + msg_controllen` 未 `checked_add`，`usize` 溢出可破坏边界检查",
+  "status": "resolved",
+  "created_at": "2026-04-13T18:00:00Z",
+  "severity": "medium",
+  "fix_summary": "**`sys_sendmsg`**：**`ptr_end = ptr.checked_add(msg_controllen as usize).ok_or(InvalidInput)?`**；循环条件改为 **`ptr.checked_add(size_of::<cmsghdr>())`** 与 **`ptr_end`** 比较，避免 **`ptr + sizeof` 环绕**。",
+  "files_changed": ["kernel/src/syscall/net/io.rs"],
+  "description": "**`kernel/src/syscall/net/io.rs`** 中 **`sys_sendmsg`** 在用户 **`msg_control` 非空**时计算 **`ptr_end = ptr + msg.msg_controllen`**（**`ptr`** 为 **`msg_control` 用户地址**）。**未使用 `checked_add`**：在 **`usize` 溢出**语义下 **`ptr_end` 可能回绕**，使 **`while ptr + sizeof(cmsghdr) <= ptr_end`** 与后续 **`next <= ptr_end`** 判断与 **Linux `copy_msghdr_from_user`/`audit_sockaddr` 一类对 `controllen` 的校验**不一致；虽多数回绕组合会使循环不进入或提前结束，但属于**未对齐内核硬编码策略**的边界缺陷，且与 **Miri/溢出语义**讨论下的可维护性风险并存。**内层 `next` 已用 `checked_add`**，**外层终点计算不对称**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["sendmsg"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/io.rs:118-137"],
+    "related_files": [],
+    "key_insight": "`ptr_end = ptr + msg_controllen` 无 overflow 检查；内层 `next` 有 `checked_add`"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "构造 **`msghdr`**：**`msg_control`** 为合法用户指针、**`msg_controllen = usize::MAX`**（或与 **`ptr` 组合导致 `ptr+len` 回绕**），对比 **Linux**（通常 **`EINVAL`/`EFAULT`**）与 **Starry** 返回值。",
+    "expected_output_contains": "",
+    "pass_criteria": "**`ptr.checked_add(msg_controllen)`** 失败时 **`EINVAL`**（或与文档一致）；禁止依赖未定义的环绕终点。",
+    "last_result": "`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` 通过（未跑对照测试）。"
+  },
+  "suggested_fix": "将 **`ptr_end`** 改为 **`ptr.checked_add(msg.msg_controllen as usize).ok_or(InvalidInput)?`**（或在与 **Linux** 一致的上限裁剪后计算）；必要时对 **`msg_controllen`** 设 **`socklen_t`/用户拷贝** 上限。",
+  "references": ["man 2 sendmsg", "Linux __sys_sendmsg"]
+}

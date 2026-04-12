@@ -119,8 +119,13 @@ pub fn sys_sendmsg(fd: i32, msg: UserConstPtr<msghdr>, flags: u32) -> AxResult<i
     let mut cmsg = Vec::new();
     if !msg.msg_control.is_null() {
         let mut ptr = msg.msg_control as usize;
-        let ptr_end = ptr + msg.msg_controllen;
-        while ptr + size_of::<cmsghdr>() <= ptr_end {
+        let ptr_end = ptr
+            .checked_add(msg.msg_controllen as usize)
+            .ok_or(AxError::InvalidInput)?;
+        while let Some(hdr_end) = ptr.checked_add(size_of::<cmsghdr>()) {
+            if hdr_end > ptr_end {
+                break;
+            }
             let hdr = UserConstPtr::<cmsghdr>::from(ptr).get_as_ref()?;
             if hdr.cmsg_len < size_of::<cmsghdr>() {
                 return Err(AxError::InvalidInput);
