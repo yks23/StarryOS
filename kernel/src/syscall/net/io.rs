@@ -6,8 +6,38 @@ use axerrno::{AxError, AxResult};
 use axio::prelude::*;
 use axnet::{CMsgData, RecvFlags, RecvOptions, SendFlags, SendOptions, SocketAddrEx, SocketOps};
 use linux_raw_sys::net::{
-    MSG_PEEK, MSG_TRUNC, SCM_RIGHTS, SOL_SOCKET, cmsghdr, msghdr, sockaddr, socklen_t,
+    MSG_CONFIRM, MSG_CMSG_CLOEXEC, MSG_DONTROUTE, MSG_DONTWAIT, MSG_EOR, MSG_ERRQUEUE,
+    MSG_FIN, MSG_MORE, MSG_NOSIGNAL, MSG_OOB, MSG_PEEK, MSG_PROBE, MSG_RST, MSG_SYN,
+    MSG_TRUNC, MSG_WAITALL, SCM_RIGHTS, SOL_SOCKET, cmsghdr, msghdr, sockaddr, socklen_t,
 };
+
+/// Linux `recvmsg(2)` / `recvfrom(2)` 第三参 flags：仅允许内核接受的 `MSG_*` 组合（与 Linux
+/// `recvmsg` 策略一致），未知位须 **`EINVAL`**。
+const RECVMSG_FLAGS_MASK: u32 = MSG_OOB
+    | MSG_PEEK
+    | MSG_DONTROUTE
+    | MSG_TRUNC
+    | MSG_DONTWAIT
+    | MSG_WAITALL
+    | MSG_ERRQUEUE
+    | MSG_CMSG_CLOEXEC;
+
+/// Linux `sendmsg(2)` / `sendto(2)` flags：与 `recv` 掩码不同（不含 **`MSG_PEEK`** 等仅接收语义位）。
+const SENDMSG_FLAGS_MASK: u32 = MSG_OOB
+    | MSG_DONTROUTE
+    | MSG_PROBE
+    | MSG_TRUNC
+    | MSG_DONTWAIT
+    | MSG_EOR
+    | MSG_WAITALL
+    | MSG_FIN
+    | MSG_SYN
+    | MSG_CONFIRM
+    | MSG_RST
+    | MSG_ERRQUEUE
+    | MSG_NOSIGNAL
+    | MSG_MORE
+    | MSG_CMSG_CLOEXEC;
 
 use super::addr::SocketAddrExt;
 use crate::{
@@ -24,6 +54,10 @@ fn send_impl(
     addrlen: socklen_t,
     cmsg: Vec<CMsgData>,
 ) -> AxResult<isize> {
+    if flags & !SENDMSG_FLAGS_MASK != 0 {
+        return Err(AxError::InvalidInput);
+    }
+
     let addr = if addr.is_null() || addrlen == 0 {
         None
     } else {
@@ -96,6 +130,10 @@ fn recv_impl(
     addrlen: UserPtr<socklen_t>,
     cmsg_builder: Option<CMsgBuilder>,
 ) -> AxResult<isize> {
+    if flags & !RECVMSG_FLAGS_MASK != 0 {
+        return Err(AxError::InvalidInput);
+    }
+
     debug!("sys_recv <= fd: {fd}, flags: {flags}");
 
     let socket = Socket::from_fd(fd)?;
