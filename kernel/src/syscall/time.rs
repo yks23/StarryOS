@@ -1,3 +1,5 @@
+use core::mem::size_of;
+
 use axerrno::{AxError, AxResult};
 use axhal::time::{TimeValue, monotonic_time, monotonic_time_nanos, wall_time};
 use axtask::current;
@@ -9,6 +11,7 @@ use linux_raw_sys::general::{
 use starry_vm::{VmMutPtr, VmPtr};
 
 use crate::{
+    mm::check_access,
     task::{AsThread, ITimerType, time_value_from_nanos},
     time::{TimeValueLike, read_timeval_user},
 };
@@ -131,6 +134,11 @@ pub fn sys_gettimeofday(ts: *mut timeval, tz: *mut timezone) -> AxResult<isize> 
 }
 
 pub fn sys_clock_getres(clock_id: __kernel_clockid_t, res: *mut timespec) -> AxResult<isize> {
+    // Linux `common_clock_get` / `put_user`: when `res` is non-NULL, validate the output buffer
+    // before EINVAL on bad `clock_id` (issue-350; `clock_gettime` validates `tp` first — issue-342).
+    if !res.is_null() {
+        check_access(res as usize, size_of::<timespec>()).map_err(|_| AxError::BadAddress)?;
+    }
     let cid = clock_id as u32;
     if !clock_id_supported(cid) {
         warn!("sys_clock_getres: unsupported clock_id {clock_id}");
