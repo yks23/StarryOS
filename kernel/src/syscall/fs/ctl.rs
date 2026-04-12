@@ -299,14 +299,14 @@ pub fn sys_unlink(path: *const c_char) -> AxResult<isize> {
 }
 
 pub fn sys_getcwd(buf: *mut u8, size: isize) -> AxResult<isize> {
-    let size: usize = size.try_into().map_err(|_| AxError::BadAddress)?;
+    // Linux getcwd(2): negative or zero `size` is EINVAL (not ERANGE). ERANGE is for a non-zero
+    // buffer that is too small for the path + NUL (issue-194).
+    let size: usize = size.try_into().map_err(|_| AxError::InvalidInput)?;
+    if size == 0 {
+        return Err(AxError::InvalidInput);
+    }
     if buf.is_null() {
-        // Linux getcwd(2) / SYS_getcwd: NULL buffer is never success; EFAULT vs ERANGE.
-        return Err(if size == 0 {
-            AxError::OutOfRange
-        } else {
-            AxError::BadAddress
-        });
+        return Err(AxError::BadAddress);
     }
 
     let cwd = FS_CONTEXT.lock().current_dir().absolute_path()?;

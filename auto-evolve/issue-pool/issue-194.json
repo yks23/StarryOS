@@ -1,0 +1,31 @@
+{
+  "id": "issue-194",
+  "title": "getcwd：`size == 0` 走 `ERANGE`，Linux 对非法 `size` 多为 `EINVAL`",
+  "status": "resolved",
+  "created_at": "2026-04-14T16:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`sys_getcwd`**：在取 **`cwd`** 之前 **`size` 转 `usize`**（负 → **`InvalidInput`/`EINVAL`**），**`size == 0`** → **`InvalidInput`**；**`buf == NULL`** 且 **`size > 0`** → **`BadAddress`/`EFAULT`**。**路径过长**仍 **`OutOfRange`/`ERANGE`**。**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过。",
+  "files_changed": [
+    "kernel/src/syscall/fs/ctl.rs",
+    "auto-evolve/issue-pool/issue-194.json",
+    "auto-evolve/memory/executor-memory.md"
+  ],
+  "description": "**`kernel/src/syscall/fs/ctl.rs`** **`sys_getcwd(buf, size)`** 在 **`buf` 非空**且 **`cwd`（含终止 NUL）长度大于 `size`** 时统一 **`Err(AxError::OutOfRange)`**（映射 **`ERANGE`**）。**Linux `getcwd(2)`** 明确 **`EINVAL`** 的常见情形包括 **`size` 为 0**（参数不合法）；**`ERANGE`** 多用于 **缓冲区非零但不足以容纳路径+NUL**。当 **`size == 0`** 时，本实现落入 **`cwd.len() <= size` 为假**分支而返回 **`OutOfRange`**，与 **Linux** 上常见的 **`EINVAL`** 不一致，可能影响依赖 **`errno`** 分支的用户态或 **LTP** 类测试。**`buf == NULL` 且 `size == 0`** 分支当前亦返回 **`OutOfRange`**（注释提及 **EFAULT vs ERANGE**），与内核 **`EFAULT`/`EINVAL`** 的常规组合也可能偏离。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["getcwd"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/ctl.rs:299-322"],
+    "related_files": [],
+    "key_insight": "`size == 0` 落入长度不足分支 → `ERANGE` 而非 `EINVAL`"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "在 **Linux** 与 **Starry** 上分别调用 **`getcwd(buf, 0)`**（**`buf` 合法可写**）、**`syscall(SYS_getcwd, buf, 0)`**，记录 **`errno`**；再测 **`buf == NULL` 且 `size` 为 0/非 0**。",
+    "expected_output_contains": "",
+    "pass_criteria": "**`size == 0`** 等与 **Linux** 文档一致的 **`EINVAL`**（或文档化差异）；**`ERANGE`** 保留给真实「缓冲太短」。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（2026-04-12）"
+  },
+  "suggested_fix": "在写入路径前对 **`size == 0`**（及 **`buf` NULL** 组合）按 **Linux** 早退 **`EINVAL`/`EFAULT`**；长度不足仍用 **`ERANGE`**。",
+  "references": ["man 2 getcwd", "Linux fs/namespace.c sys_getcwd"]
+}
