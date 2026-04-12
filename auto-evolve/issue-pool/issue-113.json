@@ -1,0 +1,28 @@
+{
+  "id": "issue-113",
+  "title": "timerfd_gettime 未拒绝 curr_value==NULL，与同文件 settime 对 new_value 的 EINVAL 校验不对称",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "resolved_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`sys_timerfd_gettime`**：在 **`TimerFd::from_fd`** 之后、**`gettime`/`vm_write`** 之前 **`curr_value.is_null()` → `BadAddress`**（对齐 Linux **EFAULT**），与同文件 **`settime`** 对 **`new_value==NULL` → `InvalidInput`** 一样先做显式指针对校验。",
+  "files_changed": ["kernel/src/syscall/fs/timerfd.rs"],
+  "description": "**`sys_timerfd_gettime`**（`kernel/src/syscall/fs/timerfd.rs`）在取得 **`TimerFd`** 后直接 **`curr_value.vm_write(tfd.gettime()?)?`**，**未**像 **`sys_timerfd_settime`** 那样对输出/入参指针做 **`is_null()`** 前置校验（**`settime`** 对 **`new_value.is_null()`** 返回 **`InvalidInput`**）。**Linux `timerfd_gettime(2)`** 在 **`curr_value` 为非法用户地址**时失败（**`EFAULT`**）。Starry 对 **`NULL`**（地址 **0**）多依赖 **`vm_write`** / **`check_access`** 得到 **`AccessDenied`** 等，**错误码与顺序**（先 **`gettime`** 再访问用户内存）与 **Linux** 及 **`settime`** 分支风格不一致；显式 **`InvalidInput`**/**`BadAddress`** 更易与 **`EINVAL`**/**`EFAULT`** 映射对齐，并避免在无用户访问需求的路径上语义模糊。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["timerfd_gettime"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/timerfd.rs:47-50"],
+    "related_files": ["kernel/src/syscall/fs/timerfd.rs:25-44"],
+    "key_insight": "`settime` 拒 `new_value==NULL`；`gettime` 未拒 `curr_value==NULL`"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "**`timerfd_gettime(fd, NULL)`**；Linux **`EFAULT`**；对比 Starry 返回码及是否在 **`gettime`** 之后才失败。",
+    "expected_output_contains": "",
+    "pass_criteria": "**`curr_value.is_null()`** → **`InvalidInput`**（或与项目 **`EFAULT`** 映射一致的错误），与同文件 **`settime`** 指针对称；再 **`vm_write`**。",
+    "last_result": "2026-04-12：修复后 **`curr_value==NULL` → `BadAddress`**（**`from_fd`** 后、**`gettime`** 前）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** PASS；QEMU 未测"
+  },
+  "suggested_fix": "在 **`vm_write`** 前 **`if curr_value.is_null() { return Err(AxError::InvalidInput); }`**（或统一 **`UserPtr`/nullable** 辅助）。",
+  "references": ["man 2 timerfd_gettime", "man 2 timerfd_settime"]
+}

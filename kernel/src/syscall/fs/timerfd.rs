@@ -46,6 +46,10 @@ pub fn sys_timerfd_settime(
 
 pub fn sys_timerfd_gettime(fd: i32, curr_value: *mut itimerspec) -> AxResult<isize> {
     let tfd = TimerFd::from_fd(fd)?;
+    if curr_value.is_null() {
+        // Linux `timerfd_gettime(2)`：NULL `curr_value` → EFAULT；须在 `gettime`/`vm_write` 前拒绝。
+        return Err(AxError::BadAddress);
+    }
     curr_value.vm_write(tfd.gettime()?)?;
     Ok(0)
 }
