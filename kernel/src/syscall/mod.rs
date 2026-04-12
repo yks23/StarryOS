@@ -565,7 +565,9 @@ pub fn handle_syscall(uctx: &mut UserContext) {
         Sysno::getrandom => sys_getrandom(uctx.arg0() as _, uctx.arg1() as _, uctx.arg2() as _),
         Sysno::seccomp => sys_seccomp(uctx.arg0() as _, uctx.arg1() as _, uctx.arg2() as _),
         #[cfg(target_arch = "riscv64")]
-        Sysno::riscv_flush_icache => sys_riscv_flush_icache(),
+        Sysno::riscv_flush_icache => {
+            sys_riscv_flush_icache(uctx.arg0(), uctx.arg1(), uctx.arg2())
+        }
 
         // sync
         Sysno::membarrier => sys_membarrier(uctx.arg0() as _, uctx.arg1() as _, uctx.arg2() as _),

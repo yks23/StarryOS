@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-353 resolved（**`riscv_flush_icache`**：**`uctx` `start`/`end`/`flags`**；**`SYS_RISCV_FLUSH_ICACHE_LOCAL`** **与** **`flags==0`** **分支**；**`mod.rs`**/**`sys.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-349 resolved（**`msync`**：**`addr`** **4K 对齐** **与** **`align_up_4k(length)`** **先于** **`MS_*`/`flags`** **校验**；**`mmap.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-348 resolved（**`setsockopt`**：已知 **`level`/`optname`** **先** **读** **`optval`** **再** **`from_fd`**（**`EFAULT`** **可先** **`EBADF`**）；未知 **opt** **仍** **`from_fd`** **后** **`ENOPROTOOPT`** **不读** **`optval`**；**`opt.rs`** **`call_setsockopt_dispatch!`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-347 resolved（**`getsockopt`**：**`optlen.get_as_mut`** **先于** **`Socket::from_fd`**，**`EFAULT`** **先于** **`EBADF`**（对齐 Linux **`do_getsockopt`**）；**`opt.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -373,6 +374,7 @@
 | issue-271 | mlock/mlock2 addr 须页对齐 EINVAL | resolved | 2026-04-12 |
 | issue-272 | lseek SEEK_SET 负 offset EINVAL | resolved | 2026-04-12 |
 | issue-273 | prlimit64 跨 pid 权限 EPERM | resolved | 2026-04-12 |
+| issue-353 | riscv_flush_icache 传参/flags/LOCAL 与 fence.i 近似 | resolved | 2026-04-13 |
 | issue-349 | msync addr 页对齐先于 MS_* flags（EINVAL 顺序） | resolved | 2026-04-12 |
 | issue-348 | setsockopt 已知 opt 先读 optval 再 from_fd（与 issue-347 对称） | resolved | 2026-04-12 |
 | issue-347 | getsockopt optlen 用户访问先于 from_fd（EFAULT 先于 EBADF） | resolved | 2026-04-12 |
@@ -605,6 +607,7 @@
 ## 代码知识积累
 - membarrier：Linux `cmd`（除 `QUERY=0`）为 **单位掩码**（`GLOBAL=1<<0`、`GLOBAL_EXPEDITED=1<<1`、`REGISTER_GLOBAL_EXPEDITED=1<<2`…），非单 bit 组合须 **`EINVAL`**；`QUERY` 返回 **已实现命令的按位或**。执行类命令用 **`atomic::fence(SeqCst)`**（勿用 `compiler_fence`）；`PRIVATE_EXPEDITED_SYNC_CORE` 在 **riscv64** 上额外 **`fence.i`**。`REGISTER_*` 仅占位返回0。真 **`GLOBAL` 全系统** 语义需 IPI（当前仅本 hart 最强屏障）。
 - 全核 membarrier（多 hart）在 Linux 上依赖 IPI；若未来启用 `axfeat/smp` + `axfeat/ipi`，可在各核 IPI handler 中执行与 `sys_membarrier` 相同的 fence，并用同步原语等待全部完成。
+- **riscv64 `riscv_flush_icache(2)`**：**`sys_riscv_flush_icache(start, end, flags)`** 从 **`uctx`** 取参；**`flags`** 保留位 → **`EINVAL`**；仅 **0** 或 **`SYS_RISCV_FLUSH_ICACHE_LOCAL`（1）**。**`LOCAL`**：**`start<=end`**，**`[start,end)`** 非空时 **`check_access`**；**`flags==0`**：Linux **`flush_icache_mm`** 语义（**忽略** **`start`/`end`**）。两分支均 **`fence.i`** 串行本 hart 取指；无 **`flush_icache_mm`** 遍历、无跨 hart I-cache  shootdown（**issue-353**）。
 - `rt_sigreturn` 通过 `block_next_signal` 标记「下一次回到用户循环时跳过一次 `check_signals`」；该标志必须是 **per-thread**（`Thread::skip_next_signal_check`），不可用进程级或全局 AtomicBool。
 - **`rt_sigpending`**：**`set`** 为必填输出（Linux **`NULL` → EFAULT**），**`set.is_null()` → `BadAddress`**，须在 **`vm_write`** 前校验。**`rt_sigprocmask(2)`**：**`set==NULL`** 时仅 **`copy_to_user(old)`**（若 **`oldset` 非空**），**`how`** 忽略；**`set` 非空**时须先校验 **`how`**（**`SIG_BLOCK`/`SIG_UNBLOCK`/`SIG_SETMASK`**）再 **`vm_read(set)`**，成功后再 **`vm_write(oldset)`** 与 **`set_blocked`**，非法 **`how`** 或 **`set`** 读失败不得改写 **`oldset`**（issue-146）。**`rt_sigaction(2)`**：持锁后先 **`clone`** 当前表项为 **`old`**；**`act` 非空**时先 **`vm_read(act)`** 并写回 **`actions[signo]`**，再 **`vm_write(oldact)`**（**`old.into()`**）；**`act`** 读失败不得改写 **`oldact`**（issue-147）。**`act==NULL`** 时仅 **`vm_write(oldact)`** 查询。**`oldact`** 仍为 **`nullable()`**。
 - **`signalfd4`**：**`mask.is_null()` → `BadAddress`** **先于** **`check_sigset_size`**/**`SignalfdFlags`**/**`CLOEXEC`** **组合** **的** **`EINVAL`**（**issue-321**；**`mask`** **为** **必填** **用户** **指针**）。**`fd != -1`**：**`Signalfd::from_fd(fd)`** **先于** **`read_signal_set_user`**，**`EBADF`** **先于** **不可读** **`mask`** **的** **`BadAddress`**（**issue-319**）。**`read_signal_set_user`** 与 **`rt_sigprocmask`** 同字级路径（**issue-210**）。

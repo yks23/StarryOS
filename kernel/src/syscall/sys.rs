@@ -367,8 +367,30 @@ pub fn sys_seccomp(_op: u32, _flags: u32, _args: *const ()) -> AxResult<isize> {
     Err(AxError::Unsupported)
 }
 
+/// Linux `SYS_RISCV_FLUSH_ICACHE_LOCAL` (`uapi/asm-riscv/cacheflush.h`).
 #[cfg(target_arch = "riscv64")]
-pub fn sys_riscv_flush_icache() -> AxResult<isize> {
+const SYS_RISCV_FLUSH_ICACHE_LOCAL: usize = 1;
+
+/// Linux `riscv_flush_icache(2)` / `__riscv_flush_icache(start, end, flags)`.
+#[cfg(target_arch = "riscv64")]
+pub fn sys_riscv_flush_icache(start: usize, end: usize, flags: usize) -> AxResult<isize> {
+    if flags & !SYS_RISCV_FLUSH_ICACHE_LOCAL != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    let local = flags & SYS_RISCV_FLUSH_ICACHE_LOCAL != 0;
+    if local {
+        if start > end {
+            return Err(AxError::InvalidInput);
+        }
+        if start == end {
+            return Ok(0);
+        }
+        let len = end - start;
+        crate::mm::check_access(start, len).map_err(|_| AxError::InvalidInput)?;
+    }
+    // Linux: `flags==0` → `flush_icache_mm` (process-wide); `LOCAL` → `flush_icache_range`.
+    // StarryOS: no `flush_icache_mm` walk / cross-hart IPI; `fence.i` serializes this hart's
+    // instruction stream after stores to executable pages (issue-353; Zifencei).
     riscv::asm::fence_i();
     Ok(0)
 }
