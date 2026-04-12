@@ -1,5 +1,6 @@
 pub mod epoll;
 pub mod event;
+pub(crate) mod flock;
 mod fs;
 mod inotify;
 mod net;
@@ -216,6 +217,7 @@ pub fn add_file_like(f: Arc<dyn FileLike>, cloexec: bool) -> AxResult<c_int> {
 
 /// Close a file by `fd`.
 pub fn close_file_like(fd: c_int) -> AxResult {
+    flock::release_fd(fd);
     let f = FD_TABLE
         .write()
         .remove(fd as usize)

@@ -307,6 +307,5 @@ pub fn sys_fcntl(fd: c_int, cmd: c_int, arg: usize) -> AxResult<isize> {
 
 pub fn sys_flock(fd: c_int, operation: c_int) -> AxResult<isize> {
     debug!("flock <= fd: {fd}, operation: {operation}");
-    // TODO: flock
-    Ok(0)
+    crate::file::flock::sys_flock(fd, operation)
 }
