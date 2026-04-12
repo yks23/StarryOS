@@ -9,7 +9,7 @@ use linux_raw_sys::general::{
 use starry_vm::{VmMutPtr, VmPtr};
 
 use crate::{
-    task::{AsThread, ITimerType},
+    task::{AsThread, ITimerType, time_value_from_nanos},
     time::{TimeValueLike, read_timeval_user},
 };
 
@@ -84,9 +84,13 @@ pub fn sys_clock_gettime(clock_id: __kernel_clockid_t, ts: *mut timespec) -> AxR
         CLOCK_MONOTONIC | CLOCK_MONOTONIC_COARSE => clock_read_monotonic(),
         CLOCK_MONOTONIC_RAW => clock_read_monotonic_raw(),
         CLOCK_BOOTTIME => clock_read_boottime(),
-        CLOCK_PROCESS_CPUTIME_ID | CLOCK_THREAD_CPUTIME_ID => {
+        CLOCK_THREAD_CPUTIME_ID => {
             let (utime, stime) = current().as_thread().time.borrow().output();
             utime + stime
+        }
+        CLOCK_PROCESS_CPUTIME_ID => {
+            let (ut_ns, st_ns) = current().as_thread().proc_data.thread_group_cpu_nanos();
+            time_value_from_nanos(ut_ns.saturating_add(st_ns))
         }
         _ => {
             warn!("sys_clock_gettime: unsupported clock_id {clock_id}");

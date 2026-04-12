@@ -1,0 +1,27 @@
+{
+  "id": "issue-262",
+  "title": "clock_gettime：`CLOCK_PROCESS_CPUTIME_ID` 与 `CLOCK_THREAD_CPUTIME_ID` 共用当前线程 CPU 时间，与 Linux 进程/线程语义不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "medium",
+  "fix_summary": "`sys_clock_gettime`：`CLOCK_THREAD_CPUTIME_ID` 仍为当前线程 `TimeManager` user+sys；`CLOCK_PROCESS_CPUTIME_ID` 改为 `ProcessData::thread_group_cpu_nanos()` 聚合 user+sys（与 `sys_times` 同口径）。",
+  "files_changed": ["kernel/src/syscall/time.rs"],
+  "description": "**`kernel/src/syscall/time.rs`** **`sys_clock_gettime`**（约 **80–101** 行）将 **`CLOCK_PROCESS_CPUTIME_ID`** 与 **`CLOCK_THREAD_CPUTIME_ID`** 放在同一 **`match`** 分支，均取 **`current().as_thread().time.borrow().output()`**（**`utime + stime`**），即**仅当前线程**的 CPU 时间。\n\n**Linux `clock_gettime(2)`**：**`CLOCK_THREAD_CPUTIME_ID`** 为**调用线程**的 user+sys CPU 时间；**`CLOCK_PROCESS_CPUTIME_ID`** 为**进程内各线程**（含已退出线程若内核计入）聚合的 CPU 时间，**非**单一线程值。\n\n**对照本仓库**：**`sys_times`** 通过 **`proc_data.thread_group_cpu_nanos()`**（**`kernel/src/task/mod.rs`** 约 **631–646** 行）汇总线程组 CPU，与 **Linux `times(2)`/`clock`** 进程口径更一致；**`clock_gettime(PROCESS)`** 却**未**使用该聚合路径。\n\n**建议**：**`CLOCK_THREAD_CPUTIME_ID`** 保持 **`current` 线程** **`time.borrow().output()`**；**`CLOCK_PROCESS_CPUTIME_ID`** 改为 **`thread_group_cpu_nanos()`**（或等价遍历 **`proc.threads()`**）再 **`TimeValue`** 化，与 **`sys_times`**/**Linux** 对齐。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["clock_gettime", "clock_getres"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/time.rs:80-101"],
+    "related_files": ["kernel/src/task/mod.rs:631-646", "kernel/src/syscall/time.rs:136-154"],
+    "key_insight": "PROCESS 与 THREAD 同一分支"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；多线程进程上 `clock_gettime(CLOCK_PROCESS_CPUTIME_ID)` 与 `CLOCK_THREAD_CPUTIME_ID`/`times` 与 Linux 对照。",
+    "expected_output_contains": "",
+    "pass_criteria": "PROCESS 为线程组聚合 CPU；THREAD 为当前线程。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0）"
+  },
+  "suggested_fix": "拆分两 `clock_id` 分支；PROCESS 使用 `thread_group_cpu_nanos` 或等价聚合。",
+  "references": ["man 2 clock_gettime", "Linux kernel posix_cpu_clock_get"]
+}
