@@ -19,7 +19,7 @@ use smoltcp::{
 use crate::{
     LISTEN_TABLE, RecvFlags, RecvOptions, SOCKET_SET, SendFlags, SendOptions, Shutdown, Socket,
     SocketAddrEx, SocketOps,
-    consts::{TCP_RX_BUF_LEN, TCP_TX_BUF_LEN},
+    consts::{SOMAXCONN, TCP_RX_BUF_LEN, TCP_TX_BUF_LEN},
     general::GeneralOptions,
     get_service,
     options::{Configurable, GetSocketOption, SetSocketOption},
@@ -32,6 +32,15 @@ pub(crate) fn new_tcp_socket() -> smol::Socket<'static> {
         smol::SocketBuffer::new(vec![0; TCP_RX_BUF_LEN]),
         smol::SocketBuffer::new(vec![0; TCP_TX_BUF_LEN]),
     )
+}
+
+/// Linux `listen(2)`: negative `backlog` → `EINVAL`; cap at `SOMAXCONN`.
+#[inline]
+fn tcp_listen_syn_queue_cap(backlog: i32) -> AxResult<usize> {
+    if backlog < 0 {
+        return Err(AxError::InvalidInput);
+    }
+    Ok((backlog as usize).min(SOMAXCONN))
 }
 
 /// A TCP socket that provides POSIX-like APIs.
@@ -316,12 +325,13 @@ impl SocketOps for TcpSocket {
         })
     }
 
-    fn listen(&self) -> AxResult {
+    fn listen(&self, backlog: i32) -> AxResult {
+        let syn_cap = tcp_listen_syn_queue_cap(backlog)?;
         if let Ok(guard) = self.state.lock(State::Idle) {
             guard.transit(State::Listening, || {
                 let bound_endpoint = self.with_smol_socket(|socket| socket.get_bound_endpoint());
-                LISTEN_TABLE.listen(bound_endpoint)?;
-                debug!("listening on {}", bound_endpoint);
+                LISTEN_TABLE.listen(bound_endpoint, syn_cap)?;
+                debug!("listening on {} backlog_cap={}", bound_endpoint, syn_cap);
                 Ok(())
             })?;
         } else {

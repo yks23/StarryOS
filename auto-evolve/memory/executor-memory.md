@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-156 resolved（**`listen`**：**`SocketOps::listen(backlog)`**；TCP **`LISTEN_TABLE`** 按 **`min(backlog, SOMAXCONN)`** 限制 **`syn_queue`**；**`backlog < 0`** → **`InvalidInput`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-155 resolved（**`statx`**：**`Kstat::into_statx_with_mask`**按 **`STATX_*`** 填 **`struct statx`** 与 **`stx_mask`**；**`sys_statx`** 使用用户 **`mask`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-154 resolved（**`msgsnd`**：去掉 **`msg_qnum+1` vs `msg_qbytes`** 错误比较；满队列仅按 **`total_bytes + msgsz` vs `msg_qbytes`**，与 **`enqueue_message`**/**Linux** 字节配额一致；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-153 resolved（**`setitimer`**：**`new_value==NULL`** 不调用 **`set_itimer`**，仅 **`old_value`** 非空时 **`get_itimer`** 写回；两参皆 **`NULL`** 为 no-op；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）

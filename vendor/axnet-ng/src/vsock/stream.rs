@@ -78,7 +78,7 @@ impl VsockTransportOps for VsockStreamTransport {
         Ok(())
     }
 
-    fn listen(&self) -> AxResult<()> {
+    fn listen(&self, _backlog: i32) -> AxResult<()> {
         let guard = self
             .state
             .lock(State::Idle)

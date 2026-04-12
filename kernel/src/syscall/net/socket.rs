@@ -111,11 +111,7 @@ pub fn sys_connect(fd: i32, addr: UserConstPtr<sockaddr>, addrlen: u32) -> AxRes
 pub fn sys_listen(fd: i32, backlog: i32) -> AxResult<isize> {
     debug!("sys_listen <= fd: {fd}, backlog: {backlog}");
 
-    if backlog < 0 && backlog != -1 {
-        return Err(AxError::InvalidInput);
-    }
-
-    Socket::from_fd(fd)?.listen()?;
+    Socket::from_fd(fd)?.listen(backlog)?;
 
     Ok(0)
 }

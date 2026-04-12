@@ -23,7 +23,7 @@ pub trait VsockTransportOps: Configurable + Pollable + Send + Sync {
     /// Bind the transport to a local address.
     fn bind(&self, local_addr: VsockAddr) -> AxResult;
     /// Start listening for incoming connections.
-    fn listen(&self) -> AxResult;
+    fn listen(&self, backlog: i32) -> AxResult;
     /// Connect to a remote peer address.
     fn connect(&self, peer_addr: VsockAddr) -> AxResult;
     /// Accept an incoming connection.
@@ -99,8 +99,8 @@ impl SocketOps for VsockSocket {
         self.transport.connect(remote_addr)
     }
 
-    fn listen(&self) -> AxResult {
-        self.transport.listen()
+    fn listen(&self, backlog: i32) -> AxResult {
+        self.transport.listen(backlog)
     }
 
     fn accept(&self) -> AxResult<Socket> {
