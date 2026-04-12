@@ -1,0 +1,30 @@
+{
+  "id": "issue-163",
+  "title": "fchownat/fchmodat 在校验 dirfd 之前先 vm_load_string(path)，坏 dirfd 时 EBADF 可能晚于路径读取",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`sys_fchownat`**/**`sys_fchmodat`**：在 **`flags`** 校验后、**`vm_load_string`** 前，若 **`dirfd != AT_FDCWD` 且 `path` 非 NULL** 则 **`Directory::from_fd(dirfd)?`**；**`path==NULL` + `AT_EMPTY_PATH`** 不预检（**`dirfd`** 可为普通文件）。**`update_times`**（**`utimensat`** 等）同步相同顺序。",
+  "files_changed": ["kernel/src/syscall/fs/ctl.rs"],
+  "description": "**`sys_fchownat`** 与 **`sys_fchmodat`**（`kernel/src/syscall/fs/ctl.rs`）均在 **`flags`** 合法位校验（**issue-139** 已 **`EINVAL` 先于路径**）之后，先 **`path.nullable().map(vm_load_string).transpose()?`**，再 **`resolve_at(dirfd, path.as_deref(), flags)?`**。对**非空相对路径**（**`path` 为 `Some(\"…\")`**），**`resolve_at`** 最终在 **`with_fs(dirfd, …)`** 内 **`Directory::from_fd(dirfd)`**；无效 **`dirfd`** 时 **`BadFileDescriptor`** 仅在路径已从用户空间读出之后才会返回。**Linux **`fchownat`/`fchmodat`** 通常先 **`fdget(dfd)`** 再 **`copy_from_user(pathname)`**（相对路径情形）。与 **issue-160–162** 同属 **「先 **fd** 再路径」**。**`update_times`**（**`utimensat`** 等）亦 **`vm_load_string`** 先于 **`resolve_at`**，属同类模式。",
+  "category": "syscall-ordering",
+  "affected_syscalls": ["fchownat", "fchmodat"],
+  "source_context": {
+    "primary_files": [
+      "kernel/src/syscall/fs/ctl.rs:379-414",
+      "kernel/src/syscall/fs/ctl.rs:425-441"
+    ],
+    "related_files": ["kernel/src/file/fs.rs:75-82", "kernel/src/file/fs.rs:26-34"],
+    "key_insight": "`flags` 已最先；相对路径时 `vm_load_string` 仍先于 `with_fs`/`Directory::from_fd`"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "无效 **`dirfd`** + 合法相对 **`path` 字符串**（或 **`path` 坏地址**）；对比 **Linux** 与 **Starry** 的 **`errno`**（**`EBADF`** vs **`EFAULT`**/**`ENOENT`**）。",
+    "expected_output_contains": "",
+    "pass_criteria": "对 **`path` 为非空相对路径**且 **`dirfd != AT_FDCWD`**：**`EBADF`/`BadFileDescriptor`** 先于 **`path`** 的用户读（与 **Linux** 一致）；**`AT_EMPTY_PATH`/`path` NULL** 分支可保持 **`resolve_at`** 语义。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0）"
+  },
+  "suggested_fix": "当 **`dirfd != AT_FDCWD`** 且即将按**目录 fd + 相对路径**解析时（**`path` 将非 `None` 且非 `Some(\"\")`**，或不带 **`AT_EMPTY_PATH` 的 NULL path**），先 **`Directory::from_fd(dirfd)?`**再 **`vm_load_string`**；或抽取与 **`resolve_at`** 一致的 **`dirfd` 早校验** 辅助函数。",
+  "references": ["man 2 fchownat", "man 2 fchmodat", "Linux do_fchownat"]
+}

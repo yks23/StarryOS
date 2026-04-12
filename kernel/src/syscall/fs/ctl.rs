@@ -389,6 +389,12 @@ pub fn sys_fchownat(
         return Err(AxError::InvalidInput);
     }
 
+    // Linux do_fchownat: fdget(dfd) before copy_from_user(pathname) for pathname lookups;
+    // skip when path is NULL + AT_EMPTY_PATH (dirfd may be a non-directory open file).
+    if dirfd != AT_FDCWD && !path.is_null() {
+        let _ = Directory::from_fd(dirfd)?;
+    }
+
     let path = path.nullable().map(vm_load_string).transpose()?;
     let loc = resolve_at(dirfd, path.as_deref(), flags)?
         .into_file()
@@ -429,6 +435,10 @@ pub fn sys_fchmodat(dirfd: i32, path: *const c_char, mode: u32, flags: u32) -> A
         return Err(AxError::InvalidInput);
     }
 
+    if dirfd != AT_FDCWD && !path.is_null() {
+        let _ = Directory::from_fd(dirfd)?;
+    }
+
     let path = path.nullable().map(vm_load_string).transpose()?;
     resolve_at(dirfd, path.as_deref(), flags)?
         .into_file()
@@ -447,6 +457,10 @@ fn update_times(
     mtime: Option<Duration>,
     flags: u32,
 ) -> AxResult<()> {
+    if dirfd != AT_FDCWD && !path.is_null() {
+        let _ = Directory::from_fd(dirfd)?;
+    }
+
     let path = path.nullable().map(vm_load_string).transpose()?;
     resolve_at(dirfd, path.as_deref(), flags)?
         .into_file()
