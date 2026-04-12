@@ -1,0 +1,28 @@
+{
+  "id": "issue-108",
+  "title": "pwrite64 未校验 offset>=0，负偏移 as u64 与 Linux EINVAL 及同文件 pread64/pwritev2 不一致",
+  "status": "resolved",
+  "created_at": "2026-04-23T00:00:00Z",
+  "resolved_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`sys_pwrite64`**：在 **`len==0`** 早退之前增加 **`offset < 0` → `InvalidInput`**，与 **`sys_pread64`** / **`sys_pwritev2`** 及 Linux **`pwrite` EINVAL** 一致（含 **`len==0`** 时负偏移）。",
+  "files_changed": ["kernel/src/syscall/fs/io.rs"],
+  "description": "**`sys_pwrite64`**（`kernel/src/syscall/fs/io.rs`）在 **`len > 0`** 时直接 **`write_at(..., offset as _)`**，无 **`offset < 0`** 检查。同文件 **`sys_pread64`**、**`sys_preadv2`**、**`sys_pwritev2`**（**issue-104 verified**）均在写/读前返回 **`InvalidInput`**。Linux **`pwrite(2)`** 对负偏移 **`EINVAL`**。负 **`__kernel_off_t`** 转 **`u64`** 会变成极大文件偏移，行为错误且与 **`pread64`** 不对称。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["pwrite64"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/io.rs:200-212"],
+    "related_files": ["kernel/src/syscall/fs/io.rs:191-198"],
+    "key_insight": "`sys_pwrite64` 缺 `offset < 0` 分支"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "**`pwrite(fd, buf, n, -1)`**；Linux **`EINVAL`**；Starry 若 **成功** 或写到错误偏移则记偏差。",
+    "expected_output_contains": "",
+    "pass_criteria": "与 **`pread64`** 一致：**`offset < 0`** → **`InvalidInput`**。",
+    "last_result": "2026-04-12：**`sys_pwrite64` `offset < 0` → `InvalidInput`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** PASS；QEMU 未测"
+  },
+  "suggested_fix": "在 **`write_at`** 前增加 **`if offset < 0 { return Err(AxError::InvalidInput); }`**（**`len==0`** 早退路径可保持或同样校验，与 Linux 对齐即可）。",
+  "references": ["man 2 pwrite", "man 2 pread"]
+}
