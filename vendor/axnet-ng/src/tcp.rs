@@ -189,7 +189,8 @@ impl Configurable for TcpSocket {
                 **size = TCP_RX_BUF_LEN;
             }
             O::TcpInfo(_) => {
-                // TODO(mivik): implement TCP_INFO
+                // Not implemented; Ok(true) would fake success with empty output (issue-167).
+                return Ok(false);
             }
             _ => return Ok(false),
         }

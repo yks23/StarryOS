@@ -1,0 +1,30 @@
+{
+  "id": "issue-167",
+  "title": "getsockopt IPPROTO_TCP TCP_INFO：TcpSocket 对 TcpInfo 空实现仍返回 Ok(true)，不写入 tcp_info 且 *optlen 被置 0",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "medium",
+  "fix_summary": "**`TcpSocket::get_option_inner`**：**`TcpInfo`** 改为 **`return Ok(false)`** → **`ENOPROTOOPT`**。**`sys_getsockopt`** 对 **`(IPPROTO_TCP, TCP_INFO)`** 在改 **`optval`/`optlen`** 前单独 **`get_option(TcpInfo(&mut ()))`**，避免 **`size_of::<()>()`** 把 **`*optlen`** 置 **0** 的假成功路径。",
+  "files_changed": ["kernel/src/syscall/net/opt.rs", "vendor/axnet-ng/src/tcp.rs"],
+  "description": "**`sys_getsockopt`**（`kernel/src/syscall/net/opt.rs`）对 **`(IPPROTO_TCP, TCP_INFO)`** 走 **`GetSocketOption::TcpInfo(get(optval, optlen)?)`**，其中 **`T = ()`**，**`size_of::<()>()` 为 0**，故 **`get`** 几乎总通过，并把 **`*optlen` 写成0**，再 **`val.cast().get_as_mut()`** 得到 **`&mut ()`**。**`vendor/axnet-ng/src/tcp.rs`** **`Configurable::get_option_inner`** 中 **`O::TcpInfo(_)`** 仅有 **`// TODO(mivik): implement TCP_INFO`**，随后仍 **`Ok(true)`**，**不向用户缓冲填充 `struct tcp_info`**，也**无**与 **Linux** 一致的字段/长度语义。**调用方会误以为成功并看到 `optlen==0`**，与 **Linux** 填充 **`struct tcp_info`** 且更新 **`optlen`** 的行为严重不符；**`setsockopt TCP_INFO`** 侧未实现则多为 **`ENOPROTOOPT`**，与 **get** 侧「假成功」不对称。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["getsockopt"],
+  "source_context": {
+    "primary_files": [
+      "kernel/src/syscall/net/opt.rs:131-143",
+      "vendor/axnet-ng/src/tcp.rs:191-196"
+    ],
+    "related_files": ["vendor/axnet-ng/src/options.rs:70"],
+    "key_insight": "`TcpInfo(())` +空 `get_option_inner` 分支仍 `Ok(true)`"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "在 **TCP** socket 上 **`getsockopt(IPPROTO_TCP, TCP_INFO, buf, &len)`**，**`len` 初始 ≥ `sizeof(struct tcp_info)`**；对比 **Linux** 与 **Starry** 的 **`*optlen`** 与 **`buf` 内容。",
+    "expected_output_contains": "",
+    "pass_criteria": "与 **Linux** 一致地填充 **`tcp_info`**（或明确 **`ENOPROTOOPT`/`EOPNOTSUPP`** 且**不**误报成功），**`*optlen`** 与内核结构体大小一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0）"
+  },
+  "suggested_fix": "在实现真实 **`TCP_INFO`** 前：**`TcpSocket::get_option_inner`** 对 **`O::TcpInfo`** 应 **`return Ok(false)`**（经 **`sys_getsockopt`** 为 **`ENOPROTOOPT`**），避免 **`Ok(true)`**；长期应 **`GetSocketOption::TcpInfo(&mut linux_tcp_info)`** 并 **`copy_out`**，或从 **`smol`**/**栈** 取统计字段对齐 **`man 7 tcp`**。",
+  "references": ["man 7 tcp", "Linux TCP_INFO getsockopt"]
+}

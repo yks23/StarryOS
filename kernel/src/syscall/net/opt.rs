@@ -1,6 +1,6 @@
 use axerrno::{AxError, AxResult, LinuxError};
 use axnet::options::{Configurable, GetSocketOption, SetSocketOption};
-use linux_raw_sys::net::socklen_t;
+use linux_raw_sys::net::{socklen_t, TCP_INFO};
 
 use crate::{
     file::{FileLike, Socket},
@@ -95,7 +95,6 @@ macro_rules! call_dispatch {
 
             (PROTO_TCP, TCP_NODELAY) => NoDelay as IntBool,
             (PROTO_TCP, TCP_MAXSEG) => MaxSegment as Int<usize>,
-            (PROTO_TCP, TCP_INFO) => TcpInfo,
 
             (PROTO_IP, IP_TTL) => Ttl as Int<u8>,
         }
@@ -138,6 +137,14 @@ pub fn sys_getsockopt(
 
     let socket = Socket::from_fd(fd)?;
     let optlen = optlen.get_as_mut()?;
+    // `GetSocketOption::TcpInfo` uses `()`; generic `get()` would set `*optlen = 0` before we know
+    // success. Handle before touching `optval`/`optlen` (issue-167).
+    if level == PROTO_TCP && optname == TCP_INFO {
+        let mut dummy = ();
+        return socket
+            .get_option(GetSocketOption::TcpInfo(&mut dummy))
+            .map(|_| 0);
+    }
     macro_rules! dispatch {
         ($which:ident) => {
             socket.get_option(GetSocketOption::$which(get(optval, optlen)?))?;
