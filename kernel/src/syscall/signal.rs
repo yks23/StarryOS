@@ -47,22 +47,33 @@ pub fn sys_rt_sigprocmask(
     let sig = &curr.as_thread().signal;
     let old = sig.blocked();
 
-    if let Some(oldset) = oldset.nullable() {
-        oldset.vm_write(old)?;
-    }
-
-    if let Some(set) = set.nullable() {
-        let set = unsafe { set.vm_read_uninit()?.assume_init() };
-
-        let set = match how as u32 {
-            SIG_BLOCK => old | set,
-            SIG_UNBLOCK => old & !set,
-            SIG_SETMASK => set,
-            _ => return Err(AxError::InvalidInput),
-        };
-
-        debug!("sys_rt_sigprocmask <= {set:?}");
-        sig.set_blocked(set);
+    match set.nullable() {
+        None => {
+            // Linux: when `set` is NULL, `how` is ignored; only copy out old mask.
+            if let Some(oldset) = oldset.nullable() {
+                oldset.vm_write(old)?;
+            }
+        }
+        Some(set_ptr) => {
+            // Linux do_sigprocmask: validate `how` and read `set` before copy_to_user(old);
+            // invalid `how` must not clobber `oldset` (issue-146); bad `set` pointer likewise.
+            match how as u32 {
+                SIG_BLOCK | SIG_UNBLOCK | SIG_SETMASK => {}
+                _ => return Err(AxError::InvalidInput),
+            }
+            let set = unsafe { set_ptr.vm_read_uninit()?.assume_init() };
+            let new_mask = match how as u32 {
+                SIG_BLOCK => old | set,
+                SIG_UNBLOCK => old & !set,
+                SIG_SETMASK => set,
+                _ => unreachable!(),
+            };
+            if let Some(oldset) = oldset.nullable() {
+                oldset.vm_write(old)?;
+            }
+            debug!("sys_rt_sigprocmask <= {new_mask:?}");
+            sig.set_blocked(new_mask);
+        }
     }
 
     Ok(0)

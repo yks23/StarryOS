@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-146 resolved（**`rt_sigprocmask`**：**`set` 非空**时先 **`how`**/**`vm_read(set)`**，再 **`vm_write(oldset)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-145 resolved（**`io_uring_setup`**：**`add_file_like`** 成功后再 **`params.vm_write`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-144 resolved（**`epoll_ctl`** **`ADD`/`MOD`**：**`get_file_like(fd)`** 先于 **`parse_event`/`event.get_as_ref`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-143 resolved（**`Directory`** **`FileLike::read`/`write`** → **`IsADirectory`**（**EISDIR**），对齐 Linux目录 fd；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -126,6 +127,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-146 | rt_sigprocmask oldset after how/set校验 | resolved | 2026-04-12 |
 | issue-145 | io_uring_setup vm_write after add_file_like | resolved | 2026-04-12 |
 | issue-144 | epoll_ctl ADD/MOD get_file_like 先于 parse_event | resolved | 2026-04-12 |
 | issue-143 | 目录 fd read/write → EISDIR | resolved | 2026-04-12 |
@@ -269,7 +271,7 @@
 - membarrier：Linux `cmd`（除 `QUERY=0`）为 **单位掩码**（`GLOBAL=1<<0`、`GLOBAL_EXPEDITED=1<<1`、`REGISTER_GLOBAL_EXPEDITED=1<<2`…），非单 bit 组合须 **`EINVAL`**；`QUERY` 返回 **已实现命令的按位或**。执行类命令用 **`atomic::fence(SeqCst)`**（勿用 `compiler_fence`）；`PRIVATE_EXPEDITED_SYNC_CORE` 在 **riscv64** 上额外 **`fence.i`**。`REGISTER_*` 仅占位返回0。真 **`GLOBAL` 全系统** 语义需 IPI（当前仅本 hart 最强屏障）。
 - 全核 membarrier（多 hart）在 Linux 上依赖 IPI；若未来启用 `axfeat/smp` + `axfeat/ipi`，可在各核 IPI handler 中执行与 `sys_membarrier` 相同的 fence，并用同步原语等待全部完成。
 - `rt_sigreturn` 通过 `block_next_signal` 标记「下一次回到用户循环时跳过一次 `check_signals`」；该标志必须是 **per-thread**（`Thread::skip_next_signal_check`），不可用进程级或全局 AtomicBool。
-- **`rt_sigpending`**：**`set`** 为必填输出（Linux **`NULL` → EFAULT**），**`set.is_null()` → `BadAddress`**，须在 **`vm_write`** 前校验；**`rt_sigprocmask`/`rt_sigaction`** 的 **`oldset`/`oldact`** 仍为 **`nullable()`** 可选输出。
+- **`rt_sigpending`**：**`set`** 为必填输出（Linux **`NULL` → EFAULT**），**`set.is_null()` → `BadAddress`**，须在 **`vm_write`** 前校验。**`rt_sigprocmask(2)`**：**`set==NULL`** 时仅 **`copy_to_user(old)`**（若 **`oldset` 非空**），**`how`** 忽略；**`set` 非空**时须先校验 **`how`**（**`SIG_BLOCK`/`SIG_UNBLOCK`/`SIG_SETMASK`**）再 **`vm_read(set)`**，成功后再 **`vm_write(oldset)`** 与 **`set_blocked`**，非法 **`how`** 或 **`set`** 读失败不得改写 **`oldset`**（issue-146）。**`rt_sigaction`** 的 **`oldact`** 仍为 **`nullable()`** 可选输出。
 - **`signalfd4`**：**`mask`** 为必填输入（Linux **`NULL` → EFAULT**），**`mask.is_null()` → `BadAddress`**，须在 **`vm_read_uninit`** 前校验。
 - **`rt_sigtimedwait`/`rt_sigsuspend`**：**`set`** 为必填可读 **`sigset_t`**（**`NULL` → EFAULT**），**`set.is_null()` → `BadAddress`**，须在 **`vm_read_uninit`** 前校验；**`timeout`/`info`** 等仍 **`nullable()`**。
 - **`rt_sigqueueinfo`/`rt_tgsigqueueinfo`**：Linux 分别为 **3/4 个**用户参数（**`uinfo`** 为最后一参），**无** **`sigsetsize`**；勿从 **`a3`/`a4`** 读 **`sigsetsize`** 或调用 **`check_sigset_size`**（残留寄存器会误 **EINVAL**）。**`rt_sig*`** 中带 **`sigsetsize`** 的是 **`rt_sigprocmask`**、**`rt_sigaction`**、**`rt_sigpending`**、**`rt_sigtimedwait`**、**`rt_sigsuspend`** 等，勿与 queueinfo 混淆。**`make_queue_signal_info`**：**`signo==0`** → **`Ok(None)`**；否则 **`parse_signo`** 后 **`uinfo==NULL` → `BadAddress`** 再 **`vm_read`**（**`pidfd_send_signal`** 同路径）。
@@ -369,6 +371,7 @@
 - issue-143：已 **`open` 目录** fd 上 **`read`/`write`** → **`EISDIR`**，勿 **EBADF**。
 - issue-144：合法 **`epfd`** + 无效 **`fd`** + 坏 **`event`**（**`EPOLL_CTL_ADD`/`MOD`**）：首错 **`EBADF`**（先于 **EFAULT**）。
 - issue-145：**`io_uring_setup`** 在 **fd 表满**等导致 **`add_file_like`** 失败时，用户 **`IoUringParams`** 应保持未被内核写回。
+- issue-146：**`rt_sigprocmask`**：**`set` 非空** + 非法 **`how`** + **`oldset` 非空**：**`EINVAL`** 时 **`oldset`** 不应被写入。
 - issue-053：请跑 **`/bin/test_memfd_create_invalid_flags`**（**`memfd_create(..., 0x80000000)`** → **`EINVAL`**）。
 - issue-052：请跑 **`/bin/test_fchownat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`uid`/`gid`** 不变）。
 - issue-051：请跑 **`/bin/test_utimensat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`mtime`** 不变）。
