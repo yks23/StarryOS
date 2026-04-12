@@ -651,6 +651,7 @@ pub fn sys_renameat2(
     let new_name = new_name.as_ref();
 
     if flags & RENAME_EXCHANGE != 0 {
+        // Success-path naming matches Linux, but exchange is not crash-atomic here (issue-196).
         if old_dir.ptr_eq(&new_dir) && old_name == new_name {
             return Err(AxError::InvalidInput);
         }
@@ -665,7 +666,15 @@ pub fn sys_renameat2(
     Ok(0)
 }
 
-/// `RENAME_EXCHANGE`: swap two names (same semantics as Linux; three renames, not atomic vs crash).
+/// `RENAME_EXCHANGE`: swap two directory entries (`old_name` ↔ `new_name`).
+///
+/// **Successful return:** The name→inode mapping should match Linux `renameat2(..., RENAME_EXCHANGE)`.
+///
+/// **Crash / power-loss:** Implemented as up to three [`Location::rename`] calls using a temporary
+/// name under `old_dir` (`.starry_exchange_*`). Unlike Linux’s single VFS-level exchange on
+/// typical paths, interruption between steps can leave a visible temporary entry or a half-done
+/// swap. Do not assume the same crash-atomicity as Linux for package managers / editors that rely
+/// on exchange for “atomic replace”.
 fn renameat2_exchange(
     old_dir: &Location,
     old_name: &str,
