@@ -1,0 +1,25 @@
+{
+  "id": "issue-007",
+  "title": "ELF 加载器全局 Mutex，并行 execve 串行化",
+  "status": "open",
+  "created_at": "2026-04-12T12:00:00Z",
+  "severity": "medium",
+  "description": "static ELF_LOADER: Mutex<ElfLoader> 使每次 execve 独占加载路径，解析与映射可能耗时且含 I/O。多进程并行 exec 时性能被串行化。",
+  "category": "concurrency",
+  "affected_syscalls": ["execve"],
+  "source_context": {
+    "primary_files": ["kernel/src/mm/loader.rs:252-290"],
+    "related_files": [],
+    "key_insight": "load 全程持有 ELF_LOADER.lock()"
+  },
+  "test": {
+    "source_file": "auto-evolve/tests/test_elf_parallel_exec.c",
+    "build_command": "riscv64-linux-musl-gcc -static -o test_elf_parallel_exec test_elf_parallel_exec.c",
+    "run_method": "QEMU 中运行；需 rootfs 存在 /bin/true",
+    "expected_output_contains": "SUMMARY",
+    "pass_criteria": "两个子进程并行 execve 均成功退出 0（功能正确性）",
+    "last_result": "待运行"
+  },
+  "suggested_fix": "LRU 缓存改为分段锁或并发哈希；读多写少路径用 RwLock。",
+  "references": ["Question1.md §1.4 问题4"]
+}

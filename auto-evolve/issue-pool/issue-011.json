@@ -1,0 +1,28 @@
+{
+  "id": "issue-011",
+  "title": "timerfd_create returns dummy fd; timer never fires on poll/read",
+  "status": "open",
+  "created_at": "2026-04-12T12:00:00Z",
+  "severity": "critical",
+  "description": "timerfd_create 经 sys_dummy_fd 返回 DummyFd，Pollable::poll 恒为 empty，timerfd_settime 后 epoll/poll 永不就绪，定时器静默失效。若进程名为 qemu- 前缀则返回 ENOSYS（io.rs）。",
+  "category": "syscall-stub",
+  "affected_syscalls": ["timerfd_create", "timerfd_settime", "timerfd_gettime"],
+  "source_context": {
+    "primary_files": [
+      "kernel/src/syscall/fs/io.rs:21-43",
+      "kernel/src/syscall/mod.rs:617-628"
+    ],
+    "related_files": ["kernel/src/file/mod.rs"],
+    "key_insight": "DummyFd poll() 返回 IoEvents::empty；timerfd_settime/gettime 未在 match 中实现则走 ENOSYS"
+  },
+  "test": {
+    "source_file": "auto-evolve/tests/test_dummy_timerfd.c",
+    "build_command": "riscv64-linux-musl-gcc -static -o test_dummy_timerfd test_dummy_timerfd.c",
+    "run_method": "放入 rootfs /bin/ 后在 QEMU 中执行 /bin/test_dummy_timerfd",
+    "expected_output_contains": "SUMMARY",
+    "pass_criteria": "所有 [TEST] 为 PASS 且退出码 0",
+    "last_result": "未在目标环境运行；预期 Starry 上 poll 无 POLLIN"
+  },
+  "suggested_fix": "实现 TimerFd：到期时 Pollable 返回 IN，read 返回 uint64 计数；补全 timerfd_settime/timerfd_gettime。",
+  "references": ["man 2 timerfd_create"]
+}

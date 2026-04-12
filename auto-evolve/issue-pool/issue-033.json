@@ -1,0 +1,25 @@
+{
+  "id": "issue-033",
+  "title": "setitimer ITIMER_VIRTUAL/PROF accuracy limited (preempt/timer coupling)",
+  "status": "open",
+  "created_at": "2026-04-12T12:00:00Z",
+  "severity": "low",
+  "description": "Question2.md 2.10：timer.rs 注释 TODO 抢占不改变定时器状态；ITIMER_VIRTUAL/PROF 与 gprof 等工具有关。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["setitimer", "getitimer"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/time.rs"],
+    "related_files": [],
+    "key_insight": "文档 ⚠️ 部分"
+  },
+  "test": {
+    "source_file": "auto-evolve/tests/test_setitimer_partial.c",
+    "build_command": "riscv64-linux-musl-gcc -static -o test_setitimer_partial test_setitimer_partial.c",
+    "run_method": "运行 /bin/test_setitimer_partial",
+    "expected_output_contains": "SUMMARY",
+    "pass_criteria": "ITIMER_VIRTUAL 经 getitimer 可见非零剩余时间",
+    "last_result": "弱测试；精确性需 profile 场景验证"
+  },
+  "suggested_fix": "将虚拟/剖析定时器与抢占/时间统计耦合。",
+  "references": ["man 2 setitimer"]
+}
