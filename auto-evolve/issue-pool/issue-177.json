@@ -1,0 +1,27 @@
+{
+  "id": "issue-177",
+  "title": "umount2：接受 MNT_FORCE/MNT_DETACH/MNT_EXPIRE/UMOUNT_NOFOLLOW 合法位但完全不实现语义",
+  "status": "resolved",
+  "created_at": "2026-04-12T18:00:00Z",
+  "severity": "medium",
+  "fix_summary": "`sys_umount2`：`UMOUNT_NOFOLLOW` 时用 `FsContext::resolve_no_follow` 解析路径（最后分量不跟 symlink）；`MNT_FORCE`/`MNT_DETACH`/`MNT_EXPIRE` 尚无惰性卸载等语义，返回 `EOPNOTSUPP`（`OperationNotSupported`），不再静默按立即 `unmount` 处理。",
+  "files_changed": ["kernel/src/syscall/fs/mount.rs"],
+  "description": "**`sys_umount2`**（`kernel/src/syscall/fs/mount.rs`）将 **`flags`** 限制在 **`MNT_FORCE | MNT_DETACH | MNT_EXPIRE | UMOUNT_NOFOLLOW`** 允许集合内，非法位 **`EINVAL`**；但随后仅 **`resolve(target)?`** 并 **`target.unmount()?`**，**从未读取或使用 **`flags`**。**Linux `umount2(2)`** 中：**`MNT_DETACH`** 为**惰性卸载**（文件系统可暂时仍出现在 **`/proc/mounts`**，引用计数清零后再拆）；**`MNT_FORCE`**/**`MNT_EXPIRE`** 有各自危险/自动挂载语义；**`UMOUNT_NOFOLLOW`** 要求**路径最后分量不跟随符号链接**（对挂载点与符号链接边界的判断与 **`resolve` 是否 follow** 强相关）。**Starry** 当前对所有合法 **`flags` 组合走同一立即 `unmount`路径**，等于**静默忽略**用户请求，与 **Linux** 在 **lazy umount**、**nofollow**、**force** 等场景下的 **`errno`/可见挂载树** 均可能不一致；亦可能让依赖 **`UMOUNT_NOFOLLOW`** 避免误卸载的应用获得**错误安全感**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["umount2"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/mount.rs:72-83"],
+    "related_files": ["kernel/src/syscall/fs/ctl.rs"],
+    "key_insight": "`flags` 校验后未传入 `unmount`或路径解析逻辑"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "对**仍被占用**的挂载点分别 **`umount2(MNT_DETACH)`** 与 **`umount2(0)`** 对比 **Linux** 与 **Starry**（挂载表是否立即消失、繁忙时 **`EBUSY`**）。对 **`target` 为符号链接** 的场景对比 **`UMOUNT_NOFOLLOW`** 与 **0**。",
+    "expected_output_contains": "",
+    "pass_criteria": "各 **`flag`** 与 **Linux** 行为一致，或在未实现时返回明确 **`EOPNOTSUPP`/`EINVAL`** 且**不**假装已按 **`MNT_*`** 处理。",
+    "last_result": "`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` 通过（未跑 QEMU 对比测试）。"
+  },
+  "suggested_fix": "在 **VFS/`FsContext`** 层传递 **`umount` 标志**：实现 **`MNT_DETACH`** 惰性队列或文档化为 **`EOPNOTSUPP`**；**`UMOUNT_NOFOLLOW`** 在 **`resolve`/`lookup` 最后一步** 关闭 follow；**`MNT_FORCE`/`MNT_EXPIRE`** 视安全策略实现或拒绝。",
+  "references": ["man 2 umount2", "Linux fs/namespace.c"]
+}

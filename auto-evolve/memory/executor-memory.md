@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-177 resolved（**`umount2`**：**`UMOUNT_NOFOLLOW`** → **`resolve_no_follow`**；**`MNT_FORCE`/`MNT_DETACH`/`MNT_EXPIRE`** → **`EOPNOTSUPP`**，避免静默忽略；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-174 resolved（**`recvmsg`**：**`msg_flags`** **`MSG_TRUNC`**/**`MSG_CTRUNC`**；**`axnet`** **UDP/dgram** **`RecvOptions.msg_trunc`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-173 resolved（**`madvise`**：**`WILLNEED`/`POPULATE_*` → `populate_area`**；**`NORMAL`/`RANDOM`/`SEQUENTIAL`** no-op；其余白名单 → **`EOPNOTSUPP`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-172 resolved（**`clock_getres`**：**`*_COARSE` → `1 ms`**，其余已支持 clock → **`1 ns`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）

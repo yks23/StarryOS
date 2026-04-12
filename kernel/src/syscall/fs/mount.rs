@@ -70,16 +70,28 @@ pub fn sys_mount(
 }
 
 const UMOUNT_ALLOWED_FLAGS_U32: u32 = MNT_FORCE | MNT_DETACH | MNT_EXPIRE | UMOUNT_NOFOLLOW;
+/// Linux `MNT_FORCE` / `MNT_DETACH` / `MNT_EXPIRE` need namespace/lazy-unmount semantics Starry does not
+/// implement yet; return **`EOPNOTSUPP`** instead of accepting the bits and performing an immediate
+/// `unmount` (misleading vs. `umount2(2)`).
+const UMOUNT_UNSUPPORTED_FLAGS_U32: u32 = MNT_FORCE | MNT_DETACH | MNT_EXPIRE;
 
 pub fn sys_umount2(target: *const c_char, flags: i32) -> AxResult<isize> {
     let f = flags as u32;
     if f & !UMOUNT_ALLOWED_FLAGS_U32 != 0 {
         return Err(AxError::InvalidInput);
     }
+    if f & UMOUNT_UNSUPPORTED_FLAGS_U32 != 0 {
+        return Err(AxError::OperationNotSupported);
+    }
     let target = vm_load_string(target)?;
     debug!("sys_umount2 <= target: {target:?}, flags: {flags}");
-    let target = FS_CONTEXT.lock().resolve(target)?;
-    target.unmount()?;
+    let fs = FS_CONTEXT.lock();
+    let loc = if f & UMOUNT_NOFOLLOW != 0 {
+        fs.resolve_no_follow(&target)?
+    } else {
+        fs.resolve(&target)?
+    };
+    loc.unmount()?;
     Ok(0)
 }
 
