@@ -211,10 +211,23 @@ def handle_file_drop(agent: str, filepath: str):
 # ── Auto Prompt Generator ─────────────────────────────────────
 
 def generate_auto_prompt_debugger() -> str:
-    stats = scan_issues()
-    open_count = stats["open"]
+    open_count = 0
+    open_bug_count = 0
     resolved_issues = []
     for f in ISSUE_POOL.glob("issue-*.json"):
+        try:
+            d = json.loads(f.read_text())
+            if d.get("status") == "resolved":
+                resolved_issues.append(d.get("id", f.stem))
+            elif d.get("status") == "open":
+                open_count += 1
+                if d.get("category") != "improvement":
+                    open_bug_count += 1
+        except Exception:
+            pass
+
+    # 也扫归档中的 resolved（可能归档延迟）
+    for f in ISSUE_ARCHIVE.glob("issue-*.json"):
         try:
             d = json.loads(f.read_text())
             if d.get("status") == "resolved":
@@ -224,21 +237,34 @@ def generate_auto_prompt_debugger() -> str:
 
     parts = ["你当前处于自动巡检模式。请执行以下操作：\n"]
 
+    step = 1
     if resolved_issues:
         parts.append(
-            f"1. 【回归验证】以下 issue 被 executor 标记为 resolved，请重新运行测试验证：\n"
-            f"   {', '.join(resolved_issues)}\n"
+            f"{step}. 【回归验证】以下 issue 被 executor 标记为 resolved，请重新运行测试验证：\n"
+            f"   {', '.join(resolved_issues[:10])}\n"
             f"   验证通过改为 verified，不通过改回 open 并追加 verification_note。\n"
         )
+        step += 1
 
     parts.append(
-        f"2. 【发现新问题】当前问题池有 {open_count} 个 open issue。\n"
+        f"{step}. 【发现新问题】当前问题池有 {open_count} 个 open issue（其中 {open_bug_count} 个 bug 类）。\n"
         f"   请审计一个尚未检查的 syscall 模块，发现问题并写入 issue-pool。\n"
         f"   参考 memory/debugger-memory.md 中的扫描进度，选择未审计的模块。\n"
     )
+    step += 1
+
+    # bug 类 issue 充足时引导提改进方案
+    if open_bug_count >= 5:
+        parts.append(
+            f"{step}. 【主动改进】bug 类 issue 充足（{open_bug_count} 个），可以额外提出 1-2 个改进提案。\n"
+            f"   改进方向：易用性（/proc 完善、错误信息优化）、性能（锁优化、缓存）、兼容性（缺失 syscall 补全）。\n"
+            f"   改进 issue 的 severity 设为 low，category 设为 improvement。\n"
+            f"   同样需要附带测试用例来验证改进效果。\n"
+        )
+        step += 1
 
     parts.append(
-        "3. 【更新记忆】完成后更新 memory/debugger-memory.md。\n"
+        f"{step}. 【更新记忆】完成后更新 memory/debugger-memory.md。\n"
     )
 
     parts.append(f"下一个可用的 issue ID 是 {next_issue_id()}。")

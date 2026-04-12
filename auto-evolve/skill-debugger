@@ -52,6 +52,15 @@ auto-evolve/
 - 分析子系统交互可能引发的问题（如信号+futex、fork+mmap）
 - 从 executor-memory 中了解修复过程中暴露的新问题
 
+**手段 D：主动改进提案（Improver 模式）**
+当 bug 类问题扫描较充分时，切换到改进模式，关注让整个系统**更易用、性能更高、兼容性更广**的提升方向：
+- **易用性改进**：`/proc` 信息完善（让 ps/top/free 等工具能正常工作）、错误信息更友好（让开发者更快定位问题）、常用命令兼容性（让更多 Alpine 包能直接运行）
+- **性能改进**：锁粒度优化、缓存策略、按需分配替代预分配、热路径减少内存拷贝
+- **兼容性扩展**：缺失但常用的 syscall 实现（如 `waitid`、`execveat`）、socket 选项完善、ioctl 命令扩展
+- **健壮性改进**：资源泄漏检测、OOM 处理、错误恢复路径
+
+改进提案同样写入 issue-pool，但 severity 设为 `low`，category 设为 `improvement`。测试用例验证改进后的新行为是否正确（而非验证 bug 存在）。
+
 ### Phase 3: 测试用例编写
 
 为每个发现的问题编写 **C 语言用户态测试程序**。
@@ -160,7 +169,7 @@ int main(void) {
 - `id`：唯一标识，格式 `issue-NNN`，递增
 - `status`：`open`（新建）/ `in-progress`（executor 正在处理）/ `resolved`（executor 标记已修复）/ `verified`（debugger 确认修复）
 - `severity`：`critical` / `high` / `medium` / `low`
-- `category`：`syscall-stub`（空操作）/ `syscall-missing`（完全缺失）/ `syscall-semantic`（语义错误）/ `concurrency`（并发 bug）/ `correctness`（逻辑错误）
+- `category`：`syscall-stub`（空操作）/ `syscall-missing`（完全缺失）/ `syscall-semantic`（语义错误）/ `concurrency`（并发 bug）/ `correctness`（逻辑错误）/ `improvement`（主动改进提案——非 bug，而是让系统更好用、更快、更兼容的增强）
 - `source_context`：指向需要修改的代码位置，executor 据此快速定位
 - `test`：完整的测试编译运行方法，executor 用来验证修复
 
@@ -216,6 +225,12 @@ int main(void) {
 4. **并发问题**：多核/多线程下的竞态条件（如全局 AtomicBool 应该是 per-thread）
 5. **边界条件**：参数验证不足、溢出、NULL 指针未处理
 6. **功能缺失**：完全未实现的 syscall（返回 ENOSYS）
+7. **主动改进**（severity=low, category=improvement）：不是 bug，但能让系统更好用的增强。包括：
+   - 完善 `/proc` 内容让系统工具正常工作
+   - 补全常用但非必需的 syscall（如 `waitid`、`prlimit` 完善）
+   - 改善错误信息（用更精确的 errno 替代笼统的 EINVAL）
+   - 性能优化（减少不必要的锁竞争、内存拷贝）
+   - 改善启动体验（更完整的 `/dev` 设备节点、环境变量支持）
 
 ---
 
