@@ -510,14 +510,12 @@ pub fn sys_msgsnd(
             return Err(AxError::from(LinuxError::EACCES)); // EACCES
         }
 
-        // Note: According to Linux manpage, both byte count and message count
-        // are limited by msg_qbytes field (this appears to be the actual behavior)
+        // Linux limits the queue by byte quota: msg_cbytes + msgsz must not exceed msg_qbytes.
+        // msg_qnum is a message count; it must not be compared to msg_qbytes (different units).
         let would_exceed_bytes =
             queue.total_bytes + data_vec.len() > queue.msqid_ds.msg_qbytes as usize;
-        let would_exceed_messages =
-            (queue.msqid_ds.msg_qnum + 1) as usize > queue.msqid_ds.msg_qbytes as usize;
 
-        if !would_exceed_bytes && !would_exceed_messages {
+        if !would_exceed_bytes {
             queue.enqueue_message(mtype, data_vec)?;
             queue.msqid_ds.msg_lspid = current_pid as _;
             queue.msqid_ds.msg_stime = monotonic_time_nanos() as _;
