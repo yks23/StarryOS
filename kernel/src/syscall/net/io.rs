@@ -71,7 +71,7 @@ fn send_impl(
         &mut src,
         SendOptions {
             to: addr,
-            flags: SendFlags::default(),
+            flags: SendFlags::from_bits_truncate(flags),
             cmsg,
         },
     )?;
