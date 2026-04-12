@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-387 resolved（**`open_tree`**：**`from_fd`** **后** **`get_as_str`** **前** **`flags & !OPEN_TREE_KNOWN`** **→** **`InvalidInput`**；**`CLONE`/`ITERATIVE`/`O_CLOEXEC`**；**`mount.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-386 resolved（**`fsopen`**：**`flags & !FSOPEN_KNOWN`** **先于** **`get_as_str`** **→** **`InvalidInput`**；**`FSOPEN_CLOEXEC=1`**；**`mount.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-385 resolved（**`riscv_flush_icache`** **`LOCAL`**：**`check_access`** **失败** **→** **`BadAddress`**；**`sys.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-384 resolved（**`futex`** **`FUTEX_REQUEUE`/`FUTEX_CMP_REQUEUE`**：**`uaddr2==NULL`** **→** **`InvalidInput`**；**否则** **`check_access`+`vm_read`**；**`futex.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）

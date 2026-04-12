@@ -2,7 +2,9 @@ use core::ffi::{c_char, c_void};
 
 use axerrno::{AxError, AxResult};
 use axfs::FS_CONTEXT;
-use linux_raw_sys::general::{AT_FDCWD, MNT_DETACH, MNT_EXPIRE, MNT_FORCE, UMOUNT_NOFOLLOW};
+use linux_raw_sys::general::{
+    AT_FDCWD, MNT_DETACH, MNT_EXPIRE, MNT_FORCE, O_CLOEXEC, UMOUNT_NOFOLLOW,
+};
 
 use crate::{
     file::{Directory, FileLike},
@@ -147,10 +149,19 @@ pub fn sys_fspick(dfd: i32, pathname: UserConstPtr<c_char>, _flags: u32) -> AxRe
     Err(AxError::Unsupported)
 }
 
+/// Linux `OPEN_TREE_CLONE` / `OPEN_TREE_ITERATIVE` (`uapi/linux/mount.h`); `OPEN_TREE_CLOEXEC` is `O_CLOEXEC`.
+const OPEN_TREE_CLONE: u32 = 0x0000_0001;
+const OPEN_TREE_ITERATIVE: u32 = 0x0000_0002;
+const OPEN_TREE_KNOWN_FLAGS: u32 = OPEN_TREE_CLONE | OPEN_TREE_ITERATIVE | O_CLOEXEC;
+
 /// `open_tree`: unimplemented; **ENOSYS** (callers that probe the API treat any error as skip).
-pub fn sys_open_tree(dfd: i32, filename: UserConstPtr<c_char>, _flags: u32) -> AxResult<isize> {
+pub fn sys_open_tree(dfd: i32, filename: UserConstPtr<c_char>, flags: u32) -> AxResult<isize> {
     if dfd != AT_FDCWD {
         let _ = <Directory as FileLike>::from_fd(dfd)?;
+    }
+    // After `from_fd` (EBADF) but before `filename`: unknown `OPEN_TREE_*` → EINVAL (issue-387).
+    if flags & !OPEN_TREE_KNOWN_FLAGS != 0 {
+        return Err(AxError::InvalidInput);
     }
     let path = filename.get_as_str()?;
     debug!("sys_open_tree <= dfd: {dfd}, path: {path:?} (unsupported)");
