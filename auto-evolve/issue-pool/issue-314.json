@@ -1,0 +1,27 @@
+{
+  "id": "issue-314",
+  "title": "`pwrite64(2)`：`sys_pwrite64` 在 `File::from_fd(fd)` 之前校验 `offset < 0`，而同文件 `sys_pread64` 先 `from_fd` 再判负 `offset`，两者对「无效 fd」与「负 offset」的 `EBADF`/`EINVAL` 优先级不一致，且与 Linux `pread`/`pwrite` 常见「先 fget 再解析 offset」路径可能不完全对齐",
+  "status": "resolved",
+  "created_at": "2026-04-21T12:00:00Z",
+  "severity": "low",
+  "fix_summary": "重排 `sys_pwrite64`：先 `File::from_fd(fd)?`，再 `offset < 0` → `InvalidInput`，与 `sys_pread64` 及 Linux `do_pwrite64`/`fget` 顺序一致；注释 issue-314/issue-313。更新 `executor-memory` `pwrite64(2)` 条、表格与最近更新；新增 `issue-314.json`。",
+  "files_changed": ["kernel/src/syscall/fs/io.rs", "auto-evolve/memory/executor-memory.md"],
+  "description": "**`kernel/src/syscall/fs/io.rs`** **`sys_pread64`** **（** **约** **261–267** **行** **）** **顺序** **：** **`File::from_fd(fd)?`** **→** **`offset < 0`** **→** **`EINVAL`** **。** **`sys_pwrite64`** **（** **约** **270–284** **行** **）** **顺序** **：** **`offset < 0`** **→** **`EINVAL`** **→** **`File::from_fd(fd)?`** **。** **当** **同时** **存在** **无效** **`fd`** **与** **负** **`offset`** **时** **，** **`pread`** **可能** **先** **`EBADF`** **，** **`pwrite`** **先** **`EINVAL`** **，** **对称** **测试** **与** **模糊** **libc** **直接** **syscall** **场景** **下** **与** **上游** **或** **彼此** **行为** **不一致** **。** **与** **issue-303**/**issue-313** **类** **「** **句柄** **解析** **与** **标量** **校验** **顺序** **」** **问题** **同类** **。**\n\n**建议** **：** **对齐** **`Linux`** **`vfs_read`/`vfs_write`** **/`do_pread64`/`do_pwrite64`** **入口** **顺序** **，** **使** **`pread64`/`pwrite64`** **对** **`fd`** **与** **`offset`** **的** **错误** **优先级** **一致** **；** **或** **在** **注释** **中** **说明** **有意** **不对称** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["pread64", "pwrite64"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/io.rs:261-284"],
+    "related_files": [],
+    "key_insight": "pread64 vs pwrite64 offset/fd order"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：无效 fd + 负 offset 对照 Linux 返回顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "`pread64`/`pwrite64` 与上游对 EBADF/EINVAL 顺序一致，或注释说明差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "将 `sys_pwrite64` 调整为与 `sys_pread64` 相同：先 `File::from_fd(fd)?`，再校验 `offset < 0`（或两者均先按 Linux 顺序统一）。",
+  "references": ["man 2 pread", "man 2 pwrite", "kernel/src/syscall/fs/io.rs", "issue-303", "issue-313"]
+}

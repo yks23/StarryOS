@@ -273,10 +273,12 @@ pub fn sys_pwrite64(
     len: usize,
     offset: __kernel_off_t,
 ) -> AxResult<isize> {
+    // Same order as `sys_pread64` / Linux `do_pwrite64`: **EBADF** before **EINVAL** for negative
+    // `offset` when both bad `fd` and bad `offset` apply (issue-314; issue-313 theme).
+    let f = File::from_fd(fd)?;
     if offset < 0 {
         return Err(AxError::InvalidInput);
     }
-    let f = File::from_fd(fd)?;
     if len == 0 {
         return Ok(0);
     }
