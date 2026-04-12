@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-16：issue-046 resolved（**`pipe2`**：**`PipeFlags::from_bits`**，未知位 **`EINVAL`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过）
 - 日期：2026-04-16：issue-045 resolved（**`getrusage(RUSAGE_CHILDREN)`**：**`waited_children_cpu_nanos`**，勿累加 **`proc.threads()`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过）
 - 日期：2026-04-16：issue-044 resolved（**`prlimit64`**：提高硬上限超过当前 **`limit.max`** → **`OperationNotPermitted`（EPERM）**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过）
 - 日期：2026-04-16：issue-043 resolved（**`ioctl(FIONBIO)`**：按 **`c_int`** 读用户参数，**`!= 0`** 即非阻塞；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过）
@@ -27,6 +28,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-046 | pipe2 flags 未知位 EINVAL | resolved | 2026-04-16 |
 | issue-045 | getrusage CHILDREN 非兄弟线程 | resolved | 2026-04-16 |
 | issue-044 | prlimit64 提高硬上限 EPERM | resolved | 2026-04-16 |
 | issue-043 | ioctl FIONBIO 读 c_int 非零语义 | resolved | 2026-04-16 |
@@ -82,6 +84,7 @@
 - 全核 membarrier（多 hart）在 Linux 上依赖 IPI；若未来启用 `axfeat/smp` + `axfeat/ipi`，可在各核 IPI handler 中执行与 `sys_membarrier` 相同的 fence，并用同步原语等待全部完成。
 - `rt_sigreturn` 通过 `block_next_signal` 标记「下一次回到用户循环时跳过一次 `check_signals`」；该标志必须是 **per-thread**（`Thread::skip_next_signal_check`），不可用进程级或全局 AtomicBool。
 - timerfd：`TimerFd` 实现 `FileLike` + `Pollable`；到期逻辑在 `process_expirations` 中根据时钟纳秒与 `next_deadline_nanos` 比较；通过 `axtask::register_timer_callback`（首次创建时注册）在每次内核 timer tick 中扫描弱引用列表并 `wake` `PollSet`；创建 fd 用 `add_file_like`（与 eventfd2 相同），勿对 `Arc<TimerFd>` 误用 `add_to_fd_table(self)`。
+- **`pipe2`**：**`flags`** 仅允许 **`O_CLOEXEC`/`O_NONBLOCK`**（**`PipeFlags`**）；用 **`from_bits(...).ok_or(InvalidInput)`**，勿 **`from_bits_truncate`**（与 **`eventfd2`/`epoll_create1`** 一致）。
 - **`getrusage(RUSAGE_CHILDREN)`**：须为 **`wait`** 回收子进程的 **CPU** 累计（**`ProcessData::child_utime_ns`/`child_stime_ns`**），与 **`times`/`waitpid`** 累加路径一致；**勿**把 **`proc.threads()`** 中除当前线程外的 **pthread** 当作子进程。
 - **`prlimit64`**：若 **`new_limit.rlim_max >`** 当前硬 **`limit.max`**（无 **`CAP_SYS_RESOURCE`** 等能力建模时视为非法抬高），须 **`OperationNotPermitted`（EPERM）**；勿静默 **`Ok(0)`**。可降低硬上限或保持不变并更新 **`rlim_cur`**（在 **`rlim_cur <= rlim_max`** 前提下）。
 - **`ioctl(FIONBIO)`**：第三参为 **`int *`**（Linux）；用 **`(arg as *const c_int).vm_read()`** 读整型，**`set_nonblocking(value != 0)`**；勿只读单字节、勿将取值限制为 0/1（**`2`**、**`256`** 等小端首字节为 0 的非零值须启用 **`O_NONBLOCK`**）。
