@@ -4,7 +4,7 @@ use core::{
     task::Context,
 };
 
-use axerrno::{AxError, AxResult};
+use axerrno::{AxError, AxResult, LinuxError};
 use axfs::{FS_CONTEXT, FileFlags, OpenOptions};
 use axio::{Seek, SeekFrom};
 use axpoll::{IoEvents, Pollable};
@@ -142,7 +142,8 @@ pub fn sys_fadvise64(
 ) -> AxResult<isize> {
     debug!("sys_fadvise64 <= fd: {fd}, offset: {offset}, len: {len}, advice: {advice}");
     if Pipe::from_fd(fd).is_ok() {
-        return Err(AxError::BrokenPipe);
+        // Linux: fadvise on non-seekable fd (pipe, etc.) → ESPIPE, not EPIPE (broken pipe).
+        return Err(LinuxError::ESPIPE.into());
     }
     if advice > 5 {
         return Err(AxError::InvalidInput);
