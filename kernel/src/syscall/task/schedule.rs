@@ -201,6 +201,12 @@ pub fn sys_sched_getaffinity(pid: i32, cpusetsize: usize, user_mask: *mut u8) ->
 }
 
 pub fn sys_sched_setaffinity(pid: i32, cpusetsize: usize, user_mask: *const u8) -> AxResult<isize> {
+    // Match `sys_sched_getaffinity` / common `sched_setaffinity` ordering: reject undersized
+    // `cpusetsize` (EINVAL) before `sched_resolve_task` (ESRCH) (issue-336; issue-306 is NULL buffer).
+    if cpusetsize * 8 < axhal::cpu_num() {
+        return Err(AxError::InvalidInput);
+    }
+
     // Linux sched_setaffinity: resolve pid (ESRCH) before copy_from_user(mask) (EFAULT).
     let task = sched_resolve_task(pid)?;
     let size = cpusetsize.min(axhal::cpu_num().div_ceil(8));

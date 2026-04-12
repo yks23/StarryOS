@@ -1,0 +1,32 @@
+{
+  "id": "issue-336",
+  "title": "`sched_setaffinity(2)`：`sys_sched_setaffinity` 未在 `sched_resolve_task(pid)` 之前校验 `cpusetsize` 是否足以覆盖本机 CPU 数，而同文件 `sys_sched_getaffinity`（约 183–186 行）在解析 `pid` 之前即对 `cpusetsize * 8 < axhal::cpu_num()` 返回 `EINVAL`；与 Linux 在「`cpusetsize` 过小 → `EINVAL`」与「无效 `pid` → `ESRCH`」上的优先级及掩码截断语义可能不完全一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T12:00:00Z",
+  "resolved_at": "2026-05-15T00:00:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/task/schedule.rs`** **`sys_sched_setaffinity`** **（** **约** **203–227** **行** **）** **：** **`sched_resolve_task(pid)?`** **后** **`size = cpusetsize.min(axhal::cpu_num().div_ceil(8))`** **再** **`vm_load(user_mask, size)`** **。** **未** **在** **调用** **`sched_resolve_task`** **之前** **对** **`cpusetsize * 8 < axhal::cpu_num()`** **返回** **`EINVAL`** **。** **同** **文件** **`sys_sched_getaffinity`** **（** **约** **183–186** **行** **）** **则** **在** **`sched_resolve_task`** **之前** **做** **该** **`cpusetsize`** **充分性** **检查** **。** **当** **`cpusetsize`** **过小** **且** **`pid`** **无效** **时** **，** **本** **实现** **可能** **先** **`ESRCH`** **（** **或** **等价** **）** **，** **而** **`getaffinity`** **路径** **先** **`EINVAL`** **；** **且** **`setaffinity`** **通过** **`min`** **截断** **掩码** **，** **可能** **与** **Linux** **`sched_setaffinity`** **对** **`cpusetsize`** **的** **拒绝** **语义** **不同** **。**\n\n**建议** **：** **对照** **Linux** **`kernel/sched/core.c`** **`sched_setaffinity`** **，** **与** **`sched_getaffinity`** **对称** **地** **在** **`sched_resolve_task`** **之前** **校验** **`cpusetsize`** **（** **或** **注释** **说明** **与** **上游** **差异** **及** **截断** **意图** **）** **。** **与** **issue-306** **`sched_getaffinity`** **用户** **缓冲** **/`NULL`** **顺序** **正交** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["sched_setaffinity"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/schedule.rs:183-227"],
+    "related_files": [],
+    "key_insight": "sched_setaffinity cpusetsize vs sched_getaffinity EINVAL/ESRCH order"
+  },
+  "fix_summary": "`sys_sched_setaffinity` 在 `sched_resolve_task` 之前增加与 `sys_sched_getaffinity` 相同的 `cpusetsize * 8 < axhal::cpu_num()` → `InvalidInput`（EINVAL），使过小 `cpusetsize` 先于无效 `pid`（ESRCH）；注释说明 issue-336 与 issue-306/issue-142。",
+  "files_changed": [
+    "kernel/src/syscall/task/schedule.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-336.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：过小 `cpusetsize` + 无效 `pid` 对照 Linux `sched_setaffinity`/`sched_getaffinity` 返回顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游 `sched_setaffinity` 对 `cpusetsize`/`pid` 的校验顺序一致，或注释说明差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `sys_sched_setaffinity` 入口增加与同文件 `sys_sched_getaffinity` 一致的 `cpusetsize * 8 < axhal::cpu_num()` 检查（置于 `sched_resolve_task` 之前），或明确文档化截断与顺序差异。",
+  "references": ["man 2 sched_setaffinity", "kernel/src/syscall/task/schedule.rs", "issue-306"]
+}
