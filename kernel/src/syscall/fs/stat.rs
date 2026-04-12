@@ -5,7 +5,7 @@ use axfs::FS_CONTEXT;
 use axfs_ng_vfs::{Location, NodePermission};
 use linux_raw_sys::general::{
     __kernel_fsid_t, AT_EACCESS, AT_EMPTY_PATH, AT_NO_AUTOMOUNT, AT_STATX_SYNC_TYPE,
-    AT_SYMLINK_NOFOLLOW, F_OK, R_OK, W_OK, X_OK, stat, statfs, statx,
+    AT_SYMLINK_NOFOLLOW, F_OK, R_OK, STATX__RESERVED, W_OK, X_OK, stat, statfs, statx,
 };
 use starry_vm::{VmMutPtr, VmPtr};
 
@@ -110,6 +110,10 @@ pub fn sys_statx(
     }
     // Cannot set both AT_STATX_FORCE_SYNC and AT_STATX_DONT_SYNC (covers full sync-type mask).
     if flags & AT_STATX_SYNC_TYPE == AT_STATX_SYNC_TYPE {
+        return Err(AxError::InvalidInput);
+    }
+    // Linux `vfs_statx`: reserved bits in `mask` → EINVAL (not silent strip).
+    if mask & STATX__RESERVED != 0 {
         return Err(AxError::InvalidInput);
     }
 

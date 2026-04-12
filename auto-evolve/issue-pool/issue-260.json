@@ -1,0 +1,27 @@
+{
+  "id": "issue-260",
+  "title": "statx：`mask` 含 `STATX__RESERVED` 时应 EINVAL，当前仅静默剥离与 Linux 不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_statx`：若 `mask & STATX__RESERVED != 0` → `InvalidInput`（EINVAL），对齐 Linux `vfs_statx`；`Kstat::into_statx_with_mask` 仍对合法 mask 剥离保留域用于填充。",
+  "files_changed": ["kernel/src/syscall/fs/stat.rs"],
+  "description": "**`kernel/src/syscall/fs/stat.rs`** **`sys_statx`**（约 **72–122** 行）校验 **`flags`** 后取 **`kstat`**，再 **`statxbuf.vm_write(kstat.into_statx_with_mask(mask))`**。\n\n**`kernel/src/file/mod.rs`** **`Kstat::into_statx_with_mask`** 使用 **`want = mask & !STATX__RESERVED`**，对 **保留位** 仅 **不填充**，**不** 视为错误。\n\n**Linux `vfs_statx`/`do_statx`**：若 **`mask & STATX__RESERVED`** **非零**，返回 **`-EINVAL`**（在 **`copy_from_user`**/**路径解析** 之后、**填充 `statx`** 之前即拒绝），**非**「成功但 **`stx_mask`** 不含保留请求」。\n\n**当前**：用户传入 **含保留位的 `mask`** 时 **Starry** **成功返回 0**，与 **Linux** **`errno`** 分叉。\n\n**建议**：在 **`sys_statx`** 中 **`if mask & STATX__RESERVED != 0 { return Err(InvalidInput); }`**（或在与 **`linux_raw_sys`** 一致的名下），再调用 **`into_statx_with_mask`**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["statx"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/stat.rs:72-122"],
+    "related_files": ["kernel/src/file/mod.rs:108-123"],
+    "key_insight": "保留 mask 位被剥离而非 EINVAL"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；`statx(..., mask | STATX__RESERVED)` 与 Linux 对照。",
+    "expected_output_contains": "",
+    "pass_criteria": "mask 含 `STATX__RESERVED` → EINVAL（与 Linux）。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0）"
+  },
+  "suggested_fix": "syscall 入口拒绝 `mask & STATX__RESERVED != 0`。",
+  "references": ["man 2 statx", "Linux fs/stat.c", "uapi/linux/stat.h"]
+}
