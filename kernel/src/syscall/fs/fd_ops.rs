@@ -2,7 +2,7 @@ use alloc::{format, string::ToString, sync::Arc};
 use core::ffi::{c_char, c_int};
 
 use axerrno::{AxError, AxResult};
-use axfs::{FS_CONTEXT, FileBackend, OpenOptions, OpenResult};
+use axfs::{FS_CONTEXT, FileBackend, FileFlags, OpenOptions, OpenResult};
 use axfs_ng_vfs::{DirEntry, FileNode, Location, NodePermission, NodeType, Reference};
 use axtask::current;
 use bitflags::bitflags;
@@ -11,8 +11,8 @@ use spin::RwLock;
 
 use crate::{
     file::{
-        Directory, FD_TABLE, File, FileLike, Pipe, add_file_like, add_file_like_at_least,
-        close_file_like, dirfd_for_path_resolution, get_file_like, with_fs,
+        Directory, FD_TABLE, File, FileLike, MemfdCreatedFile, Pipe, add_file_like,
+        add_file_like_at_least, close_file_like, dirfd_for_path_resolution, get_file_like, with_fs,
     },
     mm::{UserConstPtr, UserPtr, vm_load_string},
     pseudofs::{Device, dev::tty},
@@ -103,6 +103,69 @@ fn add_to_fd(result: OpenResult, flags: u32) -> AxResult<i32> {
         f.set_nonblocking(true)?;
     }
     add_file_like(f, flags & O_CLOEXEC != 0)
+}
+
+/// Linux `fcntl(F_SETFL)` flags allowed in `arg` (see `man 2 fcntl` / kernel `SETFL_MASK`).
+const F_SETFL_MASK: u32 = O_APPEND | O_NONBLOCK | O_DIRECT | O_NOATIME | FASYNC | O_DSYNC;
+
+/// Maps [`axfs::FileFlags`] to Linux `open(2)`/`fcntl(F_GETFL)` access + `O_APPEND`/`O_PATH` bits.
+fn axfs_flags_to_linux_open_bits(ff: FileFlags) -> c_int {
+    let mut ret: c_int = 0;
+    if ff.contains(FileFlags::PATH) {
+        ret |= O_PATH as c_int;
+    }
+    let read = ff.contains(FileFlags::READ);
+    let write = ff.contains(FileFlags::WRITE);
+    if ff.contains(FileFlags::APPEND) {
+        ret |= O_APPEND as c_int;
+    }
+    match (read, write) {
+        (true, false) => ret |= O_RDONLY as c_int,
+        (false, true) => ret |= O_WRONLY as c_int,
+        (true, true) => ret |= O_RDWR as c_int,
+        (false, false) => {
+            if ff.contains(FileFlags::PATH) {
+                ret |= O_RDONLY as c_int;
+            }
+        }
+    }
+    ret
+}
+
+fn f_getfl_for_file_like(f: &Arc<dyn FileLike>) -> AxResult<c_int> {
+    let mut ret: c_int = if let Some(file) = f.downcast_ref::<File>() {
+        axfs_flags_to_linux_open_bits(file.inner().flags())
+    } else if let Some(m) = f.downcast_ref::<MemfdCreatedFile>() {
+        axfs_flags_to_linux_open_bits(m.inner_file().inner().flags())
+    } else {
+        let mut r = 0;
+        let perm = NodePermission::from_bits_truncate(f.stat()?.mode as _);
+        let read = perm.contains(NodePermission::OWNER_READ);
+        let write = perm.contains(NodePermission::OWNER_WRITE);
+        match (read, write) {
+            (true, true) => r |= O_RDWR as c_int,
+            (true, false) => r |= O_RDONLY as c_int,
+            (false, true) => r |= O_WRONLY as c_int,
+            (false, false) => {}
+        }
+        r
+    };
+    if f.nonblocking() {
+        ret |= O_NONBLOCK as c_int;
+    }
+    Ok(ret)
+}
+
+fn f_setfl_rest_for_axfs_file(file: &File, rest: u32) -> AxResult<()> {
+    if rest & (O_DIRECT | O_NOATIME | FASYNC | O_DSYNC) != 0 {
+        return Err(AxError::OperationNotSupported);
+    }
+    let append = file.inner().flags().contains(FileFlags::APPEND);
+    let want_append = rest & O_APPEND != 0;
+    if want_append != append {
+        return Err(AxError::OperationNotSupported);
+    }
+    Ok(())
 }
 
 /// Open or create a file.
@@ -264,27 +327,29 @@ pub fn sys_fcntl(fd: c_int, cmd: c_int, arg: usize) -> AxResult<isize> {
             crate::file::record_lock::sys_fcntl_getlk(fd, fl)
         }
         F_SETFL => {
-            get_file_like(fd)?.set_nonblocking(arg & (O_NONBLOCK as usize) > 0)?;
+            let arg = arg as u32;
+            if arg & !F_SETFL_MASK != 0 {
+                return Err(AxError::InvalidInput);
+            }
+            let f = get_file_like(fd)?;
+            f.set_nonblocking(arg & O_NONBLOCK != 0)?;
+            let rest = arg & !O_NONBLOCK;
+            if rest == 0 {
+                return Ok(0);
+            }
+            if let Some(file) = f.downcast_ref::<File>() {
+                f_setfl_rest_for_axfs_file(file, rest)?;
+            } else if let Some(m) = f.downcast_ref::<MemfdCreatedFile>() {
+                f_setfl_rest_for_axfs_file(m.inner_file(), rest)?;
+            } else {
+                // Pipe/socket/etc.: Linux only allows `O_NONBLOCK` here (issue-252).
+                return Err(AxError::InvalidInput);
+            }
             Ok(0)
         }
         F_GETFL => {
             let f = get_file_like(fd)?;
-
-            let mut ret = 0;
-            if f.nonblocking() {
-                ret |= O_NONBLOCK;
-            }
-
-            let perm = NodePermission::from_bits_truncate(f.stat()?.mode as _);
-            if perm.contains(NodePermission::OWNER_WRITE) {
-                if perm.contains(NodePermission::OWNER_READ) {
-                    ret |= O_RDWR;
-                } else {
-                    ret |= O_WRONLY;
-                }
-            }
-
-            Ok(ret as _)
+            f_getfl_for_file_like(&f).map(|r| r as isize)
         }
         F_GETFD => {
             let cloexec = FD_TABLE

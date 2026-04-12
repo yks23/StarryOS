@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-252 resolved（**`fcntl` `F_GETFL`/`F_SETFL`**：**`File`/`Memfd`** 从 **`axfs::FileFlags`** 回 **`O_APPEND`**/**`O_PATH`** 等；**`F_SETFL`** 掩码 + **`O_APPEND`** 不可变则 **`EOPNOTSUPP`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-251 resolved（**`socketpair`**：**`AF_UNIX`+`SOCK_SEQPACKET`** 不再走 **`DgramTransport`**，与 **`socket`** 同为 **`ESOCKTNOSUPPORT`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-250 resolved（**`clock_gettime`**：**`MONOTONIC_RAW`/`BOOTTIME`** 独立分支 + 注释契约；HAL 无 NTP 频偏层、无 suspend 累计故与 **`MONOTONIC`** 同读 **`monotonic_time()`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-249 resolved（**`tkill`/`tgkill`**：**`tid==0` → `InvalidInput`（EINVAL）**，与 Linux 一致；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -253,6 +254,7 @@
 | issue-249 | tkill/tgkill tid==0 → EINVAL | resolved | 2026-04-12 |
 | issue-250 | clock_gettime RAW/BOOTTIME 分支与 Starry 时钟契约 | resolved | 2026-04-12 |
 | issue-251 | AF_UNIX SOCK_SEQPACKET socket 与 socketpair 同拒 | resolved | 2026-04-12 |
+| issue-252 | fcntl F_GETFL/F_SETFL 与 axfs 打开标志对齐 | resolved | 2026-04-12 |
 | issue-219 | waitpid __WNOTHREAD → Unsupported | resolved | 2026-04-12 |
 | issue-225 | fallocate FALLOC_FL 掩码 + 非零 EOPNOTSUPP | resolved | 2026-04-12 |
 | issue-227 | shmat 无效 shmid 不 unwrap（EINVAL） | resolved | 2026-04-12 |
@@ -458,6 +460,7 @@
 - POSIX `timer_create` / `timer_settime` / `timer_gettime` / `timer_delete`：未实现时须返回 **`AxError::Unsupported`（ENOSYS）**，禁止 `Ok(0)` 导致用户态 `timer_t` 未写入却被当作成功；若将来实现，需向 `timer_create` 第四参写入非空 id 并接 `sigevent`/线程定时逻辑。
 - `flock(2)`：按 inode（`File`/`Directory` 的 `metadata` dev/ino）维护 BSD 风格互斥/共享锁；同一 fd 升级/幂等、关闭 fd 须从全局表移除；`LOCK_NB` 冲突映射 `AxError::WouldBlock`（EAGAIN）；阻塞模式在 `WouldBlock` 上 `yield_now` 轮询。
 - `fcntl` 记录锁（`F_SETLK`/`F_SETLKW`/`F_GETLK` 及 `F_OFD_*` 同路径）：**`sys_fcntl`** 须先 **`get_file_like(fd)`** 再读/写用户 **`flock64`**（**`EBADF`** 先于 **EFAULT**，issue-136）；**`record_lock`** 内仍会 **`inode_key`/`get_file_like`**。仅对普通 **`File`** fd；**`flock64`** 区间经 SEEK_SET/CUR/END 解析；写锁与读/写冲突、读锁仅与写冲突；同进程占位前先对重叠区间解锁再插入；**`F_SETLK`** 冲突返回 **`WouldBlock`**；**`close_file_like`** 调用 **`record_lock::release_fd`** 清除该 fd 登记锁。
+- **`fcntl(2)` `F_GETFL`/`F_SETFL`**：**`F_GETFL`** 对 **`axfs::File`**/**`MemfdCreatedFile`** 从 **`inner().flags()`** 映射 **`O_RDONLY`/`O_WRONLY`/`O_RDWR`**、**`O_APPEND`**、**`O_PATH`**，并 **`| O_NONBLOCK`**（**`FileLike::nonblocking`**）；其它 **`FileLike`** 仍由 inode **`OWNER_READ`/`OWNER_WRITE`** 推断访问位（含 **`O_RDONLY`**）。**`F_SETFL`**：**`arg`** 须在 **`F_SETFL_MASK`**（**`O_APPEND|O_NONBLOCK|O_DIRECT|O_NOATIME|FASYNC|O_DSYNC`**）内否则 **`EINVAL`**；**`O_NONBLOCK`** 经 **`set_nonblocking`**；**`File`/`Memfd`** 上 **`O_APPEND`** 仅允许与打开时一致（**`axfs::File`** 标志不可变 → 否则 **`EOPNOTSUPP`**）；**`O_DIRECT`/`O_NOATIME`/`FASYNC`/`O_DSYNC`** → **`EOPNOTSUPP`**；**pipe/socket** 等除 **`O_NONBLOCK`** 外 **`EINVAL`**（issue-252）。
 - 作业控制：`ProcessData::jobctl` 记录 `stop_sig` / `stop_wait_pending` / `continued_wait_pending`；`SignalOSAction::Stop` 不再 `do_exit`，而是唤醒父 `child_exit_event` 并在内核循环中等待 `SIGCONT`（循环内调用 `check_signals` 以处理入队信号）；`Continue` 清除停止并在曾停止时置 `continued_wait_pending`；`waitpid` 对 `WUNTRACED` 或 **options==0** 写 `(sig<<8)|0x7f`，对 `WCONTINUED` 或 **options==0** 写 `0xffff`。
 - **`waitpid(2)`/`wait4(2)`**：**`options`** 须为 **`WaitOptions::from_bits`** 可解析的 **`WNOHANG|WUNTRACED|WEXITED|WCONTINUED|WNOWAIT|__WNOTHREAD|__WALL|__WCLONE`** 子集（与 **`linux_raw_sys::general`** 一致），否则 **`InvalidInput`（EINVAL）**；勿 **`from_bits_truncate`**。**`__WNOTHREAD`** 置位 → **`Unsupported`（ENOSYS）**，因未记录 fork/clone 父线程（issue-219）。**`WALL`/`WCLONE`** 与 **`ProcessData::is_clone_child`** 过滤（issue-087）。
 - **`clone3(2)`**：**`args_size`** 须 **≥ `sizeof(Clone3Args)`**（**`MIN_CLONE_ARGS_SIZE = mem::size_of::<Clone3Args>()`**，与 uapi **`struct clone_args`** 同步，issue-238）；**`size` 大于结构体**时仅读前 **`sizeof`** 字节（**issue-096**）。

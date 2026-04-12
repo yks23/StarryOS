@@ -1,0 +1,27 @@
+{
+  "id": "issue-252",
+  "title": "fcntl：`F_GETFL`/`F_SETFL` 仅处理 `O_NONBLOCK` 与读/写模式，未对齐 Linux 对 `O_APPEND` 等 `F_SETFL` 位",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`F_GETFL`：对 `axfs::File`/`MemfdCreatedFile` 从 `inner().flags()` 映射 `O_RDONLY`/`O_WRONLY`/`O_RDWR`、`O_APPEND`、`O_PATH`，并合并 `O_NONBLOCK`；其它 fd 仍由 inode 权限推断读写（并补全 `O_RDONLY`）。`F_SETFL`：`arg` 须在 `F_SETFL_MASK` 内否则 `EINVAL`；`O_NONBLOCK` 经 `set_nonblocking`；`File`/`Memfd` 上 `O_APPEND` 仅允许与打开时一致（否则 `EOPNOTSUPP`，因 `axfs::File` 标志不可变）；`O_DIRECT`/`O_NOATIME`/`FASYNC`/`O_DSYNC` → `EOPNOTSUPP`；pipe/socket 等仅允许 `O_NONBLOCK`（其余位 `EINVAL`）。",
+  "files_changed": ["kernel/src/syscall/fs/fd_ops.rs"],
+  "description": "**`kernel/src/syscall/fs/fd_ops.rs`** **`sys_fcntl`**（约 **243–319** 行）：**`F_SETFL`** 分支仅 **`get_file_like(fd)?.set_nonblocking(arg & O_NONBLOCK != 0)`**，**未** 解析 **`O_APPEND`**、**`O_ASYNC`**、**`O_DIRECT`**、**`O_NOATIME`** 等 **Linux `F_SETFL`** 允许设置的标志（见 **`man 2 fcntl`** **`F_SETFL`**）。**`F_GETFL`** 仅组合 **`O_NONBLOCK`** 与由 **`stat().mode`** 推断的 **`O_RDONLY`/`O_WRONLY`/`O_RDWR`**，**未** 从 **`File`/`OpenOptions`** 已打开标志中回传 **`O_APPEND`** 等。\n\n**Linux**：**`fcntl(F_GETFL)`** 返回与 **`open(2)`**/**`F_SETFL`** 一致的 **`O_*`**；依赖 **`F_GETFL` & O_APPEND** 判断是否追加打开的程序会得到**与 Linux 不一致**的结果。\n\n**建议**：在 **`FileLike`**/**`axfs::File`** 层持久化 **`FileFlags`/打开标志**；**`F_SETFL`** 对已知子集 **`EINVAL`/`EOPNOTSUPP`** 分路径；**`F_GETFL`** 与 **`open`** 语义对齐。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["fcntl"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/fd_ops.rs:266-288"],
+    "related_files": ["kernel/src/file/fs.rs"],
+    "key_insight": "F_SETFL 仅 nonblocking；F_GETFL 无 APPEND"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；`open(..., O_APPEND)` 后 `fcntl(F_GETFL)` 与 Linux 对照。",
+    "expected_output_contains": "",
+    "pass_criteria": "`F_GETFL`/`F_SETFL` 与 Linux 标志子集一致或文档化。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0）"
+  },
+  "suggested_fix": "在 fd 元数据中保存/更新 `O_APPEND` 等；`F_GETFL` 返回完整标志。",
+  "references": ["man 2 fcntl", "Linux fs/fcntl.c"]
+}
