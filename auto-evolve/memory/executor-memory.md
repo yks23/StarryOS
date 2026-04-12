@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-269 resolved（**`sendto`/`sendmsg`**：**`SENDMSG_FLAGS_MASK`** 不再含 **`MSG_ERRQUEUE`**（**`recv`/错误队列**，**`send`** 与 Linux **`EINVAL`**）；**`net/io.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-268 resolved（**`munmap`**：**`addr`** 须 **`is_aligned_4k()`**，否则 **`InvalidInput`（EINVAL）**；**`mmap.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-267 resolved（**`msync`**：**`addr`** 须 **`is_aligned_4k()`**，否则 **`InvalidInput`（EINVAL）**；**`mmap.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-266 resolved（**`sendto`/`sendmsg`**：**`SENDMSG_FLAGS_MASK`** 不再含 **`MSG_WAITALL`**/**`MSG_TRUNC`**（仅 **`recv`** 语义，**`send`** 与 Linux 一致 **`EINVAL`**）；**`net/io.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -287,6 +288,7 @@
 | issue-266 | send 掩码剔除 MSG_WAITALL/TRUNC（recv-only） | resolved | 2026-04-12 |
 | issue-267 | msync addr 须页对齐 EINVAL | resolved | 2026-04-12 |
 | issue-268 | munmap addr 须页对齐 EINVAL | resolved | 2026-04-12 |
+| issue-269 | send 掩码剔除 MSG_ERRQUEUE（recv/errqueue） | resolved | 2026-04-12 |
 | issue-219 | waitpid __WNOTHREAD → Unsupported | resolved | 2026-04-12 |
 | issue-225 | fallocate FALLOC_FL 掩码 + 非零 EOPNOTSUPP | resolved | 2026-04-12 |
 | issue-227 | shmat 无效 shmid 不 unwrap（EINVAL） | resolved | 2026-04-12 |
@@ -533,7 +535,7 @@
 - **`pwrite64(2)`**：**`offset < 0` → `InvalidInput`**（issue-108）；**`len == 0`** 仍须先 **`File::from_fd`** 再 **`Ok(0)`**，勿在 **`from_fd`** 前早退，以便无效 fd 得 **EBADF**（issue-125，对齐 Linux **`vfs_write`/`fget`**）。
 - **`preadv2(2)` / `pwritev2(2)`**：**`flags`**（**`RWF_*`**）须为 **`linux_raw_sys::general`** 中 **`RWF_HIPRI|DSYNC|SYNC|NOWAIT|APPEND`** 子集，否则 **`InvalidInput`**（**EINVAL**）；**`flags!=0`** → **`OperationNotSupported`**（**EOPNOTSUPP**），直至实现对应 **`RWF_*`** 语义（issue-248）。**`preadv`/`pwritev`** 经 **`flags=0`** 调用 **v2**。
 - **`truncate(2)`**：**`length < 0` → `InvalidInput`** 须先于 **`path.get_as_str()`**，以便坏 **`path`** 与负长度组合时优先 **EINVAL**（issue-126，与 **`ftruncate`** 及 Linux **`do_truncate`** 一致）。
-- **`recvmsg`/`recvfrom`/`sendmsg`/`sendto`**：**`flags`** 须在 **`linux_raw_sys::net::MSG_*`** 定义的 **接收** 与 **发送** 掩码内（**`RECVMSG_FLAGS_MASK`** 含 **`MSG_PEEK`**/**`MSG_WAITALL`**/**`MSG_TRUNC`** 等；**`SENDMSG_FLAGS_MASK`** 不含 **`MSG_PEEK`**/**`MSG_WAITALL`**/**`MSG_TRUNC`**（issue-266）），否则 **`EINVAL`**。**`axnet::SendFlags`** 仍为占位 **`bitflags!`**，合法 **`MSG_*`** 尚未全量透传到 **`SendOptions.flags`**；**`MSG_DONTWAIT`** 等语义需在 **`axnet-ng`** 扩展 **`SendFlags`** 并在各 **`SocketOps::send`/`recv`** 中实现。
+- **`recvmsg`/`recvfrom`/`sendmsg`/`sendto`**：**`flags`** 须在 **`linux_raw_sys::net::MSG_*`** 定义的 **接收** 与 **发送** 掩码内（**`RECVMSG_FLAGS_MASK`** 含 **`MSG_PEEK`**/**`MSG_WAITALL`**/**`MSG_TRUNC`**/**`MSG_ERRQUEUE`** 等；**`SENDMSG_FLAGS_MASK`** 不含 **`MSG_PEEK`**/**`MSG_WAITALL`**/**`MSG_TRUNC`**/**`MSG_ERRQUEUE`**（issue-266 / issue-269）），否则 **`EINVAL`**。**`axnet::SendFlags`** 仍为占位 **`bitflags!`**，合法 **`MSG_*`** 尚未全量透传到 **`SendOptions.flags`**；**`MSG_DONTWAIT`** 等语义需在 **`axnet-ng`** 扩展 **`SendFlags`** 并在各 **`SocketOps::send`/`recv`** 中实现。
 - **`times(2)`**：**`tms_*`** 为 **`clock_t` jiffies**（**`USER_HZ = 100`**，**`ns * USER_HZ / 1e9`**）；返回值亦为单调时钟 jiffies（issue-224）。**`tms_utime`/`tms_stime`** 来源：线程组用户/系统时间（已退出线程计入 **`exited_threads_*_ns`**，存活线程取 **`TimeManager::cpu_nanos`**）；**`tms_cutime`/`tms_cstime`** = 已通过 **`wait`** 回收的子进程线程组 CPU 累计（**`waitpid`** 从僵尸 **`ProcessData`** 读 **`thread_group_cpu_nanos`** 后加到父 **`child_*_ns`**）。末线程退出时 **`register_zombie_process_data`**，**`wait`** **`free`** 后 **`remove_zombie_process_data`**。
 - **`Socket`/`fstat`**：每个 **`Socket::new`** 分配单调 **`sock_ino`**（**`AtomicU64`**）与固定 **`SOCKFS_STAT_DEV`**；**`FileLike::stat`** 填 **`Kstat::dev`/`ino`**；**`path`** 为 **`socket:[ino]`**，与 **`st_ino`** 一致。
 - **`get_mempolicy(2)`**：无 NUMA 建模时 **`policy`** 写入 **`MPOL_DEFAULT`（0）**；若 **`nodemask`/`maxnode`** 有效则清零 **`maxnode`** 位对应字节（上限 8192 字节）以匹配 **默认** 策略的空节点掩码。

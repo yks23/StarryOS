@@ -28,7 +28,8 @@ const RECVMSG_FLAGS_UNSUPPORTED: u32 =
     MSG_OOB | MSG_DONTROUTE | MSG_ERRQUEUE | MSG_CMSG_CLOEXEC;
 
 /// Linux `sendmsg(2)` / `sendto(2)` flags：与 `recv` 掩码不同（不含 **`MSG_PEEK`** / **`MSG_WAITALL`** /
-/// **`MSG_TRUNC`** 等仅接收语义位；`send` 携带时内核通常 **`EINVAL`**，issue-266）。
+/// **`MSG_TRUNC`** / **`MSG_ERRQUEUE`** 等仅接收或错误队列语义位；`send` 携带时内核通常 **`EINVAL`**，
+/// issue-266 / issue-269）。
 const SENDMSG_FLAGS_MASK: u32 = MSG_OOB
     | MSG_DONTROUTE
     | MSG_PROBE
@@ -38,7 +39,6 @@ const SENDMSG_FLAGS_MASK: u32 = MSG_OOB
     | MSG_SYN
     | MSG_CONFIRM
     | MSG_RST
-    | MSG_ERRQUEUE
     | MSG_NOSIGNAL
     | MSG_MORE
     | MSG_CMSG_CLOEXEC;
