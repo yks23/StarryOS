@@ -1,5 +1,8 @@
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
-use core::task::Context;
+use core::{
+    sync::atomic::{AtomicBool, Ordering},
+    task::Context,
+};
 
 use async_channel::TryRecvError;
 use async_trait::async_trait;
@@ -49,6 +52,7 @@ pub struct DgramTransport {
     poll_state: Arc<PollSet>,
     general: GeneralOptions,
     pid: u32,
+    pass_cred: AtomicBool,
 }
 impl DgramTransport {
     /// Create a new unconnected datagram transport.
@@ -60,6 +64,7 @@ impl DgramTransport {
             poll_state: Arc::default(),
             general: GeneralOptions::default(),
             pid,
+            pass_cred: AtomicBool::new(false),
         }
     }
 
@@ -75,6 +80,7 @@ impl DgramTransport {
             poll_state: Arc::default(),
             general: GeneralOptions::default(),
             pid,
+            pass_cred: AtomicBool::new(false),
         }
     }
 
@@ -113,7 +119,9 @@ impl Configurable for DgramTransport {
         }
 
         match opt {
-            O::PassCredentials(_) => {}
+            O::PassCredentials(out) => {
+                **out = self.pass_cred.load(Ordering::Relaxed);
+            }
             O::PeerCredentials(cred) => {
                 // Datagram sockets are stateless and do not have a peer, so we
                 // return the credentials of the process that created the
@@ -133,7 +141,9 @@ impl Configurable for DgramTransport {
         }
 
         match opt {
-            O::PassCredentials(_) => {}
+            O::PassCredentials(v) => {
+                self.pass_cred.store(*v, Ordering::Relaxed);
+            }
             _ => return Ok(false),
         }
         Ok(true)

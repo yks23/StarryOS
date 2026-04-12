@@ -93,6 +93,8 @@ pub struct StreamTransport {
     pid: u32,
     rx_closed: AtomicBool,
     tx_closed: AtomicBool,
+    /// `SOL_SOCKET` / `SO_PASSCRED`: request `SCM_CREDENTIALS` on received messages (Linux `unix(7)`).
+    pass_cred: AtomicBool,
 }
 impl StreamTransport {
     /// Create a new unconnected stream transport.
@@ -109,6 +111,7 @@ impl StreamTransport {
             pid,
             rx_closed: AtomicBool::new(false),
             tx_closed: AtomicBool::new(false),
+            pass_cred: AtomicBool::new(false),
         }
     }
 
@@ -133,7 +136,9 @@ impl Configurable for StreamTransport {
             O::SendBuffer(size) => {
                 **size = BUF_SIZE;
             }
-            O::PassCredentials(_) => {}
+            O::PassCredentials(out) => {
+                **out = self.pass_cred.load(Ordering::Relaxed);
+            }
             O::PeerCredentials(cred) => {
                 let peer_pid = self
                     .channel
@@ -155,7 +160,9 @@ impl Configurable for StreamTransport {
         }
 
         match opt {
-            O::PassCredentials(_) => {}
+            O::PassCredentials(v) => {
+                self.pass_cred.store(*v, Ordering::Relaxed);
+            }
             _ => return Ok(false),
         }
         Ok(true)
@@ -209,10 +216,12 @@ impl TransportOps for StreamTransport {
             addr: peer_addr,
             pid,
         } = rx.recv().await.map_err(|_| AxError::ConnectionReset)?;
-        Ok((
-            Transport::Stream(StreamTransport::new_channel(Some(channel), pid)),
-            peer_addr,
-        ))
+        let pass_cred = self.pass_cred.load(Ordering::Relaxed);
+        let accepted = StreamTransport::new_channel(Some(channel), pid);
+        accepted
+            .pass_cred
+            .store(pass_cred, Ordering::Relaxed);
+        Ok((Transport::Stream(accepted), peer_addr))
     }
 
     fn send(&self, mut src: impl Read + IoBuf, options: SendOptions) -> AxResult<usize> {
