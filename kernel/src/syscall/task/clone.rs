@@ -9,12 +9,12 @@ use kspin::SpinNoIrq;
 use linux_raw_sys::general::*;
 use memory_addr::VirtAddr;
 use starry_process::Pid;
-use starry_signal::Signo;
 use starry_vm::VmMutPtr;
 
 use crate::{
     file::{FD_TABLE, FileLike, PidFd, close_file_like},
     mm::copy_from_kernel,
+    syscall::signal::parse_signo_u64,
     task::{AsThread, ProcessData, Thread, add_task_to_table, new_user_task},
 };
 
@@ -155,10 +155,10 @@ impl CloneArgs {
             flags, exit_signal, stack, tls
         );
 
-        let exit_signal = if exit_signal > 0 {
-            Some(Signo::from_repr(exit_signal as u8).ok_or(AxError::InvalidInput)?)
-        } else {
+        let exit_signal = if exit_signal == 0 {
             None
+        } else {
+            Some(parse_signo_u64(exit_signal)?)
         };
 
         let mut new_uctx = *uctx;

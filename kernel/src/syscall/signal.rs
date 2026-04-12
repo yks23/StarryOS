@@ -152,7 +152,7 @@ pub(crate) fn check_sigset_size(size: usize) -> AxResult<()> {
     Ok(())
 }
 
-fn parse_signo(signo: u32) -> AxResult<Signo> {
+pub(crate) fn parse_signo(signo: u32) -> AxResult<Signo> {
     // Linux `kill`/`do_sigaction`: no silent truncation (`257` must not become SIGHUP), and
     // `signo` must be in `1..=SIGRTMAX` (uAPI; `SIGRTMAX` matches target `linux_raw_sys::general`).
     // issue-414.
@@ -163,6 +163,11 @@ fn parse_signo(signo: u32) -> AxResult<Signo> {
         return Err(AxError::InvalidInput);
     }
     Signo::from_repr(signo as u8).ok_or(AxError::InvalidInput)
+}
+
+/// `clone`/`clone3` `exit_signal` is `u64`; reject `> u32::MAX` and reuse [`parse_signo`] (issue-415; issue-414).
+pub(crate) fn parse_signo_u64(signo: u64) -> AxResult<Signo> {
+    parse_signo(u32::try_from(signo).map_err(|_| AxError::InvalidInput)?)
 }
 
 pub fn sys_rt_sigprocmask(
