@@ -334,10 +334,15 @@ pub fn sys_mprotect(addr: usize, length: usize, prot: u32) -> AxResult<isize> {
         return Err(AxError::InvalidInput);
     }
 
+    let start_addr = VirtAddr::from(addr);
+    // Linux/POSIX: `addr` must be page-aligned (issue-270).
+    if !start_addr.is_aligned_4k() {
+        return Err(AxError::InvalidInput);
+    }
+
     let curr = current();
     let mut aspace = curr.as_thread().proc_data.aspace.write();
     let length = align_up_4k(length);
-    let start_addr = VirtAddr::from(addr);
     aspace.protect(start_addr, length, permission_flags.into())?;
 
     Ok(0)
@@ -427,8 +432,12 @@ const KNOWN_MADV_ADVICE: &[u32] = &[
 
 pub fn sys_madvise(addr: usize, length: usize, advice: i32) -> AxResult<isize> {
     debug!("sys_madvise <= addr: {addr:#x}, length: {length:x}, advice: {advice:#x}");
-    let length = align_up_4k(length);
     let start = VirtAddr::from(addr);
+    // Linux/POSIX: `addr` must be page-aligned (issue-270).
+    if !start.is_aligned_4k() {
+        return Err(AxError::InvalidInput);
+    }
+    let length = align_up_4k(length);
 
     let a = advice as u32;
     if !KNOWN_MADV_ADVICE.contains(&a) {

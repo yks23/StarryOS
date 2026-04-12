@@ -1,0 +1,27 @@
+{
+  "id": "issue-270",
+  "title": "mprotect/madvise：`addr` 未校验页对齐，Linux/POSIX 在地址未对齐时返回 EINVAL",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_mprotect` 与 `sys_madvise` 在操作 `aspace` 前增加 `VirtAddr::from(addr).is_aligned_4k()`，未对齐 → `InvalidInput`（EINVAL），与 `sys_msync`/`sys_munmap`（issue-267/268）及 Linux/POSIX 一致。",
+  "files_changed": ["kernel/src/syscall/mm/mmap.rs"],
+  "description": "**`kernel/src/syscall/mm/mmap.rs`** 在同文件 **`sys_munmap`**/**`sys_msync`** 已按 **issue-268 / issue-267** 增加 **`VirtAddr::from(addr).is_aligned_4k()`** 校验后，**`sys_mprotect`**（约 **322–343** 行）与 **`sys_madvise`**（约 **428–458** 行）仍以 **`VirtAddr::from(addr)`** 直接操作 **`aspace.protect`** / **`madvise_dontneed`** / **`populate_area`**，**未** 在入口拒绝 **非页对齐** **`addr`**。\n\n**Linux `mprotect(2)` / `madvise(2)`**：**`addr`** **必须** **与** **页边界对齐**（**POSIX** 亦规定），否则 **`errno`** 为 **`EINVAL`**。\n\n**当前**：**`mprotect(0x1001, …)`** 或 **`madvise(0x1001, …, MADV_*)`** 可能与 **Linux** **`EINVAL`** **分叉**（取决于 **`AddrSpace`** 内部是否隐式容忍）。\n\n**建议**：在 **`sys_mprotect`** 与 **`sys_madvise`** 开头复用与 **`sys_msync`** 相同的 **`!VirtAddr::from(addr).is_aligned_4k()` → `InvalidInput`**；或抽取 **`fn require_page_aligned_addr(addr: usize) -> AxResult<VirtAddr>`** 供 **mmap 系** syscall 共用。\n\n**注意**：**`length`** 在 **Linux** 上常 **向上取整到页**；**`mprotect`** 已 **`align_up_4k(length)`**，与 **`addr`** 校验 **独立**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["mprotect", "madvise"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/mm/mmap.rs:322-343", "kernel/src/syscall/mm/mmap.rs:428-458"],
+    "related_files": ["kernel/src/syscall/mm/mmap.rs:461-492"],
+    "key_insight": "mprotect/madvise 缺页对齐，与 msync/munmap 不一致"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；未对齐 `addr` 调用 `mprotect`/`madvise` 与 Linux 对照。",
+    "expected_output_contains": "",
+    "pass_criteria": "未对齐 addr → EINVAL，或与 Linux 一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "与 `sys_msync` 相同：`if !VirtAddr::from(addr).is_aligned_4k() { return Err(InvalidInput); }`。",
+  "references": ["man 2 mprotect", "man 2 madvise", "kernel/src/syscall/mm/mmap.rs"]
+}
