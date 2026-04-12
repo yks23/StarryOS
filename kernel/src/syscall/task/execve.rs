@@ -53,7 +53,7 @@ pub fn sys_execve(
         return Err(AxError::WouldBlock);
     }
 
-    let mut aspace = proc_data.aspace.lock();
+    let mut aspace = proc_data.aspace.write();
     let (entry_point, user_stack_base) =
         load_user_app(&mut aspace, Some(path.as_str()), &args, &envs)?;
     drop(aspace);

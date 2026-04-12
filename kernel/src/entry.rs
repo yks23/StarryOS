@@ -5,8 +5,8 @@ use alloc::{
 
 use axfs::FS_CONTEXT;
 use axhal::uspace::UserContext;
-use axsync::Mutex;
 use axtask::{AxTaskExt, spawn_task};
+use spin::RwLock;
 use starry_process::{Pid, Process};
 
 use crate::{
@@ -54,7 +54,7 @@ pub fn init(args: &[String], envs: &[String]) {
         proc,
         path.to_string(),
         Arc::new(args.to_vec()),
-        Arc::new(Mutex::new(uspace)),
+        Arc::new(RwLock::new(uspace)),
         Arc::default(),
         None,
     );

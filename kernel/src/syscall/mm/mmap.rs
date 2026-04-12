@@ -100,7 +100,7 @@ pub fn sys_mmap(
     }
 
     let curr = current();
-    let mut aspace = curr.as_thread().proc_data.aspace.lock();
+    let mut aspace = curr.as_thread().proc_data.aspace.write();
     let permission_flags = MmapProt::from_bits_truncate(prot);
     // TODO: check illegal flags for mmap
     let map_flags = match MmapFlags::from_bits(flags) {
@@ -252,7 +252,7 @@ pub fn sys_mmap(
 pub fn sys_munmap(addr: usize, length: usize) -> AxResult<isize> {
     debug!("sys_munmap <= addr: {addr:#x}, length: {length:x}");
     let curr = current();
-    let mut aspace = curr.as_thread().proc_data.aspace.lock();
+    let mut aspace = curr.as_thread().proc_data.aspace.write();
     let length = align_up_4k(length);
     let start_addr = VirtAddr::from(addr);
     aspace.unmap(start_addr, length)?;
@@ -271,7 +271,7 @@ pub fn sys_mprotect(addr: usize, length: usize, prot: u32) -> AxResult<isize> {
     }
 
     let curr = current();
-    let mut aspace = curr.as_thread().proc_data.aspace.lock();
+    let mut aspace = curr.as_thread().proc_data.aspace.write();
     let length = align_up_4k(length);
     let start_addr = VirtAddr::from(addr);
     aspace.protect(start_addr, length, permission_flags.into())?;
@@ -293,7 +293,7 @@ pub fn sys_mremap(addr: usize, old_size: usize, new_size: usize, flags: u32) -> 
     let addr = VirtAddr::from(addr);
 
     let curr = current();
-    let aspace = curr.as_thread().proc_data.aspace.lock();
+    let aspace = curr.as_thread().proc_data.aspace.read();
     let old_size = align_up_4k(old_size);
     let new_size = align_up_4k(new_size);
 

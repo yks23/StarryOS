@@ -7,10 +7,10 @@ use axhal::{
     mem::{phys_to_virt, virt_to_phys},
     paging::{MappingFlags, PageSize, PageTable, PageTableCursor},
 };
-use axsync::Mutex;
 use enum_dispatch::enum_dispatch;
 use memory_addr::{DynPageIter, PAGE_SIZE_4K, PhysAddr, VirtAddr, VirtAddrRange};
 use memory_set::MappingBackend;
+use spin::RwLock;
 
 mod cow;
 mod file;
@@ -99,7 +99,7 @@ pub trait BackendOps {
         flags: MappingFlags,
         old_pt: &mut PageTableCursor,
         new_pt: &mut PageTableCursor,
-        new_aspace: &Arc<Mutex<AddrSpace>>,
+        new_aspace: &Arc<RwLock<AddrSpace>>,
     ) -> AxResult<Backend>;
 }
 

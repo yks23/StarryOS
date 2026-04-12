@@ -209,7 +209,7 @@ pub struct ProcessData {
     pub cmdline: RwLock<Arc<Vec<String>>>,
     /// The virtual memory address space.
     // TODO: scopify
-    pub aspace: Arc<Mutex<AddrSpace>>,
+    pub aspace: Arc<RwLock<AddrSpace>>,
     /// The resource scope
     pub scope: RwLock<Scope>,
     /// The user heap top
@@ -244,7 +244,7 @@ impl ProcessData {
         proc: Arc<Process>,
         exe_path: String,
         cmdline: Arc<Vec<String>>,
-        aspace: Arc<Mutex<AddrSpace>>,
+        aspace: Arc<RwLock<AddrSpace>>,
         signal_actions: Arc<SpinNoIrq<SignalActions>>,
         exit_signal: Option<Signo>,
     ) -> Arc<Self> {

@@ -7,9 +7,9 @@ use axhal::{
     mem::phys_to_virt,
     paging::{MappingFlags, PageSize, PageTableCursor, PagingError},
 };
-use axsync::Mutex;
 use kspin::SpinNoIrq;
 use memory_addr::{PhysAddr, VirtAddr, VirtAddrRange};
+use spin::RwLock;
 
 use super::{
     AddrSpace, Backend, BackendOps, PopulateCallback, alloc_frame, dealloc_frame, pages_in,
@@ -229,7 +229,7 @@ impl BackendOps for CowBackend {
         flags: MappingFlags,
         old_pt: &mut PageTableCursor,
         new_pt: &mut PageTableCursor,
-        _new_aspace: &Arc<Mutex<AddrSpace>>,
+        _new_aspace: &Arc<RwLock<AddrSpace>>,
     ) -> AxResult<Backend> {
         let cow_flags = flags - MappingFlags::WRITE;
 

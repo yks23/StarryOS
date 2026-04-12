@@ -188,7 +188,7 @@ impl CloneArgs {
         let new_proc_data = if flags.contains(CloneFlags::THREAD) {
             new_task
                 .ctx_mut()
-                .set_page_table_root(old_proc_data.aspace.lock().page_table_root());
+                .set_page_table_root(old_proc_data.aspace.read().page_table_root());
             old_proc_data.clone()
         } else {
             let proc = if flags.contains(CloneFlags::PARENT) {
@@ -201,14 +201,18 @@ impl CloneArgs {
             let aspace = if flags.contains(CloneFlags::VM) {
                 old_proc_data.aspace.clone()
             } else {
-                let mut aspace = old_proc_data.aspace.lock();
-                let aspace = aspace.try_clone()?;
-                copy_from_kernel(&mut aspace.lock())?;
-                aspace
+                let mut old_guard = old_proc_data.aspace.write();
+                let new_aspace = old_guard.try_clone()?;
+                drop(old_guard);
+                {
+                    let mut g = new_aspace.write();
+                    copy_from_kernel(&mut g)?;
+                }
+                new_aspace
             };
             new_task
                 .ctx_mut()
-                .set_page_table_root(aspace.lock().page_table_root());
+                .set_page_table_root(aspace.read().page_table_root());
 
             let signal_actions = if flags.contains(CloneFlags::SIGHAND) {
                 old_proc_data.signal.actions.clone()

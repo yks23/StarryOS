@@ -7,11 +7,11 @@ use axhal::{
     paging::{MappingFlags, PageTable},
     trap::PageFaultFlags,
 };
-use axsync::Mutex;
 use memory_addr::{
     MemoryAddr, PAGE_SIZE_4K, PageIter4K, PhysAddr, VirtAddr, VirtAddrRange, is_aligned_4k,
 };
 use memory_set::{MemoryArea, MemorySet};
+use spin::RwLock;
 
 mod backend;
 
@@ -345,11 +345,11 @@ impl AddrSpace {
     /// This method creates a new empty address space with the same base and
     /// size, then iterates over all memory areas in the original address
     /// space to copy or share their mappings into the new one.
-    pub fn try_clone(&mut self) -> AxResult<Arc<Mutex<Self>>> {
-        let new_aspace = Arc::new(Mutex::new(Self::new_empty(self.base(), self.size())?));
+    pub fn try_clone(&mut self) -> AxResult<Arc<RwLock<Self>>> {
+        let new_aspace = Arc::new(RwLock::new(Self::new_empty(self.base(), self.size())?));
         let new_aspace_clone = new_aspace.clone();
 
-        let mut guard = new_aspace.lock();
+        let mut guard = new_aspace.write();
 
         let mut self_modify = self.pt.cursor();
         for area in self.areas.iter() {
