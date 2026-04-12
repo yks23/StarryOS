@@ -420,8 +420,10 @@ pub fn sys_rt_sigtimedwait(
         return Err(AxError::WouldBlock);
     };
     let Some(sig) = sig else {
-        // Interrupted
-        return Ok(0);
+        // `check_signals` fired without dequeuing a signal in `set` (e.g. non-waitset delivery path).
+        // Linux returns -1 with errno EINTR; do not claim success with signo 0 (issue-366).
+        signal.set_blocked(old_blocked);
+        return Err(AxError::Interrupted);
     };
 
     if let Some(info) = info.nullable() {
