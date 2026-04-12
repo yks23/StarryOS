@@ -13,7 +13,7 @@ use starry_process::Pid;
 
 use super::{IPC_PRIVATE, IPC_RMID, IPC_SET, IPC_STAT, IpcPerm, next_ipc_id};
 use crate::{
-    mm::{AddrSpace, Backend, SharedPages, UserPtr, nullable},
+    mm::{AddrSpace, Backend, SharedPages, UserPtr},
     task::AsThread,
 };
 
@@ -544,9 +544,8 @@ pub fn sys_shmctl(shmid: i32, cmd: u32, buf: UserPtr<ShmidDs>) -> AxResult<isize
     if cmd == IPC_SET {
         shm_inner.shmid_ds = *buf.get_as_mut()?;
     } else if cmd == IPC_STAT {
-        if let Some(shmid_ds) = nullable!(buf.get_as_mut())? {
-            *shmid_ds = shm_inner.shmid_ds;
-        }
+        // Linux shmctl(IPC_STAT): buf must point to writable shmid_ds; NULL → EFAULT (issue-152).
+        *buf.get_as_mut()? = shm_inner.shmid_ds;
     } else if cmd == IPC_RMID {
         shm_inner.rmid = true;
     } else {
