@@ -1,0 +1,27 @@
+{
+  "id": "issue-142",
+  "title": "sched_setaffinity 先 vm_load(user_mask) 再 sched_resolve_task(pid)，ESRCH 与 EFAULT 顺序可偏离 Linux",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_sched_setaffinity` 先 `sched_resolve_task(pid)` 再 `vm_load(user_mask)`，无效 pid 先 `ESRCH`（NoSuchProcess）于掩码 `EFAULT`。同文件 `sys_sched_setscheduler` 同步为先解析任务再 `vm_read_uninit(param)`（`param==NULL` 仍先 `EINVAL`）。",
+  "files_changed": ["kernel/src/syscall/task/schedule.rs"],
+  "description": "**`sys_sched_setaffinity`**（`kernel/src/syscall/task/schedule.rs`）先按 **`cpusetsize`** 截断后 **`vm_load(user_mask, size)?`** 读入亲和掩码，再 **`sched_resolve_task(pid)?`** 解析目标任务。**Linux **`sched_setaffinity`** 通常在 **`find_process_by_pid`**/**`security_task_setscheduler`** 等路径上先解析 **`pid`**（无效则 **`ESRCH`**），再 **`copy_from_user`** 掩码。当 **`pid`** 无效且 **`user_mask`** 指向不可读内存时：**Starry** 可能先 **`EFAULT`类**；**Linux** 多先 **`ESRCH`**。同文件 **`sys_sched_setscheduler`** 亦在 **`sched_resolve_task`** 之前 **`vm_read_uninit`** **`param`**，同类 **`EINVAL`/`EFAULT`** 与 **`ESRCH`** 次序问题可一并审视。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["sched_setaffinity", "sched_setscheduler"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/schedule.rs:178-189"],
+    "related_files": ["kernel/src/syscall/task/schedule.rs:210-218"],
+    "key_insight": "用户 CPU 掩码拷贝早于 pid→task 解析"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "无效 **`pid`**（无对应任务）+ 坏 **`user_mask`** 指针或 **`cpusetsize`** 与映射不匹配；对比 **Linux** 与 **Starry** 首错 **`ESRCH`** vs **`EFAULT`**。",
+    "expected_output_contains": "",
+    "pass_criteria": "**`pid`** 解析不晚于首次访问 **`user_mask`**，或文档化当前顺序。",
+    "last_result": "`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` 通过（2026-04-12）。"
+  },
+  "suggested_fix": "先 **`sched_resolve_task(pid)?`**（及 **`cpusetsize`** 下限等与 **Linux** 一致的校验），再 **`vm_load`**/**`copy_from_user`** 掩码并应用。",
+  "references": ["man 2 sched_setaffinity", "Linux kernel sched_setaffinity"]
+}

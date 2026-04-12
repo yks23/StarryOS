@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-142 resolved（**`sched_setaffinity`**/**`sched_setscheduler`**：**`sched_resolve_task(pid)`** 先于 **`vm_load`**/**`vm_read_uninit(param)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-141 resolved（**`prlimit64`**：内核内快照 **`old`** →读/校验/应用 **`new_limit`** → 再 **`vm_write(old_limit)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-140 resolved（**`readlink`**/**`readlinkat`**：**`bufsiz==0`** → **`InvalidInput`**（**EINVAL**），在 **`vm_load_string(path)`** 与 VFS 解析前；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-139 resolved（**`fchownat`**/**`fchmodat`**：**`VALID_FCHOWNAT_FLAGS`**/**`VALID_FCHMODAT_FLAGS`** 先于 **`vm_load_string(path)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -122,6 +123,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-142 | sched_setaffinity pid 解析先于 user_mask | resolved | 2026-04-12 |
 | issue-141 | prlimit64 old 出参晚于 new 读/校验 | resolved | 2026-04-12 |
 | issue-140 | readlinkat bufsiz==0 → EINVAL | resolved | 2026-04-12 |
 | issue-139 | fchownat/fchmodat flags 先于 vm_load_string | resolved | 2026-04-12 |
@@ -316,7 +318,8 @@
 - **`recvmsg(2)`**：**`validate_recvmsg_flags`**（**`RECVMSG_FLAGS_MASK`** + **`RECVMSG_FLAGS_UNSUPPORTED`**）→ **`Socket::from_fd`** → **`msghdr.get_as_mut`** / **`IoVectorBuf::new`** → **`recv_on_socket`**，与 **`__sys_recvmsg`** 及 issue-134 **`sendmsg`** 对称（issue-135）。**`recvfrom`** 仍走 **`recv_impl`**（相同校验 + **`recv_on_socket`**）。
 - **`bind`/`connect`/`sendto` 等 INET 地址**：**`SocketAddrV4`/`SocketAddrV6::read_from_user`** 要求 **`addrlen >= sizeof(sockaddr_in|sockaddr_in6)`**，只按固定布局读 **`sockaddr_in`/`sockaddr_in6`**；**`addrlen` 大于结构体**时与 Linux 一样忽略尾部字节。**vsock** **`sockaddr_vm`** 同理。
 - **`sendmsg` / `recvmsg` 与 ancillary**：控制缓冲区须与 Linux 一致使用 **`CMSG_ALIGN(sizeof(cmsghdr)+payload)`** 作为**占用步长**；**`cmsg_len`** 仍为含头的逻辑长度。遍历下一条头用 **`ptr += CMSG_ALIGN(cmsg_len)`**；**`CMsgBuilder::push`** 在 **`msg_controllen`** 与下一 **`cmsghdr`** 指针上前移对齐后长度，**`cmsg_len` 至对齐边界**建议填 **0**。**`CMsg::parse`（`sendmsg`）** 仅实现 **`(SOL_SOCKET, SCM_RIGHTS)`**；**`SCM_CREDENTIALS`/`SCM_TIMESTAMP`/`SCM_TIMESTAMPNS`/`SCM_TIMESTAMPING`/`SCM_SECURITY`** → **`Unsupported`**，勿与格式错误混用 **`EINVAL`**。
-- **`sched_getaffinity` / `sched_setaffinity`**：`pid==0` 为当前任务；非零先 **`get_task(pid)`**，失败再 **`get_process_data(pid)`** 取 **`proc.threads()` 最小 tid** 定位线程组代表线程。set 时当前任务走 **`set_current_affinity`**（SMP 迁移），其它任务仅 **`set_cpumask`**。未完整建模 CAP、僵尸 **`ESRCH`** 等。
+- **`sched_getaffinity` / `sched_setaffinity`**：`pid==0` 为当前任务；非零先 **`get_task(pid)`**，失败再 **`get_process_data(pid)`** 取 **`proc.threads()` 最小 tid** 定位线程组代表线程。set 时当前任务走 **`set_current_affinity`**（SMP 迁移），其它任务仅 **`set_cpumask`**。**`sched_setaffinity`** 须先 **`sched_resolve_task`**（**`ESRCH`**）再 **`vm_load(user_mask)`**（**EFAULT** 类），与 Linux 一致（issue-142）。未完整建模 CAP、僵尸 **`ESRCH`** 等。
+- **`sched_setscheduler`**：**`param==NULL`** → **`EINVAL`**（仍可先于 **`pid`** 解析）；非空时先 **`sched_resolve_task`**/**`try_as_thread`**，再 **`vm_read_uninit(sched_param)`**（issue-142，**`ESRCH`** 先于 **EFAULT**）。
 - **`sched_getscheduler` / `sched_setscheduler` / `sched_getparam`**：每线程在 **`Thread`** 上存 **`sched_policy`**（默认0，即 `SCHED_NORMAL`/`SCHED_OTHER`）与 **`sched_priority`**（默认 0）。`setscheduler` 从用户读 **`sched_param`** 并校验策略与优先级范围后写入；`getscheduler`/`getparam` 返回已存值。策略未接入 axtask 真实 RT 调度，仅保证与用户态查询一致。**issue-018** 与 **issue-002** 描述同一修复；验收可用 **`test_sched_stubs.c`**（默认 **`sched_getscheduler(0)==SCHED_OTHER`**）或 **`test_sched_policy_stubs.c`**。
 - **`getpriority` / `setpriority`**：每进程 **`ProcessData::nice`**（**-20..=19**，默认 **0**）；`fork` 经 **`copy_credentials_from`** 继承。**`sys_getpriority`** 成功返回值须为 Linux **`20 - nice`**（**`nice_to_rlimit`**），**非**裸 **`nice`**（**`nice=0`** → **20**）。**`setpriority`** 已 syscall 分发。**`PRIO_PGRP`/`PRIO_USER`** 在 **`processes()`** 上取匹配进程的 **最小 nice**（最高调度优先级）。未建模 **`CAP_SYS_NICE`** 与特权 **`nice`** 下限等 **`EPERM`**。
 - **ELF `execve` 缓存**：全局 **`ELF_LOADER`** 为 **`spin::RwLock<ElfLoader>`**（LRU 32）。**`ensure_elf_cached`**：先读锁命中则返回；未命中则在**无 ELF 锁**下 **`ElfCacheEntry::load`**，再写锁 **去重插入**。**`map_cached_elf_into_uspace`** 持**读锁**做 **`lookup_entry`**、**`uspace.clear`**、**`map_elf`**（多进程可并发读同一缓存项）。写锁仅覆盖 LRU 变更；高并发 + 满缓存时仍存在 **LRU 驱逐** 与「装入后、映射前被挤掉」的极小理论窗口（可后续改为 `Arc` 条目或分片）。
@@ -354,6 +357,7 @@
 - issue-139：**`fchownat`**/**`fchmodat`** 非法 **`flags`** + 坏 **`path`**，首错 **`EINVAL`**（先于 **EFAULT**）；可扩展现有 **`/bin/test_fchownat_invalid_flags`**/**`test_fchmodat_invalid_flags`** 思路加坏指针组合。
 - issue-140：**`readlinkat`** 对已存在 symlink，**`bufsiz==0`** → **`EINVAL`**，勿 **`Ok(0)`**；可与坏 **`path`** 组合验证 **EINVAL** 先于 **ENOENT/EFAULT**。
 - issue-141：**`prlimit64`** 同时 **`old_limit`** + 非法 **`new_limit`**（**`rlim_cur`>`rlim_max`** 或不可读 **`new`**）：**`old`** 缓冲应未被写入；首错 **`EINVAL`**/**`EFAULT`**。
+- issue-142：无效 **`pid`** + 坏 **`user_mask`** / **`sched_param`**：首错 **`ESRCH`**（先于 **EFAULT**）；**`sched_setscheduler`** **`NULL` param** 仍 **`EINVAL`**。
 - issue-053：请跑 **`/bin/test_memfd_create_invalid_flags`**（**`memfd_create(..., 0x80000000)`** → **`EINVAL`**）。
 - issue-052：请跑 **`/bin/test_fchownat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`uid`/`gid`** 不变）。
 - issue-051：请跑 **`/bin/test_utimensat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`mtime`** 不变）。

@@ -176,6 +176,8 @@ pub fn sys_sched_getaffinity(pid: i32, cpusetsize: usize, user_mask: *mut u8) ->
 }
 
 pub fn sys_sched_setaffinity(pid: i32, cpusetsize: usize, user_mask: *const u8) -> AxResult<isize> {
+    // Linux sched_setaffinity: resolve pid (ESRCH) before copy_from_user(mask) (EFAULT).
+    let task = sched_resolve_task(pid)?;
     let size = cpusetsize.min(axhal::cpu_num().div_ceil(8));
     let user_mask = vm_load(user_mask, size)?;
     let mut cpu_mask = AxCpuMask::new();
@@ -185,8 +187,6 @@ pub fn sys_sched_setaffinity(pid: i32, cpusetsize: usize, user_mask: *const u8) 
             cpu_mask.set(i, true);
         }
     }
-
-    let task = sched_resolve_task(pid)?;
     if task.id() == current().id() {
         if !axtask::set_current_affinity(cpu_mask) {
             return Err(AxError::InvalidInput);
@@ -212,11 +212,11 @@ pub fn sys_sched_setscheduler(pid: i32, policy: i32, param: *const ()) -> AxResu
     let Some(param_ptr) = param.nullable() else {
         return Err(AxError::InvalidInput);
     };
-    let user_param = unsafe { param_ptr.vm_read_uninit()?.assume_init() };
-    validate_sched_user_param(policy, user_param.sched_priority)?;
-
+    // Linux: find task (ESRCH) before copy_from_user(sched_param) (EFAULT); NULL param → EINVAL above.
     let task = sched_resolve_task(pid)?;
     let thr = task.try_as_thread().ok_or(AxError::InvalidInput)?;
+    let user_param = unsafe { param_ptr.vm_read_uninit()?.assume_init() };
+    validate_sched_user_param(policy, user_param.sched_priority)?;
     thr.set_sched_policy_param(policy, user_param.sched_priority);
     Ok(0)
 }
