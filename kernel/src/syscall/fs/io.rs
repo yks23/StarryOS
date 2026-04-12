@@ -435,8 +435,11 @@ pub fn sys_sendfile(out_fd: c_int, in_fd: c_int, offset: *mut u64, len: usize) -
         len
     );
 
-    // Linux `sendfile(2)`: `in_fd` and `out_fd` must not refer to the same file description; same
-    // descriptor → EINVAL.
+    // Linux do_sendfile: fget both fds before rejecting same descriptor (EBADF before EINVAL when
+    // both fds are invalid; issue-326; same class as issue-317/issue-322). Same-numeric-fd → EINVAL
+    // (issue-235).
+    get_file_like(in_fd)?;
+    get_file_like(out_fd)?;
     if in_fd == out_fd {
         return Err(AxError::InvalidInput);
     }
