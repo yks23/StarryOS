@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-106 resolved（**`sys_ftruncate`**：**`length < 0` → `InvalidInput`**，对齐 **`sys_truncate`** / Linux **`EINVAL`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-105 resolved（**`check_sigset_size`**：**`sigsetsize` 须严格 `sizeof(SignalSet)`**，**`0` 与错误长度 → `InvalidInput`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-103 resolved（**`recvfrom`/`recvmsg`**：**`RecvFlags`对齐 Linux `MSG_*`**、**`recv_poller` `MSG_DONTWAIT`**；**`MSG_WAITALL`** 在 **TCP/vsock/Unix stream**；**`MSG_OOB`/`ERRQUEUE`/…** **`Unsupported`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-104 resolved（**`pwritev`/`pwritev2`**：**`write_at` + `IoVectorBuf::into_io()`**；**`preadv2`/`pwritev2`**：**`offset < 0` → `InvalidInput`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
