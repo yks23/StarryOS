@@ -1,9 +1,12 @@
 use alloc::vec;
 use core::ffi::c_char;
 
+use axalloc::global_allocator;
 use axconfig::ARCH;
 use axerrno::{AxError, AxResult};
 use axfs::FS_CONTEXT;
+use axhal::mem::{PAGE_SIZE_4K, total_ram_size};
+use axhal::time::{NANOS_PER_SEC, monotonic_time_nanos};
 use axtask::current;
 use bytemuck::cast_slice;
 use linux_raw_sys::{
@@ -121,9 +124,25 @@ pub fn sys_uname(name: *mut new_utsname) -> AxResult<isize> {
 }
 
 pub fn sys_sysinfo(info: *mut sysinfo) -> AxResult<isize> {
-    // FIXME: Zeroable
+    let total = total_ram_size();
+    let free_pool = global_allocator()
+        .available_pages()
+        .saturating_mul(PAGE_SIZE_4K);
+    let freeram = free_pool.min(total);
+
     let mut kinfo: sysinfo = unsafe { core::mem::zeroed() };
+    kinfo.uptime = (monotonic_time_nanos() / NANOS_PER_SEC) as _;
+    kinfo.loads = [0, 0, 0];
+    kinfo.totalram = total as _;
+    kinfo.freeram = freeram as _;
+    kinfo.sharedram = 0;
+    kinfo.bufferram = 0;
+    kinfo.totalswap = 0;
+    kinfo.freeswap = 0;
     kinfo.procs = processes().len() as _;
+    kinfo.pad = 0;
+    kinfo.totalhigh = 0;
+    kinfo.freehigh = 0;
     kinfo.mem_unit = 1;
     info.vm_write(kinfo)?;
     Ok(0)

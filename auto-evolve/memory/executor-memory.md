@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-027 resolved（**`sys_sysinfo`**：**`totalram`**/**`freeram`**/**`uptime`** 来自 **`axhal`/`axalloc`**）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过
 - 日期：2026-04-13：issue-034 resolved（**`sendmsg`/`recvmsg`** **`CMSG_ALIGN`**；**`cmsg_align`** + **`CMsgBuilder`** 填充）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过
 - 日期：2026-04-13：issue-021 resolved（**`capget`/`capset`** → **`ProcessData`** 三域 **`AtomicU32`**，**`copy_credentials_from`** 继承）；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过
 - 日期：2026-04-13：issue-020 resolved（**`mremap`** 保留 File/COW；**`msync`** → **`CachedFile::sync`**）
@@ -8,6 +9,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-027 | sysinfo totalram/uptime 等为零 | resolved | 2026-04-13 |
 | issue-034 | sendmsg/recvmsg CMSG 对齐（多段 SCM_RIGHTS） | resolved | 2026-04-13 |
 | issue-021 | capget 全 CAP / capset 空操作 | resolved | 2026-04-13 |
 | issue-020 | mremap 丢失 MAP_SHARED 文件后端 | resolved | 2026-04-13 |
@@ -65,8 +67,10 @@
 - **`madvise` / `msync` / `mlock`**：**`MADV_DONTNEED`/`MADV_FREE`** 对 **`CowBackend`** 调用 **`BackendOps::unmap`** 后由缺页 **`populate`** 再分配零页；**`Shared`/`File`/`Linear`** 不丢页（跳过）。**`msync`** 校验 **`MS_ASYNC`与 `MS_SYNC` 二选一**、允许标志位及区间已映射可读；对重叠的 **`File`** VMA 经 **`AddrSpace::msync_file_mappings`** 去重后 **`CachedFile::sync`** 回写页缓存（**`MS_ASYNC`/`MS_SYNC`** 当前均走此路径；**`MS_INVALIDATE`** 未实现丢弃语义）。**`mlock`/`mlock2`** 仅校验 **`MLOCK_ONFAULT`**、**`len>0`**、映射可读；未接 **`RLIMIT_MEMLOCK`** 与物理钉页。
 - **`mremap`**：**`AddrSpace::mremap`** 要求 **`addr` 为 VMA 起点且 `old_size` 等于该 VMA 长度**。**缩小**：`unmap` 尾部。**原地放大**：尾部虚拟区间无其它映射时 **`unmap` 全段 + `map` 新尺寸**，**`FileBackend::remap_at`** / **`CowBackend::with_virt_start`** 保持同一 **`CachedFile`/文件偏移或 COW 状态**。**`MREMAP_MAYMOVE`**：尾部冲突时 **`read`→`find_free_area`→搬迁 `map`→`write`**。**`Shared`** 变长（缺页框）与 **`Linear`**：**`OperationNotSupported`**。**`MREMAP_FIXED`/`DONTUNMAP`**：**`EINVAL`**。
 - **`capget` / `capset`**：**`ProcessData`** 存 **`cap_effective`/`cap_permitted`/`cap_inheritable`**（**`AtomicU32`**，v3 低 32 位；默认 **`u32::MAX`**）。**`sys_capget`**/**`sys_capset`** 仅允许操作**当前进程**（**`header.pid==0` 或正 pid 解析到同一 `ProcessData`**，否则 **`PermissionDenied`**）。**`capset`** 要求 **`effective`/`inheritable` ⊆ `permitted`**；仅 **`euid==0`** 或当前 **`effective`** 含 **`CAP_SETPCAP`（1<<8）** 可改，否则 **`EPERM`**。未实现 64 位第二组 **`__user_cap_data_struct`**。
+- **`sysinfo(2)`**：**`totalram`** ← **`axhal::mem::total_ram_size()`**；**`freeram`** ← **`min(available_pages * PAGE_SIZE_4K, totalram)`**（**`axalloc::global_allocator()`** 空闲页池，近似值）；**`uptime`** ← **`monotonic_time_nanos / NANOS_PER_SEC`**；**`loads`/swap/buffer/high** 仍为 **0**；**`mem_unit=1`**。与 Linux **MemAvailable** 级统计仍有差距。
 
 ## 给 Debugger 的消息
+- issue-027：请跑 **`/bin/test_sysinfo_partial`**（**`sysinfo.totalram > 0`**）。
 - issue-021：请跑 **`/bin/test_cap_stub`**（**`capset` 清零后 `capget` 全 0**；若 **`capset` EPERM** 则测试会跳过断言）。
 - issue-020：请跑 **`/bin/test_mremap_shared`**（**`MAP_SHARED`扩展 + **`msync`** +文件第二页）。
 - issue-019：请跑 **`/bin/test_mm_noop`**（**`MADV_DONTNEED`** 后读零）。
