@@ -1,0 +1,27 @@
+{
+  "id": "issue-272",
+  "title": "lseek：`SEEK_SET` 时负 `offset` 经 `as u64` 环绕，与 Linux `EINVAL` 分叉",
+  "status": "resolved",
+  "created_at": "2026-04-12T12:00:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_lseek` 在 `whence==SEEK_SET` 且 `offset<0` 时返回 `InvalidInput`（EINVAL），避免 `SeekFrom::Start(offset as _)` 将负 `__kernel_off_t` 转为巨大 `u64`；补充 `SEEK_SET` 常量并与 `match` 分支一致。",
+  "files_changed": ["kernel/src/syscall/fs/io.rs"],
+  "description": "**`kernel/src/syscall/fs/io.rs`** **`sys_lseek`**（约 **126–141** 行）在 **`whence`** 为 **`SEEK_SET`（0）时使用 **`SeekFrom::Start(offset as _)`**。在 LP64 ABI 下 **`__kernel_off_t`** 为 **有符号**，**负** **`offset`** 经 **`as u64`/`as _`** 转为 **`Start`** 时会 **按位环绕** 为 **接近 `u64::MAX`** 的巨大文件偏移，**不会** 得到 **Linux** **`lseek(2)`** 对 **`whence==SEEK_SET` 且 `offset<0`** 的 **`errno=EINVAL`**。\n\n**对照**：**`SEEK_END`**/**`SEEK_CUR`** 使用 **`SeekFrom::End`/`Current`**（**`i64`**），**负偏移** 语义与 **Rust** **`Seek`** **一致**；**`SEEK_DATA`/`SEEK_HOLE`** 分支已对 **`offset<0`** 显式 **`InvalidInput`**（约 **57–58** 行）。\n\n**建议**：在 **`whence==SEEK_SET`** 时若 **`offset<0`**，直接 **`return Err(AxError::InvalidInput)`**；或先将 **`offset`** 规范为 **`u64`**（**仅在** **`>=0`** 时）再构造 **`SeekFrom::Start`**。\n\n**注意**：**`SEEK_END` + 负偏移** 若 **结果位置 `<0`**，**Linux** 亦 **`EINVAL`**；需与 **VFS** **`seek`** **行为** 对照是否已覆盖。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["lseek"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/io.rs:126-141"],
+    "related_files": ["kernel/src/syscall/fs/io.rs:54-74"],
+    "key_insight": "SEEK_SET 负 offset → u64 环绕，非 EINVAL"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 Linux `lseek(fd, -1, SEEK_SET)` → EINVAL。",
+    "expected_output_contains": "",
+    "pass_criteria": "SEEK_SET 且 offset<0 → EINVAL（InvalidInput），或与 Linux 一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "`whence == 0 && offset < 0 { return Err(InvalidInput); }` 后再 `SeekFrom::Start(offset as u64)`。",
+  "references": ["man 2 lseek", "kernel/src/syscall/fs/io.rs"]
+}

@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-272 resolved（**`lseek`**：**`SEEK_SET`** 且 **`offset<0`** → **`InvalidInput`（EINVAL）**，勿 **`as u64`** 环绕；**`fs/io.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-271 resolved（**`mlock`/`mlock2`**：**`addr`** 须 **`is_aligned_4k()`**，否则 **`InvalidInput`（EINVAL）**；**`sys_mlock`** 经 **`sys_mlock2`**；**`mmap.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-270 resolved（**`mprotect`**/**`madvise`**：**`addr`** 须 **`is_aligned_4k()`**，否则 **`InvalidInput`（EINVAL）**；与 **`msync`/`munmap`**（issue-267/268）一致；**`mmap.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-269 resolved（**`sendto`/`sendmsg`**：**`SENDMSG_FLAGS_MASK`** 不再含 **`MSG_ERRQUEUE`**（**`recv`/错误队列**，**`send`** 与 Linux **`EINVAL`**）；**`net/io.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -293,6 +294,7 @@
 | issue-269 | send 掩码剔除 MSG_ERRQUEUE（recv/errqueue） | resolved | 2026-04-12 |
 | issue-270 | mprotect/madvise addr 须页对齐 EINVAL | resolved | 2026-04-12 |
 | issue-271 | mlock/mlock2 addr 须页对齐 EINVAL | resolved | 2026-04-12 |
+| issue-272 | lseek SEEK_SET 负 offset EINVAL | resolved | 2026-04-12 |
 | issue-219 | waitpid __WNOTHREAD → Unsupported | resolved | 2026-04-12 |
 | issue-225 | fallocate FALLOC_FL 掩码 + 非零 EOPNOTSUPP | resolved | 2026-04-12 |
 | issue-227 | shmat 无效 shmid 不 unwrap（EINVAL） | resolved | 2026-04-12 |
@@ -489,6 +491,7 @@
 - **`fadvise64`**：管道等不可 seek 的 fd 上 Linux 为 **`ESPIPE`**（非法 seek），非 **`EPIPE`**（断管）。实现上 **`Pipe::from_fd`** 分支返回 **`LinuxError::ESPIPE.into()`**（**`axerrno::LinuxError`**），勿用 **`AxError::BrokenPipe`**。真 **`fadvise`** 语义仍为桩；**`advice`** 须 **≤ `POSIX_FADV_WIPEONFORK`（7）**（**`uapi/linux/fadvise.h`**，含 **COLD/WIPEONFORK**，issue-239），否则 **`EINVAL`**；非 pipe 时 **`offset`/`len`** 须非负，且 cast 为 **`u64`** 后 **`checked_add`** 不溢出，否则 **`InvalidInput`**（**EINVAL**），与 **`sys_fallocate`** 一致。
 - **`fsync(2)`/`fdatasync(2)`**：须 **`get_file_like`** 后对 **`File`** 或 **`MemfdCreatedFile`**（包装 **`File`**）调用 **`axfs::File::sync`**；**pipe**、**socket**、**目录**、**epoll** 等其它 **`FileLike`** → **`InvalidInput`**（**EINVAL**），勿用 **`File::from_fd`**（会得到 **`BrokenPipe`**/**`IsADirectory`**，issue-130）。无效 **`fd`** 仍为 **`BadFileDescriptor`**（**EBADF**）。
 - **`read(2)`/`write(2)`**（经 **`readv`/`writev`**）：**`Directory`** **`FileLike::read`/`write`** 须 **`IsADirectory`**（**EISDIR**），勿 **`BadFileDescriptor`**（**EBADF**），与 Linux 及 **`pread`/`pwrite`** 经 **`File::from_fd`** 行为一致（issue-143）。
+- **`lseek(2)`**：**`whence==SEEK_SET`** 且 **`offset<0`** → **`InvalidInput`**（**EINVAL**），勿将 **`offset as u64`** 送入 **`SeekFrom::Start`**（issue-272）；**`SEEK_DATA`/`SEEK_HOLE`** 稠密文件语义见 issue-085。
 - **`renameat2(2)`**：**`flags`** 掩码、**`NOREPLACE`+`EXCHANGE`** 互斥、**`WHITEOUT`** 须在 **`vm_load_string(old_path/new_path)`** 之前完成（issue-138）。**`flags`** 须为 **`linux_raw_sys::general`** 中 **`RENAME_NOREPLACE|RENAME_EXCHANGE|RENAME_WHITEOUT`** 的子集，否则 **`EINVAL`**；**`WHITEOUT`** 未建模 overlay → **`EINVAL`**。**`RENAME_NOREPLACE`** 且 **`new_dir.lookup_no_follow(new_name)`** 已存在 → **`EEXIST`**。**`RENAME_EXCHANGE`**：两端须存在（否则 **`ENOENT`**）；同目录同名 → **`EINVAL`**；交换以临时名三次 **`Location::rename`**（非崩溃原子）。**`new_path`** 用 **`resolve_parent`**。
 - **`setitimer`/`getitimer`**：**`ITIMER_REAL`** 独占 wall 时钟 **`alarm_task`**（**`ITimer::schedule_wall_alarm`**）；**`ITIMER_VIRTUAL`/`PROF`** 仅在 **`TimeManager::poll`** 中按 **`TimerState::User`/`Kernel`** 推进 **`remained_ns`**，**`set_itimer`** 与周期重载不再为二者注册 wall alarm。**`last_wall_ns`** 在 **`TimeManager::new`** 中初始化为 **`monotonic_time_nanos()`**，避免首次 **`delta`** 近似为开机时长。抢占与内核内 steal 时间仍弱于 Linux（TODO）。**`getitimer`** 的 **`curr_value`** 必填可写，**`NULL` → `BadAddress`**（issue-232）；**`setitimer`** 的 **`old_value`** 仍 **`nullable()`**（Linux）。
 - **`ioctl`（`kernel/src/file/fs.rs` 的 `File`）**：与 **`Tty`** 驱动已实现的终端/PTY 命令（**`TCGETS`**/**`TCSETS`** 族、**`TIOCGWINSZ`**、**`TIOCGPGRP`**、**`TIOCSCTTY`** 等）在 **`NodeType != CharacterDevice`** 时于转发 **`location().ioctl`** 前返回 **`NotATty`（ENOTTY）**；字符设备仍走 **`Device`**/**`DeviceOps`**（TTY 与其它设备各自处理）。
