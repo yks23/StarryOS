@@ -1,12 +1,15 @@
 {
   "id": "issue-008",
   "title": "跨进程 shared futex 使用全局 Mutex<FutexTables>，伸缩与 GC 持锁",
-  "status": "open",
+  "status": "resolved",
   "created_at": "2026-04-12T12:00:00Z",
+  "resolved_at": "2026-04-13T00:00:00Z",
   "severity": "medium",
   "description": "SHARED_FUTEX_TABLES 为全局 Mutex，内部 BTreeMap 每次操作持锁。周期性 GC（约每 100 次 retain）进一步拉长临界区。高并发多进程 futex 场景下成为瓶颈。",
   "category": "concurrency",
   "affected_syscalls": ["futex"],
+  "fix_summary": "将单一 **`SHARED_FUTEX_TABLES`** 改为 **16 路分片**，每片独立 **`Mutex<FutexTables>`**。按 **`Weak::as_ptr` 得到的 region 指针**做 **`ptr ^ (ptr>>12) ^ (ptr>>24)`** 混合后 **`% 16`** 选桶，使不同共享映射的 **`get_or_insert`/周期性 `retain` GC** 可在不同分片上并行，降低全局互斥。语义不变：同一 region 仍固定映射到同一分片与同一 `FutexTables` 键。",
+  "files_changed": ["kernel/src/task/futex.rs"],
   "source_context": {
     "primary_files": ["kernel/src/task/futex.rs:269-280"],
     "related_files": [],
@@ -18,7 +21,7 @@
     "run_method": "QEMU 中运行；pthread 互斥锁在 musl 下走 futex",
     "expected_output_contains": "SUMMARY",
     "pass_criteria": "多线程互斥递增结果正确（进程内基线）；跨进程 shared futex 需后续扩展用例",
-    "last_result": "待运行"
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu 通过；QEMU 实跑待 rootfs"
   },
   "suggested_fix": "分段锁或无锁哈希表替代全局 Mutex<BTreeMap>。",
   "references": ["Question1.md §1.4 问题5"]
