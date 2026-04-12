@@ -199,6 +199,11 @@ pub fn sys_openat(
     validate_open_flags(flags as u32)?;
 
     let path = vm_load_string(path)?;
+    // Linux rejects empty pathname with EINVAL before open lookup (issue-405; issue-393 theme;
+    // bad flags rejected first, issue-323; O_PATH details issue-259).
+    if path.is_empty() {
+        return Err(AxError::InvalidInput);
+    }
     debug!("sys_openat <= {dirfd} {path:?} {flags:#o} {mode:#o}");
 
     let mode = mode & !current().as_thread().proc_data.umask();

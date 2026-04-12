@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-405 resolved（**`openat`/`open`**：**`path.is_empty()`** **`with_fs`/`options.open`** **前** **→** **`InvalidInput`**；**`validate_open_flags`** **仍** **先于** **`vm_load_string`**（**issue-323**）；**`fd_ops.rs`**；**issue-393** **同类**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-404 resolved（**`mount`**：**`target.is_empty()`** **`FS_CONTEXT.resolve`** **前** **→** **`InvalidInput`**；**`validate_mount_flags`** **后** **`debug!`** **前**（**issue-303** **顺序**）；**`source`** **空** **仍** **`validate_mount_source`**；**`mount.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-403 resolved（**`umount2`/`umount`**：**`target.is_empty()`** **`resolve`/`resolve_no_follow`** **前** **→** **`InvalidInput`**；**`mount.rs`**；**issue-402/issue-393** **同类**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-402 resolved（**`statfs`**：**`path.is_empty()`** **`FS_CONTEXT.resolve`** **前** **→** **`InvalidInput`**；**非** **`*at`** **API**（**issue-401** **正交**）；**`buf`** **先** **issue-281**；**`stat.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
