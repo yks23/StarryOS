@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-166 resolved（**`fspick`/`open_tree`** stub：**`dfd != AT_FDCWD`** 先 **`<Directory as FileLike>::from_fd`** 再 **`get_as_str`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-165 resolved（**`renameat2`**/**`renameat`**：**`flags`** 后 **`old_dirfd`** → **oldname**，再 **`new_dirfd`** → **newname**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-164 resolved（**`linkat`**：先 **`old_dirfd`**（**`old_path` 非 NULL**）再读 **oldname**，再 **`new_dirfd`** 后读 **newname**；**`AT_EMPTY_PATH` + NULL old_path** 不预检 **olddfd**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-163 resolved（**`fchownat`/`fchmodat`**/**`update_times`**：**`dirfd != AT_FDCWD` 且 `path` 非 NULL** 时先 **`Directory::from_fd`** 再读路径；**`AT_EMPTY_PATH` + NULL path** 不预检；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）

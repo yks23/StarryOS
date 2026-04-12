@@ -2,9 +2,10 @@ use core::ffi::{c_char, c_void};
 
 use axerrno::{AxError, AxResult};
 use axfs::FS_CONTEXT;
-use linux_raw_sys::general::{MNT_DETACH, MNT_EXPIRE, MNT_FORCE, UMOUNT_NOFOLLOW};
+use linux_raw_sys::general::{AT_FDCWD, MNT_DETACH, MNT_EXPIRE, MNT_FORCE, UMOUNT_NOFOLLOW};
 
 use crate::{
+    file::{Directory, FileLike},
     mm::{UserConstPtr, vm_load_string},
     pseudofs::MemoryFs,
 };
@@ -95,6 +96,10 @@ pub fn sys_fsopen(fsname: UserConstPtr<c_char>, _flags: u32) -> AxResult<isize> 
 
 /// `fspick`: unimplemented; **ENOSYS**.
 pub fn sys_fspick(dfd: i32, pathname: UserConstPtr<c_char>, _flags: u32) -> AxResult<isize> {
+    // Linux fspick: fdget(dfd) before copy_from_user(pathname) → EBADF first (issue-166).
+    if dfd != AT_FDCWD {
+        let _ = <Directory as FileLike>::from_fd(dfd)?;
+    }
     let path = pathname.get_as_str()?;
     debug!("sys_fspick <= dfd: {dfd}, path: {path:?} (unsupported)");
     Err(AxError::Unsupported)
@@ -102,6 +107,9 @@ pub fn sys_fspick(dfd: i32, pathname: UserConstPtr<c_char>, _flags: u32) -> AxRe
 
 /// `open_tree`: unimplemented; **ENOSYS** (callers that probe the API treat any error as skip).
 pub fn sys_open_tree(dfd: i32, filename: UserConstPtr<c_char>, _flags: u32) -> AxResult<isize> {
+    if dfd != AT_FDCWD {
+        let _ = <Directory as FileLike>::from_fd(dfd)?;
+    }
     let path = filename.get_as_str()?;
     debug!("sys_open_tree <= dfd: {dfd}, path: {path:?} (unsupported)");
     Err(AxError::Unsupported)

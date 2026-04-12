@@ -1,0 +1,27 @@
+{
+  "id": "issue-166",
+  "title": "sys_fspick/sys_open_tree 在校验 dfd 之前 pathname.get_as_str，坏 dfd 时 EBADF 可能晚于路径用户读",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`sys_fspick`**/**`sys_open_tree`**：**`dfd != AT_FDCWD`** 时先 **`<Directory as FileLike>::from_fd(dfd)?`**，再 **`get_as_str`**；仍为 stub **`Unsupported`**，但无效 **dfd** 时先 **`BadFileDescriptor`**。",
+  "files_changed": ["kernel/src/syscall/fs/mount.rs"],
+  "description": "**`sys_fspick`**、**`sys_open_tree`**（`kernel/src/syscall/fs/mount.rs`）入口即 **`pathname.get_as_str()?`**，随后才 **`debug!`** 并 **`Unsupported`**。**Linux** **`fspick`/`open_tree`** 在 **`copy_from_user(pathname)`** 前会对 **`dfd`/`dirfd`** 做 **`fdget`**；**`dirfd` 非目录或无效 fd** 时 **`EBADF`**/**`ENOTDIR`** 可先于对用户路径的访问。**Starry** 在 **`dfd` 无效**时若路径指针合法，已读完 **`pathname`** 才返回错误，与 **issue-164**/**issue-165** 同类 **「先 fd 再路径」** 缺口（当前实现为 stub，但 **errno** 顺序仍可能影响探测 **dfd** 与 **path** 谁先错的测试）。",
+  "category": "syscall-ordering",
+  "affected_syscalls": ["fspick", "open_tree"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/mount.rs:96-107"],
+    "related_files": ["kernel/src/file/fs.rs:26-34"],
+    "key_insight": "`get_as_str(pathname)` 先于任何 `dfd` 校验"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "无效 **`dfd`**（非 **`AT_FDCWD`**）+ 合法/非法用户 **`pathname`**；对比 **Linux** 与 **Starry** 的 **`errno`**（**`EBADF`** vs **`EFAULT`**）。",
+    "expected_output_contains": "",
+    "pass_criteria": "**`dfd`** 错误时 **`EBADF`**/**`BadFileDescriptor`** 与 **Linux** 一致地先于对 **`pathname`** 的用户读（stub 返回码可仍为 **`Unsupported`**，但 **`EBADF` 应先于 `EFAULT`**）。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0）"
+  },
+  "suggested_fix": "仿 **`symlinkat`/`renameat2`**：**`dfd != AT_FDCWD`** 时先 **`Directory::from_fd(dfd)?`**（或等价 **`get_file_like`**）再 **`pathname.get_as_str()`**；然后再走现有 **`Unsupported`** 分支。",
+  "references": ["man 2 fspick", "man 2 open_tree"]
+}
