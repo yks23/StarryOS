@@ -30,9 +30,16 @@ pub fn sys_pipe2(fds: *mut [c_int; 2], flags: u32) -> AxResult<isize> {
     let read_fd = read_end.add_to_fd_table(cloexec)?;
     let write_fd = write_end
         .add_to_fd_table(cloexec)
-        .inspect_err(|_| close_file_like(read_fd).unwrap())?;
+        .inspect_err(|_| {
+            let _ = close_file_like(read_fd);
+        })?;
 
-    fds.vm_write([read_fd, write_fd])?;
+    if let Err(e) = fds.vm_write([read_fd, write_fd]) {
+        // Linux pipe2: copy_to_user failure must not leave orphan fds (issue-148).
+        let _ = close_file_like(write_fd);
+        let _ = close_file_like(read_fd);
+        return Err(e.into());
+    }
 
     debug!(
         "sys_pipe2 <= fds: {:?}, flags: {:?}",

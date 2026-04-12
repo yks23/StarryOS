@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-148 resolved（**`pipe2`**：**`fds.vm_write`** 失败时 **`close_file_like`** 读/写两端；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-147 resolved（**`rt_sigaction`**：**`act` 非空**时先 **`vm_read(act)`** 再 **`vm_write(oldact)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-146 resolved（**`rt_sigprocmask`**：**`set` 非空**时先 **`how`**/**`vm_read(set)`**，再 **`vm_write(oldset)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-145 resolved（**`io_uring_setup`**：**`add_file_like`** 成功后再 **`params.vm_write`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -128,6 +129,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-148 | pipe2 vm_write 失败关闭两端 fd | resolved | 2026-04-12 |
 | issue-147 | rt_sigaction oldact after vm_read(act) | resolved | 2026-04-12 |
 | issue-146 | rt_sigprocmask oldset after how/set校验 | resolved | 2026-04-12 |
 | issue-145 | io_uring_setup vm_write after add_file_like | resolved | 2026-04-12 |
@@ -279,7 +281,7 @@
 - **`rt_sigqueueinfo`/`rt_tgsigqueueinfo`**：Linux 分别为 **3/4 个**用户参数（**`uinfo`** 为最后一参），**无** **`sigsetsize`**；勿从 **`a3`/`a4`** 读 **`sigsetsize`** 或调用 **`check_sigset_size`**（残留寄存器会误 **EINVAL**）。**`rt_sig*`** 中带 **`sigsetsize`** 的是 **`rt_sigprocmask`**、**`rt_sigaction`**、**`rt_sigpending`**、**`rt_sigtimedwait`**、**`rt_sigsuspend`** 等，勿与 queueinfo 混淆。**`make_queue_signal_info`**：**`signo==0`** → **`Ok(None)`**；否则 **`parse_signo`** 后 **`uinfo==NULL` → `BadAddress`** 再 **`vm_read`**（**`pidfd_send_signal`** 同路径）。
 - timerfd：`TimerFd` 实现 `FileLike` + `Pollable`；到期逻辑在 `process_expirations` 中根据时钟纳秒与 `next_deadline_nanos` 比较；通过 `axtask::register_timer_callback`（首次创建时注册）在每次内核 timer tick 中扫描弱引用列表并 `wake` `PollSet`；创建 fd 用 `add_file_like`（与 eventfd2 相同），勿对 `Arc<TimerFd>` 误用 `add_to_fd_table(self)`。**`timerfd_settime`**：**`new_value.is_null()` → `InvalidInput`**。**`timerfd_gettime`**：**`curr_value.is_null()` → `BadAddress`**（Linux **EFAULT**），在 **`from_fd`** 之后、**`gettime`/`vm_write`** 之前校验，避免先算定时器再因用户指针失败。
 - **`mmap(2)` `flags`**：先 **`flags & !ALLOWED_MAP_FLAGS`**（**`MAP_TYPE|MAP_FIXED|MAP_ANONYMOUS|…|MAP_DROPPABLE|(MAP_HUGE_MASK<<MAP_HUGE_SHIFT)`** 等 uapi 位），非零 → **`InvalidInput`**；**`MmapFlags::from_bits(flags)`**，**`None`** 时 **`MAP_SHARED_VALIDATE` 类型 → `OperationNotSupported`**，否则 **`InvalidInput`**；勿在未知/非法组合上 **`from_bits_truncate`**。合法 **`MAP_HUGE_*`** 等须在 **`MmapFlags`** 中声明以便 **`from_bits`** 成功。
-- **`pipe2`**：**`flags`** 仅允许 **`O_CLOEXEC`/`O_NONBLOCK`**（**`PipeFlags`**）；用 **`from_bits(...).ok_or(InvalidInput)`**，勿 **`from_bits_truncate`**（与 **`eventfd2`/`epoll_create1`** 一致）。
+- **`pipe2`**：**`flags`** 仅允许 **`O_CLOEXEC`/`O_NONBLOCK`**（**`PipeFlags`**）；用 **`from_bits(...).ok_or(InvalidInput)`**，勿 **`from_bits_truncate`**（与 **`eventfd2`/`epoll_create1`** 一致）。**`add_to_fd_table`** 成功后若 **`fds.vm_write`** 失败（**EFAULT** 等），须 **`close_file_like`** 已安装的读/写 **fd**，勿留孤儿表项（issue-148）；第二端分配失败时仍应关闭已装读端，勿对 **`close_file_like`** **`unwrap`**。
 - **`poll(2)`/`ppoll(2)`**：**`pollfd.fd < 0`** 的条目被忽略，**`revents`** 须置 **0**（勿保留陈旧位）。
 - **`epoll_ctl(2)`**：**`EPOLL_CTL_ADD`/`MOD`** 须先 **`get_file_like(fd)`**（无效目标 fd → **EBADF**），再 **`event.get_as_ref`**/**`parse_event`**（**EFAULT**/**EINVAL** 类），与 Linux 顺序一致（issue-144）；**`events`** 未知位等仍按 issue-078 **`KNOWN_EPOLL_EVENTS_MASK`**。**`EPOLL_CTL_DEL`** 不读 **`event`**。
 - **`readlink(2)`/`readlinkat(2)`**：**`bufsiz`**（**`size`**）须 **> 0**，否则 **`InvalidInput`**（**EINVAL**），须在 **`vm_load_string(path)`** 与 **`resolve_no_follow`/`read_link`** 之前校验（issue-140）；勿对 **`size==0`** 返回成功 **0**。
@@ -375,6 +377,7 @@
 - issue-145：**`io_uring_setup`** 在 **fd 表满**等导致 **`add_file_like`** 失败时，用户 **`IoUringParams`** 应保持未被内核写回。
 - issue-146：**`rt_sigprocmask`**：**`set` 非空** + 非法 **`how`** + **`oldset` 非空**：**`EINVAL`** 时 **`oldset`** 不应被写入。
 - issue-147：**`rt_sigaction`**：**`act`/`oldact` 均非空** + 不可读 **`act`**：**`EFAULT`** 时 **`oldact`** 不应被写入。
+- issue-148：**`pipe2`** +坏 **`fds`**：**`vm_write`** 失败不应泄漏两个管道 **fd**。
 - issue-053：请跑 **`/bin/test_memfd_create_invalid_flags`**（**`memfd_create(..., 0x80000000)`** → **`EINVAL`**）。
 - issue-052：请跑 **`/bin/test_fchownat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`uid`/`gid`** 不变）。
 - issue-051：请跑 **`/bin/test_utimensat_invalid_flags`**（非法 **`flags`** → **`EINVAL`**，**`mtime`** 不变）。
