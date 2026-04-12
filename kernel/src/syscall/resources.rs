@@ -8,8 +8,7 @@ use starry_vm::{VmMutPtr, VmPtr};
 use crate::{
     mm::AddrSpace,
     task::{
-        AsThread, Thread, get_process_data, get_task, may_peer_process_by_cred,
-        time_value_from_nanos,
+        AsThread, Thread, get_process_data, may_peer_process_by_cred, time_value_from_nanos,
     },
     time::TimeValueLike,
 };
@@ -96,11 +95,6 @@ impl Rusage {
         }
     }
 
-    fn collate(mut self, other: Rusage) -> Self {
-        self.utime += other.utime;
-        self.stime += other.stime;
-        self
-    }
 }
 
 impl From<Rusage> for rusage {
@@ -146,20 +140,12 @@ pub fn sys_getrusage(who: i32, usage: *mut rusage) -> AxResult<isize> {
     let result = match who {
         RUSAGE_SELF => {
             let rss_kb = rss_kb_from_aspace(&thr.proc_data.aspace.read());
-            let mut u = thr
-                .proc_data
-                .proc
-                .threads()
-                .into_iter()
-                .fold(Rusage::default(), |acc, tid| {
-                    if let Ok(task) = get_task(tid) {
-                        acc.collate(Rusage::from_thread(task.as_thread()))
-                    } else {
-                        acc
-                    }
-                });
-            u.ru_maxrss_kb = rss_kb;
-            u
+            let (ut_ns, st_ns) = thr.proc_data.thread_group_cpu_nanos_strict()?;
+            Rusage {
+                utime: time_value_from_nanos(ut_ns),
+                stime: time_value_from_nanos(st_ns),
+                ru_maxrss_kb: rss_kb,
+            }
         }
         RUSAGE_CHILDREN => {
             // Linux: resources of terminated and waited-for children only — not sibling pthreads.

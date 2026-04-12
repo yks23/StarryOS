@@ -629,20 +629,39 @@ impl ProcessData {
     }
 
     /// Thread-group CPU (nanoseconds): exited threads plus all live threads in this process.
+    ///
+    /// If a `tid` from the process thread list is missing from `TASK_TABLE` (e.g. races around
+    /// zombie accounting), that thread is **skipped** so `times`/`wait` still return partial
+    /// sums. [`thread_group_cpu_nanos_strict`] fails instead for `getrusage(RUSAGE_SELF)`.
     pub fn thread_group_cpu_nanos(&self) -> (usize, usize) {
+        self.thread_group_cpu_nanos_inner(true)
+            .expect("skip_missing_tasks: get_task errors are not propagated")
+    }
+
+    /// Like [`thread_group_cpu_nanos`], but returns [`AxError::NoSuchProcess`] if any listed thread
+    /// cannot be resolved — avoids silently under-counting CPU for `getrusage(2)` `RUSAGE_SELF`
+    /// (issue-371).
+    pub fn thread_group_cpu_nanos_strict(&self) -> AxResult<(usize, usize)> {
+        self.thread_group_cpu_nanos_inner(false)
+    }
+
+    fn thread_group_cpu_nanos_inner(&self, skip_missing_tasks: bool) -> AxResult<(usize, usize)> {
         let mut ut = self.exited_threads_utime_ns.load(Ordering::Relaxed);
         let mut st = self.exited_threads_stime_ns.load(Ordering::Relaxed);
         for tid in self.proc.threads() {
-            if let Ok(task) = get_task(tid) {
-                if let Some(thr) = task.try_as_thread() {
-                    if thr.proc_data.proc.pid() == self.proc.pid() {
-                        let (u, s) = thr.time.borrow().cpu_nanos();
-                        ut += u;
-                        st += s;
-                    }
+            let task = match get_task(tid) {
+                Ok(t) => t,
+                Err(_e) if skip_missing_tasks => continue,
+                Err(e) => return Err(e),
+            };
+            if let Some(thr) = task.try_as_thread() {
+                if thr.proc_data.proc.pid() == self.proc.pid() {
+                    let (u, s) = thr.time.borrow().cpu_nanos();
+                    ut += u;
+                    st += s;
                 }
             }
         }
-        (ut, st)
+        Ok((ut, st))
     }
 }
