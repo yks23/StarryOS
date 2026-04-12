@@ -4,8 +4,8 @@ use axerrno::{AxError, AxResult};
 use axfs::FS_CONTEXT;
 use axfs_ng_vfs::{Location, NodePermission};
 use linux_raw_sys::general::{
-    __kernel_fsid_t, AT_EACCESS, AT_EMPTY_PATH, AT_SYMLINK_NOFOLLOW, R_OK, W_OK, X_OK, stat, statfs,
-    statx,
+    __kernel_fsid_t, AT_EACCESS, AT_EMPTY_PATH, AT_STATX_SYNC_TYPE, AT_SYMLINK_NOFOLLOW, R_OK,
+    W_OK, X_OK, stat, statfs, statx,
 };
 use starry_vm::{VmMutPtr, VmPtr};
 
@@ -93,6 +93,16 @@ pub fn sys_statx(
 
     let path = path.nullable().map(vm_load_string).transpose()?;
     debug!("sys_statx <= dirfd: {dirfd}, path: {path:?}, flags: {flags}");
+
+    // Linux vfs_statx: AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW | AT_STATX_SYNC_TYPE only.
+    const VALID_STATX_FLAGS: u32 = AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW | AT_STATX_SYNC_TYPE;
+    if flags & !VALID_STATX_FLAGS != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    // Cannot set both AT_STATX_FORCE_SYNC and AT_STATX_DONT_SYNC (covers full sync-type mask).
+    if flags & AT_STATX_SYNC_TYPE == AT_STATX_SYNC_TYPE {
+        return Err(AxError::InvalidInput);
+    }
 
     statxbuf.vm_write(resolve_at(dirfd, path.as_deref(), flags)?.stat()?.into())?;
 

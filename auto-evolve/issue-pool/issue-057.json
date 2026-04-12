@@ -1,0 +1,28 @@
+{
+  "id": "issue-057",
+  "title": "statx 未校验 flags 未知位，resolve_at 仅消费 AT_* 子集，应对齐 Linux EINVAL",
+  "status": "resolved",
+  "created_at": "2026-04-12T12:00:00Z",
+  "resolved_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "description": "Linux **`statx(2)`** 的 **`flags`** 仅允许 **`AT_EMPTY_PATH`**、**`AT_SYMLINK_NOFOLLOW`** 及 **`AT_STATX_*`** 同步相关标志的组合；含未定义高位或其它非法组合时返回 **`EINVAL`**（本环境 **`statx(AT_FDCWD, \"/tmp\", 0x80000000, STATX_BASIC_STATS, …)`** → **`errno=22`**）。**`sys_statx`**（`kernel/src/syscall/fs/stat.rs`）将 **`flags`** 原样传入 **`resolve_at`**，后者只识别 **`AT_EMPTY_PATH`** 与 **`AT_SYMLINK_NOFOLLOW`**，**其余位被静默忽略**，调用可能 **`Ok(0)`**，与 Linux 对未知 **`statx` flags** 的行为不一致。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["statx"],
+  "fix_summary": "**`sys_statx`**：在 **`resolve_at`** 前校验 **`flags`** 为 **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW | AT_STATX_SYNC_TYPE`** 的子集；**`(flags & AT_STATX_SYNC_TYPE) == AT_STATX_SYNC_TYPE`**（**`FORCE_SYNC`+`DONT_SYNC`** 同时置位）**`EINVAL`**；未知高位 **`EINVAL`**。",
+  "files_changed": ["kernel/src/syscall/fs/stat.rs"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/stat.rs:59-98"],
+    "related_files": ["kernel/src/file/fs.rs:57-82"],
+    "key_insight": "须在 `resolve_at` 之前按 Linux uapi 掩码校验 `flags`（含 `AT_STATX_SYNC_TYPE` 等），未知位 → `InvalidInput`"
+  },
+  "test": {
+    "source_file": "auto-evolve/tests/test_statx_invalid_flags.c",
+    "build_command": "riscv64-linux-musl-gcc -static -Wall -o test_statx_invalid_flags test_statx_invalid_flags.c",
+    "run_method": "放入 rootfs /bin/ 后在 QEMU 运行",
+    "expected_output_contains": "SUMMARY",
+    "pass_criteria": "`syscall(SYS_statx, AT_FDCWD, \"/tmp\", 0x80000000u, STATX_BASIC_STATS, …)` 返回 -1 且 errno=EINVAL",
+    "last_result": "未在 QEMU 运行；`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` 通过"
+  },
+  "suggested_fix": "在 **`sys_statx`** 入口：`flags & !ALLOWED_STATX_FLAGS != 0` → **`AxError::InvalidInput`**；**`ALLOWED_STATX_FLAGS`** 覆盖 **`AT_EMPTY_PATH` | `AT_SYMLINK_NOFOLLOW` | `AT_STATX_FORCE_SYNC` | `AT_STATX_DONT_SYNC` | `AT_STATX_SYNC_TYPE`**，并与内核文档核对互斥组合。",
+  "references": ["man 2 statx", "linux/stat.h"]
+}

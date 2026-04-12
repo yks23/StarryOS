@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-057 resolved（**`statx`**：**`flags`** 掩码 **`AT_EMPTY_PATH|AT_SYMLINK_NOFOLLOW|AT_STATX_SYNC_TYPE`** + **`FORCE`/`DONT` 互斥**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过）
 - 日期：2026-04-12：issue-056 resolved（**`accept4`**：**`flags`** 仅 **`O_CLOEXEC | O_NONBLOCK`**，未知位 **`EINVAL`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过）
 - 日期：2026-04-12：issue-061 resolved（**`msgsnd`/`msgrcv`**：**`MessageQueue`** 上 **`recv_notify`/`send_notify`** + **`block_on(interruptible)`** 阻塞与唤醒；**`IPC_RMID`** **`wake_waiters`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过）
 - 日期：2026-04-12：issue-055 resolved（**`madvise`**：**`KNOWN_MADV_ADVICE`**（**`linux_raw_sys` 全部 `MADV_*`**），未知 **`advice`** **`EINVAL`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu`** 通过）
@@ -38,6 +39,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-057 | statx AT_* / AT_STATX_* flags 校验 | resolved | 2026-04-12 |
 | issue-056 | accept4 flags 仅 O_CLOEXEC|O_NONBLOCK | resolved | 2026-04-12 |
 | issue-061 | SysV msgsnd/msgrcv 阻塞与唤醒 | resolved | 2026-04-12 |
 | issue-055 | madvise 未知 advice EINVAL | resolved | 2026-04-12 |
@@ -112,6 +114,7 @@
 - **`fchownat(2)`** / **`fchown`** / **`lchown`**：**`flags`** 须为 **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW`** 的子集（**`VALID_FCHOWNAT_FLAGS`**），否则 **`EINVAL`**；**`sys_fchown`** 用 **`AT_EMPTY_PATH`**，**`lchown`** 用 **`AT_SYMLINK_NOFOLLOW`**。
 - **`memfd_create(2)`/`memfd_secret(2)`**：**`flags`** 低位须为 **`MFD_CLOEXEC|ALLOW_SEALING|HUGETLB|EXEC|NOEXEC_SEAL`** 的子集；**`MFD_HUGE_MASK<<MFD_HUGE_SHIFT`** 域须为 **0** 或等于某一 **`linux_raw_sys::general::MFD_HUGE_*`**（勿仅用 **`(MFD_HUGE_MASK<<SHIFT)`** 整域放行，否则 **`0x80000000`** 等无效编码会误过）。
 - **`faccessat2(2)`**：**`flags`** 须为 **`AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH | AT_EACCESS`** 的子集（**`VALID_FACCESSAT_FLAGS`**），否则 **`EINVAL`**；**`AT_EACCESS`** 与 **`resolve_at`** 语义可仍简化，但须先拒绝未知位。
+- **`statx(2)`**：**`flags`** 须为 **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW | AT_STATX_SYNC_TYPE`** 的子集；**`AT_STATX_FORCE_SYNC`** 与 **`AT_STATX_DONT_SYNC`** 不能同时置位（**`(flags & AT_STATX_SYNC_TYPE) == AT_STATX_SYNC_TYPE`** → **`EINVAL`**）；再 **`resolve_at`**。
 - **SysV `msgsnd`/`msgrcv`**：**`MessageQueue`** 含 **`recv_notify`/`send_notify`**（**`event_listener::Event`**）；满且非 **`IPC_NOWAIT`** 时 **`msgsnd`** 在 **`send_notify`** 上阻塞，空且非 **`IPC_NOWAIT`** 时 **`msgrcv`** 在 **`recv_notify`** 上阻塞（**`block_on(interruptible(listener))`**）；入队后 **`recv_notify.notify`**，出队后 **`send_notify.notify`**；**`msgctl(IPC_RMID)`** 置 **`mark_removed`** 后 **`wake_waiters`**。信号 **`EINTR`** 依赖 **`interruptible`**。
 - **`getrusage(RUSAGE_CHILDREN)`**：须为 **`wait`** 回收子进程的 **CPU** 累计（**`ProcessData::child_utime_ns`/`child_stime_ns`**），与 **`times`/`waitpid`** 累加路径一致；**勿**把 **`proc.threads()`** 中除当前线程外的 **pthread** 当作子进程。
 - **`prlimit64`**：若 **`new_limit.rlim_max >`** 当前硬 **`limit.max`**（无 **`CAP_SYS_RESOURCE`** 等能力建模时视为非法抬高），须 **`OperationNotPermitted`（EPERM）**；勿静默 **`Ok(0)`**。可降低硬上限或保持不变并更新 **`rlim_cur`**（在 **`rlim_cur <= rlim_max`** 前提下）。
@@ -152,6 +155,7 @@
 - **`get_mempolicy(2)`**：无 NUMA 建模时 **`policy`** 写入 **`MPOL_DEFAULT`（0）**；若 **`nodemask`/`maxnode`** 有效则清零 **`maxnode`** 位对应字节（上限 8192 字节）以匹配 **默认** 策略的空节点掩码。
 
 ## 给 Debugger 的消息
+- issue-057：请跑 **`/bin/test_statx_invalid_flags`**（**`statx(..., flags=0x80000000)`** → **`EINVAL`**）。
 - issue-056：请跑 **`/bin/test_accept4_invalid_flags`**（非法 **`flags`** → **`EINVAL`**）。
 - issue-061：请在 QEMU 做双进程 **`msgrcv` 阻塞 + `msgsnd` 唤醒** 冒烟（无现成 **`/bin`** 用例）。
 - issue-055：请跑 **`/bin/test_madvise_invalid_advice`**（**`madvise(..., 0xdeadbeef)`** → **`EINVAL`**）。
