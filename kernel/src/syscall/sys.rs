@@ -1,6 +1,7 @@
 use alloc::vec;
 use core::{
     ffi::c_char,
+    mem::size_of,
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
@@ -19,7 +20,7 @@ use linux_raw_sys::{
 use starry_vm::{VmMutPtr, vm_write_slice};
 
 use crate::{
-    mm::{UserConstPtr, UserPtr},
+    mm::{UserConstPtr, UserPtr, check_access},
     task::{AsThread, processes, tasks},
 };
 
@@ -363,7 +364,72 @@ pub fn sys_getrandom(buf: *mut u8, len: usize, flags: u32) -> AxResult<isize> {
     Ok(len as _)
 }
 
-pub fn sys_seccomp(_op: u32, _flags: u32, _args: *const ()) -> AxResult<isize> {
+/// Linux `seccomp(2)` / `uapi/linux/seccomp.h` operation codes (subset; new ops need extending).
+const SECCOMP_SET_MODE_STRICT: u32 = 0;
+const SECCOMP_SET_MODE_FILTER: u32 = 1;
+const SECCOMP_GET_ACTION_AVAIL: u32 = 2;
+const SECCOMP_GET_NOTIF_SIZES: u32 = 3;
+const SECCOMP_GET_NOTIF_FD: u32 = 4;
+
+/// `SECCOMP_FILTER_FLAG_*` bits accepted for `SECCOMP_SET_MODE_FILTER` (Linux 6.x; extend when uapi adds flags).
+const SECCOMP_FILTER_FLAGS_MASK: u32 = (1 << 0)
+    | (1 << 1)
+    | (1 << 2)
+    | (1 << 3)
+    | (1 << 4)
+    | (1 << 5);
+
+/// `struct sock_fprog` size on 64-bit Linux (`unsigned short` + pad + `struct sock_filter *`).
+const SOCK_FPROG_BYTES: usize = 16;
+
+/// Linux `struct seccomp_notif_sizes` (`3` x `__u16` + padding).
+const SECCOMP_NOTIF_SIZES_BYTES: usize = 8;
+
+/// `seccomp(2)`: validate `op`/`flags`/`args` like `kernel/seccomp.c` before reporting no seccomp
+/// policy (issue-352; `PR_SET_SECCOMP` in `task/ctl.rs` remains a separate entry).
+pub fn sys_seccomp(op: u32, flags: u32, args: usize) -> AxResult<isize> {
+    match op {
+        SECCOMP_SET_MODE_STRICT => {
+            // Linux: `flags` and `args` must be zero / NULL.
+            if flags != 0 || args != 0 {
+                return Err(AxError::InvalidInput);
+            }
+        }
+        SECCOMP_SET_MODE_FILTER => {
+            if flags & !SECCOMP_FILTER_FLAGS_MASK != 0 {
+                return Err(AxError::InvalidInput);
+            }
+            if args == 0 {
+                return Err(AxError::InvalidInput);
+            }
+            check_access(args, SOCK_FPROG_BYTES).map_err(|_| AxError::BadAddress)?;
+        }
+        SECCOMP_GET_ACTION_AVAIL => {
+            if flags != 0 {
+                return Err(AxError::InvalidInput);
+            }
+            if args == 0 {
+                return Err(AxError::InvalidInput);
+            }
+            check_access(args, size_of::<u32>()).map_err(|_| AxError::BadAddress)?;
+        }
+        SECCOMP_GET_NOTIF_SIZES => {
+            if flags != 0 {
+                return Err(AxError::InvalidInput);
+            }
+            if args == 0 {
+                return Err(AxError::InvalidInput);
+            }
+            check_access(args, SECCOMP_NOTIF_SIZES_BYTES).map_err(|_| AxError::BadAddress)?;
+        }
+        SECCOMP_GET_NOTIF_FD => {
+            if flags != 0 || args != 0 {
+                return Err(AxError::InvalidInput);
+            }
+        }
+        _ => return Err(AxError::InvalidInput),
+    }
+
     Err(AxError::Unsupported)
 }
 

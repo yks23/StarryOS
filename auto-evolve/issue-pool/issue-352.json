@@ -1,0 +1,33 @@
+{
+  "id": "issue-352",
+  "title": "`seccomp(2)`：`sys_seccomp` 忽略 `op`/`flags`/`args`，直接 `Unsupported`；与 Linux `prctl`/`seccomp` 路径上对未知 `op`、非法 `flags` 或坏 `args` 指针的 `EINVAL`/`EFAULT` 语义不一致",
+  "status": "resolved",
+  "created_at": "2026-04-13T00:15:00Z",
+  "resolved_at": "2026-04-13T00:00:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/sys.rs`** **`sys_seccomp`** **（** **约** **366–368** **行** **）** **：** **`Err(Unsupported)`** **单一** **出口** **，** **未** **解析** **`op`** **（** **`SECCOMP_SET_MODE_*`/`SECCOMP_SET_MODE_FILTER`** **等** **）** **，** **未** **校验** **`flags`** **，** **未** **对** **`args`** **做** **`UserPtr`** **/`copy_from_user`** **。** **Linux** **在** **拒绝** **不** **支持** **特性** **前** **常** **先** **对** **非法** **`op`** **返回** **`EINVAL`** **，** **对** **需要** **用户** **结构** **的** **路径** **在** **`COMPAT`** **下** **可能** **`EFAULT`** **。** **与** **`PR_SET_SECCOMP`** **分支** **在** **`task/ctl.rs`** **已** **部分** **建模** **`SECCOMP_MODE_*`** **（** **仍** **`Unsupported`** **）** **但** **`syscall`** **直** **连** **入口** **无** **对齐** **。**\n\n**建议** **：** **至少** **将** **`op`** **映射** **到** **合法** **枚举** **，** **未知** **`op`** **→** **`InvalidInput`** **；** **`args`** **非** **空** **时** **按** **Linux** **`copy_from_user`** **顺序** **校验** **；** **或** **注释** **Starry** **无** **seccomp** **策略** **故** **统一** **`ENOTSUP`** **/`Unsupported`** **及** **与** **上游** **差异** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["seccomp"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/sys.rs:366-368"],
+    "related_files": ["kernel/src/syscall/task/ctl.rs:264-271"],
+    "key_insight": "sys_seccomp stub vs Linux op/flags/args validation"
+  },
+  "fix_summary": "`sys_seccomp(op,flags,args)`：按 Linux `uapi/linux/seccomp.h` 的 `SECCOMP_SET_MODE_*`/`SECCOMP_GET_*` 校验 `op`（未知 → `EINVAL`）、各 op 的 `flags` 掩码与 `args` 是否 NULL；需用户缓冲时对 `args` 做 `check_access`（坏指针 → `EFAULT`）；通过后再 `Unsupported`（无真实 seccomp）。`mod.rs` 第三参传 `uctx.arg2()` 为 `usize`。",
+  "files_changed": [
+    "kernel/src/syscall/sys.rs",
+    "kernel/src/syscall/mod.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-352.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：`seccomp(0xdeadbeef, 0, NULL)` 对照 Linux `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "`EINVAL`/`EFAULT`/`ENOTSUP` 与 Linux 一致或文档化不支持策略。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "校验 `op`/`flags` 合法组合后返回 `Unsupported` 或显式 `EINVAL`；对 `args` 指针按 Linux 顺序探测。",
+  "references": ["man 2 seccomp", "kernel/src/syscall/sys.rs", "kernel/src/syscall/task/ctl.rs"]
+}
