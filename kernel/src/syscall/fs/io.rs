@@ -468,6 +468,11 @@ pub fn sys_copy_file_range(
         flags
     );
 
+    // Resolve fds before `flags` so **EBADF** precedes **EINVAL**/**EOPNOTSUPP** when both bad
+    // fds and bad `flags` apply (Linux `__sys_copy_file_range`; issue-315, issue-313 theme).
+    let f_in = File::from_fd(fd_in)?;
+    let f_out = File::from_fd(fd_out)?;
+
     if flags & !COPY_FILE_RANGE_MASK != 0 {
         return Err(AxError::InvalidInput);
     }
@@ -477,8 +482,6 @@ pub fn sys_copy_file_range(
         return Err(AxError::OperationNotSupported);
     }
 
-    let f_in = File::from_fd(fd_in)?;
-    let f_out = File::from_fd(fd_out)?;
     let mi = f_in.inner().location().metadata()?;
     let mo = f_out.inner().location().metadata()?;
     if mi.node_type != NodeType::RegularFile || mo.node_type != NodeType::RegularFile {
@@ -507,13 +510,13 @@ pub fn sys_copy_file_range(
     }
 
     let src = if !off_in.is_null() {
-        SendFile::Offset(File::from_fd(fd_in)?, off_in)
+        SendFile::Offset(f_in.clone(), off_in)
     } else {
         SendFile::Direct(get_file_like(fd_in)?)
     };
 
     let dst = if !off_out.is_null() {
-        SendFile::Offset(File::from_fd(fd_out)?, off_out)
+        SendFile::Offset(f_out.clone(), off_out)
     } else {
         SendFile::Direct(get_file_like(fd_out)?)
     };
