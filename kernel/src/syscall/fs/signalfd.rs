@@ -51,6 +51,11 @@ pub fn sys_signalfd4(
         return Err(AxError::InvalidInput);
     }
 
+    if mask.is_null() {
+        // Linux `signalfd4(2)`: `mask` must point to valid user memory; NULL → EFAULT.
+        return Err(AxError::BadAddress);
+    }
+
     // Read the signal mask from user space before handling the request mode.
     let mask = unsafe { mask.vm_read_uninit()?.assume_init() };
 

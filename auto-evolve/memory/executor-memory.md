@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-116 resolved（**`signalfd4`**：**`mask==NULL`** → **`BadAddress`**，在 **`vm_read_uninit`** 前；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-115 resolved（**`rt_sigpending`**：**`set==NULL`** → **`BadAddress`**（**EFAULT**），在 **`check_sigset_size`** 后、**`vm_write`** 前；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-114 resolved（**`fadvise64`** 桩：**`offset`/`len` 非负** + **`checked_add`** 溢出 **`InvalidInput`**，与 **`fallocate`** 一致；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-113 resolved（**`timerfd_gettime`**：**`curr_value==NULL`**在 **`from_fd`** 后、**`gettime`/`vm_write`** 前 **`BadAddress`**（**EFAULT**），与 **`settime`** 对 **`new_value`** 的显式校验对称；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -96,6 +97,7 @@
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-116 | signalfd4 NULL mask → BadAddress | resolved | 2026-04-12 |
 | issue-115 | rt_sigpending NULL set → BadAddress | resolved | 2026-04-12 |
 | issue-114 | fadvise64校验 offset/len 非负与 overflow | resolved | 2026-04-12 |
 | issue-113 | timerfd_gettime NULL curr_value → BadAddress | resolved | 2026-04-12 |
@@ -210,6 +212,7 @@
 - 全核 membarrier（多 hart）在 Linux 上依赖 IPI；若未来启用 `axfeat/smp` + `axfeat/ipi`，可在各核 IPI handler 中执行与 `sys_membarrier` 相同的 fence，并用同步原语等待全部完成。
 - `rt_sigreturn` 通过 `block_next_signal` 标记「下一次回到用户循环时跳过一次 `check_signals`」；该标志必须是 **per-thread**（`Thread::skip_next_signal_check`），不可用进程级或全局 AtomicBool。
 - **`rt_sigpending`**：**`set`** 为必填输出（Linux **`NULL` → EFAULT**），**`set.is_null()` → `BadAddress`**，须在 **`vm_write`** 前校验；**`rt_sigprocmask`/`rt_sigaction`** 的 **`oldset`/`oldact`** 仍为 **`nullable()`** 可选输出。
+- **`signalfd4`**：**`mask`** 为必填输入（Linux **`NULL` → EFAULT**），**`mask.is_null()` → `BadAddress`**，须在 **`vm_read_uninit`** 前校验。
 - timerfd：`TimerFd` 实现 `FileLike` + `Pollable`；到期逻辑在 `process_expirations` 中根据时钟纳秒与 `next_deadline_nanos` 比较；通过 `axtask::register_timer_callback`（首次创建时注册）在每次内核 timer tick 中扫描弱引用列表并 `wake` `PollSet`；创建 fd 用 `add_file_like`（与 eventfd2 相同），勿对 `Arc<TimerFd>` 误用 `add_to_fd_table(self)`。**`timerfd_settime`**：**`new_value.is_null()` → `InvalidInput`**。**`timerfd_gettime`**：**`curr_value.is_null()` → `BadAddress`**（Linux **EFAULT**），在 **`from_fd`** 之后、**`gettime`/`vm_write`** 之前校验，避免先算定时器再因用户指针失败。
 - **`mmap(2)` `flags`**：先 **`flags & !ALLOWED_MAP_FLAGS`**（**`MAP_TYPE|MAP_FIXED|MAP_ANONYMOUS|…|MAP_DROPPABLE|(MAP_HUGE_MASK<<MAP_HUGE_SHIFT)`** 等 uapi 位），非零 → **`InvalidInput`**；**`MmapFlags::from_bits(flags)`**，**`None`** 时 **`MAP_SHARED_VALIDATE` 类型 → `OperationNotSupported`**，否则 **`InvalidInput`**；勿在未知/非法组合上 **`from_bits_truncate`**。合法 **`MAP_HUGE_*`** 等须在 **`MmapFlags`** 中声明以便 **`from_bits`** 成功。
 - **`pipe2`**：**`flags`** 仅允许 **`O_CLOEXEC`/`O_NONBLOCK`**（**`PipeFlags`**）；用 **`from_bits(...).ok_or(InvalidInput)`**，勿 **`from_bits_truncate`**（与 **`eventfd2`/`epoll_create1`** 一致）。
