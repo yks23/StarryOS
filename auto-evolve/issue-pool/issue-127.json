@@ -1,0 +1,28 @@
+{
+  "id": "issue-127",
+  "title": "statx 先 vm_load_string(path) 再校验 flags，非法 flags 与坏 path 组合时 EINVAL/EFAULT 顺序可偏离 Linux",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "resolved_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_statx`：`VALID_STATX_FLAGS` 与 `AT_STATX_SYNC_TYPE` 互斥校验移到 `vm_load_string(path)` 之前，非法 flags 先 `EINVAL`（issue-057规则不变）。",
+  "files_changed": ["kernel/src/syscall/fs/stat.rs"],
+  "description": "**`sys_statx`**（`kernel/src/syscall/fs/stat.rs`）在 **`VALID_STATX_FLAGS`** 掩码及 **`AT_STATX_SYNC_TYPE`** 互斥校验之前，先执行 **`path.nullable().map(vm_load_string)...`**（可能触碰用户 **`path`**）。**Linux** **`vfs_statx`** /入口通常在解析路径前即拒绝未知 **`flags`**（**`EINVAL`**）。当 **`flags`** 含非法位且 **`path`** 用户指针不可读时：**Starry** 可能先 **`EFAULT`类**；**Linux** 多先 **`EINVAL`**。同文件 **`sys_fstatat`** 无独立 **`flags`** 掩码步骤；**`sys_faccessat2`** 亦 **`path`** 先于 **`VALID_FACCESSAT_FLAGS`**，可另议。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["statx"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/stat.rs:60-109"],
+    "related_files": ["kernel/src/syscall/fs/stat.rs:44-58"],
+    "key_insight": "`vm_load_string(path)` 先于 `flags` 非法位 / sync 冲突校验"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "非法 **`flags`**（如保留位）+ 不可读 **`path`**；对比 **Linux** 首错 **`EINVAL`** vs **Starry** 是否 **`EFAULT`**。",
+    "expected_output_contains": "",
+    "pass_criteria": "**`flags`** 校验顺序与 **Linux** 一致，或文档化当前顺序。",
+    "last_result": "2026-04-12：已 flags 校验先于 `vm_load_string`；`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` PASS；QEMU 未测"
+  },
+  "suggested_fix": "将 **`flags & !VALID_STATX_FLAGS`** 与 **`AT_STATX_SYNC_TYPE`** 冲突检测移到 **`vm_load_string`** 之前（仅需 **`dirfd`/`flags`/`path` 指针是否参与空路径语义时，再谨慎处理 **`AT_EMPTY_PATH`** 与 **`path==NULL`** 的 Linux 行为）。",
+  "references": ["man 2 statx", "Linux fs/stat.c vfs_statx"]
+}

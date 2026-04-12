@@ -91,10 +91,7 @@ pub fn sys_statx(
     //        below), then the target file is the one referred to by the
     //        file descriptor dirfd.
 
-    let path = path.nullable().map(vm_load_string).transpose()?;
-    debug!("sys_statx <= dirfd: {dirfd}, path: {path:?}, flags: {flags}");
-
-    // Linux vfs_statx: AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW | AT_STATX_SYNC_TYPE only.
+    // Linux vfs_statx: reject unknown flags before touching user `path` (EINVAL before EFAULT).
     const VALID_STATX_FLAGS: u32 = AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW | AT_STATX_SYNC_TYPE;
     if flags & !VALID_STATX_FLAGS != 0 {
         return Err(AxError::InvalidInput);
@@ -103,6 +100,9 @@ pub fn sys_statx(
     if flags & AT_STATX_SYNC_TYPE == AT_STATX_SYNC_TYPE {
         return Err(AxError::InvalidInput);
     }
+
+    let path = path.nullable().map(vm_load_string).transpose()?;
+    debug!("sys_statx <= dirfd: {dirfd}, path: {path:?}, flags: {flags}");
 
     statxbuf.vm_write(resolve_at(dirfd, path.as_deref(), flags)?.stat()?.into())?;
 
