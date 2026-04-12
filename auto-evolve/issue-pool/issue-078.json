@@ -1,0 +1,28 @@
+{
+  "id": "issue-078",
+  "title": "epoll_ctl 对 epoll_event.events 使用 IoEvents::from_bits_truncate，未知 EPOLL* 位可能被静默丢弃",
+  "status": "resolved",
+  "created_at": "2026-04-13T15:00:00Z",
+  "resolved_at": "2026-04-12T18:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`parse_event`**：先以 **`KNOWN_EPOLL_EVENTS_MASK`**（**`IoEvents::all()` ∪ `EpollFlags::all()` ∪ `EPOLLEXCLUSIVE`/`EPOLLWAKEUP`**）校验 **`event.events`**，**`raw & !KNOWN != 0` → `InvalidInput`**；**`EPOLLEXCLUSIVE`/`EPOLLWAKEUP`** 在解析前剥离（当前 **`Epoll`** 未建模）；**`IoEvents`/`EpollFlags`** 用 **`from_bits`** 按位域拆分，**不再** **`from_bits_truncate`**。",
+  "files_changed": ["kernel/src/syscall/io_mpx/epoll.rs"],
+  "description": "**`sys_epoll_ctl`**（`kernel/src/syscall/io_mpx/epoll.rs`）在 **`parse_event`** 中将用户 **`epoll_event.events`** 拆为 **`IoEvents::from_bits_truncate(event.events)`** 与 **`EpollFlags::from_bits(event.events & !events.bits())`**。**`from_bits_truncate`** 会**丢弃**未在 **`IoEvents` bitflags** 中声明的位；仅当**余下**位无法被 **`EpollFlags`** 解析时才 **`InvalidInput`**。Linux **`epoll_ctl(2)`** 对 **`events`** 中**未定义/保留**位或非法组合通常返回 **`EINVAL`**，**不会**在「先截断 **`IoEvents`**、再解析 **`EpollFlags`**」的路径上**静默忽略**未知位。若 **`axpoll::IoEvents`** 与当前内核 **uapi** 的 **`EPOLL*`** 掩码**不完全同步**，或用户传入**仅落在未建模位域**的组合，行为可能与 Linux **可观察 errno** 不一致。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["epoll_ctl"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/io_mpx/epoll.rs:48-59"],
+    "related_files": [],
+    "key_insight": "`from_bits_truncate` + 余量进 `EpollFlags`；非 Linux 式「整域 EINVAL」"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "对比 Linux：对 **`epoll_ctl`** 传入 **`events` 含 `0x80000000` 或 uapi 保留位**；Linux 多 **EINVAL**；Starry 若仍 **ADD/MOD** 成功则记偏差。",
+    "expected_output_contains": "",
+    "pass_criteria": "对 `events` 含未知位 **`InvalidInput`**，或扩展 `IoEvents`/`KNOWN_MASK` 与 Linux 一致。",
+    "last_result": "2026-04-12：**`KNOWN_EPOLL_EVENTS_MASK` + `from_bits`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** PASS"
+  },
+  "suggested_fix": "对 **`event.events`** 做 **`KNOWN_EPOLL_EVENTS`（IoEvents|EpollFlags 并集）** 掩码；**`events & !KNOWN != 0` → `InvalidInput`**；或 **`IoEvents::from_bits`**/**`EpollFlags::from_bits`** 组合 **无** **truncate** 路径。",
+  "references": ["man 2 epoll_ctl", "linux/eventpoll.h"]
+}

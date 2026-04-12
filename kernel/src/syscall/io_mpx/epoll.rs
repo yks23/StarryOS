@@ -5,7 +5,8 @@ use axpoll::IoEvents;
 use axtask::future::{self, block_on, poll_io};
 use bitflags::bitflags;
 use linux_raw_sys::general::{
-    EPOLL_CLOEXEC, EPOLL_CTL_ADD, EPOLL_CTL_DEL, EPOLL_CTL_MOD, epoll_event, timespec,
+    EPOLL_CLOEXEC, EPOLL_CTL_ADD, EPOLL_CTL_DEL, EPOLL_CTL_MOD, EPOLLEXCLUSIVE, EPOLLWAKEUP,
+    epoll_event, timespec,
 };
 use starry_signal::SignalSet;
 
@@ -28,6 +29,13 @@ bitflags! {
     }
 }
 
+/// Linux `epoll_event.events` bits accepted by `epoll_ctl` (`IoEvents` ∪ `EpollFlags` ∪
+/// `EPOLLEXCLUSIVE`/`EPOLLWAKEUP`). The latter two are stripped before registration (not modeled).
+const KNOWN_EPOLL_EVENTS_MASK: u32 =
+    IoEvents::all().bits() | EpollFlags::all().bits() | EPOLLEXCLUSIVE | EPOLLWAKEUP;
+
+const STRIP_EPOLL_CTL_UNUSED: u32 = EPOLLEXCLUSIVE | EPOLLWAKEUP;
+
 pub fn sys_epoll_create1(flags: u32) -> AxResult<isize> {
     let flags = EpollCreateFlags::from_bits(flags).ok_or(AxError::InvalidInput)?;
     debug!("sys_epoll_create1 <= flags: {flags:?}");
@@ -47,9 +55,15 @@ pub fn sys_epoll_ctl(
 
     let parse_event = || -> AxResult<(EpollEvent, EpollFlags)> {
         let event = event.get_as_ref()?;
-        let events = IoEvents::from_bits_truncate(event.events);
+        let raw = event.events;
+        if raw & !KNOWN_EPOLL_EVENTS_MASK != 0 {
+            return Err(AxError::InvalidInput);
+        }
+        let masked = raw & !STRIP_EPOLL_CTL_UNUSED;
+        let events =
+            IoEvents::from_bits(masked & IoEvents::all().bits()).ok_or(AxError::InvalidInput)?;
         let flags =
-            EpollFlags::from_bits(event.events & !events.bits()).ok_or(AxError::InvalidInput)?;
+            EpollFlags::from_bits(masked & EpollFlags::all().bits()).ok_or(AxError::InvalidInput)?;
         Ok((
             EpollEvent {
                 events,
