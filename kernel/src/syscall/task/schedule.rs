@@ -297,12 +297,13 @@ pub fn sys_getpriority(which: u32, who: u32) -> AxResult<isize> {
                 who
             };
             let _pg = get_process_group(pgid)?;
-            let n = min_nice_among(
+            let Some(n) = min_nice_among(
                 processes()
                     .iter()
                     .filter_map(|p| (p.proc.group().pgid() == pgid).then_some(p.as_ref())),
-            )
-            .unwrap_or(0);
+            ) else {
+                return Err(AxError::NoSuchProcess);
+            };
             Ok(linux_getpriority_ret(n))
         }
         PRIO_USER => {
@@ -347,10 +348,15 @@ pub fn sys_setpriority(which: u32, who: u32, nice: i32) -> AxResult<isize> {
                 who
             };
             let _pg = get_process_group(pgid)?;
+            let mut any = false;
             for p in processes() {
                 if p.proc.group().pgid() == pgid {
                     p.set_nice(nice);
+                    any = true;
                 }
+            }
+            if !any {
+                return Err(AxError::NoSuchProcess);
             }
             Ok(0)
         }
