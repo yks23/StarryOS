@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-373 resolved（**`preadv2`/`pwritev2`**：**`File::from_fd`** **先于** **`check_rwf_flags`** **（** **`EBADF`** **先于** **`EINVAL`/`ENOTSUP`** **）**；**`fs/io.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-372 resolved（**`sendto`/`sendmsg`**：**`SENDMSG_FLAGS_UNSUPPORTED`** **`MSG_CMSG_CLOEXEC`** **→** **`OperationNotSupported`**；**`validate_sendmsg_flags`** **与** **`validate_recvmsg_flags`** **对称**；**`net/io.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-371 resolved（**`getrusage` `RUSAGE_SELF`**：**`thread_group_cpu_nanos_strict`** **`get_task` 失败** **→** **`Err`**；**与** **`thread_group_cpu_nanos`** **（** **跳过** **）** **分工**；**`resources.rs`**/**`task/mod.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-370 resolved（**`msgctl` `MSG_STAT`**：**`msg_queue_order` `VecDeque`** **按** **创建顺序** **枚举** **活动** **队列**（**idr** **槽** **下标**）；**非** **`msqid` `BTreeMap`** **键序**；**`msg.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）

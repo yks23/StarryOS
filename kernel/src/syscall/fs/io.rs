@@ -328,8 +328,10 @@ pub fn sys_preadv2(
     flags: u32,
 ) -> AxResult<isize> {
     debug!("sys_preadv2 <= fd: {fd}, iovcnt: {iovcnt}, offset: {offset}, flags: {flags}");
-    check_rwf_flags(flags)?;
+    // Linux `do_preadv`: `fget` before `RWF_*` / iov validation — **EBADF** before **EINVAL** when
+    // both bad `fd` and bad `flags` apply (issue-373; same theme as `pread64`/`pwrite64` issue-314).
     let f = File::from_fd(fd)?;
+    check_rwf_flags(flags)?;
     if offset < 0 {
         return Err(AxError::InvalidInput);
     }
@@ -346,8 +348,9 @@ pub fn sys_pwritev2(
     flags: u32,
 ) -> AxResult<isize> {
     debug!("sys_pwritev2 <= fd: {fd}, iovcnt: {iovcnt}, offset: {offset}, flags: {flags}");
-    check_rwf_flags(flags)?;
+    // Same `fget` / `RWF_*` order as `sys_preadv2` (issue-373).
     let f = File::from_fd(fd)?;
+    check_rwf_flags(flags)?;
     if offset < 0 {
         return Err(AxError::InvalidInput);
     }
