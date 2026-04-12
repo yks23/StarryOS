@@ -23,7 +23,11 @@ use axpoll::Pollable;
 use axtask::current;
 use downcast_rs::{DowncastSync, impl_downcast};
 use flatten_objects::FlattenObjects;
-use linux_raw_sys::general::{RLIMIT_NOFILE, stat, statx, statx_timestamp};
+use linux_raw_sys::general::{
+    RLIMIT_NOFILE, stat, statx, statx_timestamp, STATX_ATIME, STATX_BLOCKS, STATX_BASIC_STATS,
+    STATX_CTIME, STATX_GID, STATX_INO, STATX_MODE, STATX_MTIME, STATX_NLINK, STATX_SIZE,
+    STATX_TYPE, STATX_UID, STATX__RESERVED,
+};
 use spin::RwLock;
 
 pub use self::{
@@ -101,22 +105,11 @@ impl From<Kstat> for stat {
     }
 }
 
-impl From<Kstat> for statx {
-    fn from(value: Kstat) -> Self {
-        // SAFETY: valid for statx
-        let mut statx: statx = unsafe { core::mem::zeroed() };
-        statx.stx_blksize = value.blksize as _;
-        statx.stx_attributes = value.mode as _;
-        statx.stx_nlink = value.nlink as _;
-        statx.stx_uid = value.uid as _;
-        statx.stx_gid = value.gid as _;
-        statx.stx_mode = value.mode as _;
-        statx.stx_ino = value.ino as _;
-        statx.stx_size = value.size as _;
-        statx.stx_blocks = value.blocks as _;
-        statx.stx_rdev_major = value.rdev.major();
-        statx.stx_rdev_minor = value.rdev.minor();
-
+impl Kstat {
+    /// Builds a `statx` honoring Linux `mask` (`STATX_*`): only requested fields are written and
+    /// `stx_mask` reports what was filled. Unsupported request bits (e.g. `STATX_BTIME`) are
+    /// ignored and omitted from `stx_mask`.
+    pub fn into_statx_with_mask(self, mask: u32) -> statx {
         fn time_to_statx(time: &Duration) -> statx_timestamp {
             statx_timestamp {
                 tv_sec: time.as_secs() as _,
@@ -124,14 +117,72 @@ impl From<Kstat> for statx {
                 __reserved: 0,
             }
         }
-        statx.stx_atime = time_to_statx(&value.atime);
-        statx.stx_ctime = time_to_statx(&value.ctime);
-        statx.stx_mtime = time_to_statx(&value.mtime);
 
-        statx.stx_dev_major = (value.dev >> 32) as _;
-        statx.stx_dev_minor = value.dev as _;
+        let mut stx: statx = unsafe { core::mem::zeroed() };
+        let want = mask & !STATX__RESERVED;
+        let mut filled = 0u32;
 
-        statx
+        if want & (STATX_TYPE | STATX_MODE) != 0 {
+            stx.stx_mode = self.mode as u16;
+            stx.stx_attributes = self.mode as u64;
+            filled |= want & (STATX_TYPE | STATX_MODE);
+        }
+        if want & STATX_NLINK != 0 {
+            stx.stx_nlink = self.nlink;
+            filled |= STATX_NLINK;
+        }
+        if want & STATX_UID != 0 {
+            stx.stx_uid = self.uid;
+            filled |= STATX_UID;
+        }
+        if want & STATX_GID != 0 {
+            stx.stx_gid = self.gid;
+            filled |= STATX_GID;
+        }
+        if want & STATX_ATIME != 0 {
+            stx.stx_atime = time_to_statx(&self.atime);
+            filled |= STATX_ATIME;
+        }
+        if want & STATX_MTIME != 0 {
+            stx.stx_mtime = time_to_statx(&self.mtime);
+            filled |= STATX_MTIME;
+        }
+        if want & STATX_CTIME != 0 {
+            stx.stx_ctime = time_to_statx(&self.ctime);
+            filled |= STATX_CTIME;
+        }
+        if want & STATX_INO != 0 {
+            stx.stx_ino = self.ino;
+            filled |= STATX_INO;
+        }
+        if want & STATX_SIZE != 0 {
+            stx.stx_size = self.size;
+            filled |= STATX_SIZE;
+        }
+        if want & STATX_BLOCKS != 0 {
+            stx.stx_blocks = self.blocks;
+            filled |= STATX_BLOCKS;
+        }
+        if want & (STATX_SIZE | STATX_BLOCKS) != 0 {
+            stx.stx_blksize = self.blksize;
+        }
+        if want & STATX_INO != 0 {
+            stx.stx_dev_major = (self.dev >> 32) as u32;
+            stx.stx_dev_minor = self.dev as u32;
+        }
+        if want & (STATX_TYPE | STATX_MODE) != 0 {
+            stx.stx_rdev_major = self.rdev.major();
+            stx.stx_rdev_minor = self.rdev.minor();
+        }
+
+        stx.stx_mask = filled;
+        stx
+    }
+}
+
+impl From<Kstat> for statx {
+    fn from(value: Kstat) -> Self {
+        value.into_statx_with_mask(STATX_BASIC_STATS)
     }
 }
 

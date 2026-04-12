@@ -1,0 +1,27 @@
+{
+  "id": "issue-155",
+  "title": "statx 忽略 mask 参数，未按 STATX_* 请求选择性填充，与 Linux 语义不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "新增 **`Kstat::into_statx_with_mask`**：按 **`STATX_*`** 选择性写字段并设置 **`stx_mask`**；**`sys_statx`** 传入用户 **`mask`**；**`STATX__RESERVED`** 从请求中剥离；**`From<Kstat> for statx`** 委托 **`STATX_BASIC_STATS`** 以保持原全量语义。",
+  "files_changed": ["kernel/src/file/mod.rs", "kernel/src/syscall/fs/stat.rs"],
+  "description": "**`sys_statx`**（`kernel/src/syscall/fs/stat.rs`）将 **`mask`** 形参命名为 **`_mask`** 且**未使用**，始终执行 **`statxbuf.vm_write(resolve_at(...)? .stat()?.into())`**，等价于把 **`Kstat`/元数据** 全量写入用户 **`struct statx`**。**Linux **`statx(2)`** 中 **`mask`**（**`STATX_TYPE`/`STATX_MODE`/…**）决定内核应填充哪些字段；未在 **`mask`** 中请求的属性可保持未初始化、为零或与 **`STATX_*_SET`** 状态位不一致。**Starry** 在调用方仅请求子集（例如只要 **`STATX_BASIC_STATS`**）时仍可能写入 **`stx_btime`** 等「看似已填充」的字段，与 **glibc**/审计工具对 **`mask`** 的依赖不完全一致；亦与 **issue-127**（**`flags`** 校验）互补，属 **`mask`** 语义缺口。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["statx"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/stat.rs:72-121"],
+    "related_files": [],
+    "key_insight": "`_mask` 未参与 `vm_write` 前的字段选择与 `stx_mask` 构造"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "**`statx`** 传入仅 **`STATX_TYPE`** 等窄 **`mask`**，检查返回 **`statx.stx_mask`** 及未请求字段是否与 **Linux** 一致（或未定义行为是否文档化）。",
+    "expected_output_contains": "",
+    "pass_criteria": "按 **`mask`** 设置 **`stx_mask`** 并仅填充已请求字段（或明确文档化「始终全量填充」）。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0）"
+  },
+  "suggested_fix": "解析 **`mask`**：将 **`loc.stat()`** 结果映射到 **`statx`** 时仅填充 **`mask`** 所含 **`STATX_*`**对应成员，并正确设置 **`stx_mask`**（及 **`reserved`**/**`stx_attributes`** 等与 **Linux** 对齐的字段）。",
+  "references": ["man 2 statx", "Linux vfs_statx"]
+}

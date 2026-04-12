@@ -73,7 +73,7 @@ pub fn sys_statx(
     dirfd: c_int,
     path: *const c_char,
     flags: u32,
-    _mask: u32,
+    mask: u32,
     statxbuf: *mut statx,
 ) -> AxResult<isize> {
     // `statx()` uses pathname, dirfd, and flags to identify the target
@@ -114,9 +114,10 @@ pub fn sys_statx(
     }
 
     let path = path.nullable().map(vm_load_string).transpose()?;
-    debug!("sys_statx <= dirfd: {dirfd}, path: {path:?}, flags: {flags}");
+    debug!("sys_statx <= dirfd: {dirfd}, path: {path:?}, flags: {flags}, mask: {mask}");
 
-    statxbuf.vm_write(resolve_at(dirfd, path.as_deref(), flags)?.stat()?.into())?;
+    let kstat = resolve_at(dirfd, path.as_deref(), flags)?.stat()?;
+    statxbuf.vm_write(kstat.into_statx_with_mask(mask))?;
 
     Ok(0)
 }
