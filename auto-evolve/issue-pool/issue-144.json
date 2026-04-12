@@ -1,0 +1,27 @@
+{
+  "id": "issue-144",
+  "title": "epoll_ctl ADD/MOD 先 parse_event(get_as_ref) 再 epoll.add/mod 内 get_file_like(fd)，EBADF 与 EFAULT 顺序可偏离 Linux",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "对 `EPOLL_CTL_ADD`/`MOD`，在 `parse_event`/`event.get_as_ref` 之前调用 `get_file_like(fd)?`，使无效目标 fd 先 `EBADF`（BadFileDescriptor）于坏 `event` 指针的 EFAULT；`DEL` 不变。成功路径上 `EntryKey::new` 仍会第二次 `get_file_like`（与既有 `add`/`modify` 一致）。",
+  "files_changed": ["kernel/src/syscall/io_mpx/epoll.rs"],
+  "description": "**`sys_epoll_ctl`**（`kernel/src/syscall/io_mpx/epoll.rs`）在 **`Epoll::from_fd(epfd)?`** 之后，对 **`EPOLL_CTL_ADD`**/**`EPOLL_CTL_MOD`** 先调用 **`parse_event()`**（**`event.get_as_ref()`** 读用户 **`epoll_event`**），再 **`epoll.add(fd, ...)`**/**`modify`**。**`add`/`modify`** 经 **`EntryKey::new(fd)`**才 **`get_file_like(fd)?`**。**Linux **`epoll_ctl`** 通常先校验 **`epfd`** 与目标 **`fd`**（无效 **`fd`** → **`EBADF`**），再 **`copy_from_user`** **`event`**（若需）。当 **`fd`** 无效但 **`event`** 指针不可读时：**Starry** 可能先 **`EFAULT`类**；**Linux** 多先 **`EBADF`**。**`EPOLL_CTL_DEL`** 不读 **`event`**，无此子问题。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["epoll_ctl"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/io_mpx/epoll.rs:47-88"],
+    "related_files": ["kernel/src/file/epoll.rs:108-114"],
+    "key_insight": "`parse_event` 早于目标 `fd` 的 `get_file_like`"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "合法 **`epfd`** + 无效 **`fd`** + 坏 **`event`** 指针（**`EPOLL_CTL_ADD`**）；对比 **Linux** 与 **Starry** 首错 **`EBADF`** vs **`EFAULT`**。",
+    "expected_output_contains": "",
+    "pass_criteria": "目标 **`fd`** 解析不晚于 **`ADD`/`MOD`** 路径上首次读 **`event`**，或文档化当前顺序。",
+    "last_result": "`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` 通过（2026-04-12）。"
+  },
+  "suggested_fix": "对 **`ADD`/`MOD`**：在 **`parse_event`** 之前 **`get_file_like(fd)?`**（或等价 **`EntryKey::new`**预检），再读 **`event`** 并 **`add`/`modify`**；注意与 **`epfd`**/**`fd`** 相同等 **`EINVAL`** 语义。",
+  "references": ["man 2 epoll_ctl", "Linux fs/eventpoll.c"]
+}

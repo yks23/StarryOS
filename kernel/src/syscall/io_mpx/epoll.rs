@@ -14,6 +14,7 @@ use crate::{
     file::{
         FileLike,
         epoll::{Epoll, EpollEvent, EpollFlags},
+        get_file_like,
     },
     mm::{UserConstPtr, UserPtr, nullable},
     syscall::signal::check_sigset_size,
@@ -74,10 +75,13 @@ pub fn sys_epoll_ctl(
     };
     match op {
         EPOLL_CTL_ADD => {
+            // Linux epoll_ctl: validate target fd (EBADF) before copy_from_user(event) (EFAULT).
+            let _ = get_file_like(fd)?;
             let (event, flags) = parse_event()?;
             epoll.add(fd, event, flags)?;
         }
         EPOLL_CTL_MOD => {
+            let _ = get_file_like(fd)?;
             let (event, flags) = parse_event()?;
             epoll.modify(fd, event, flags)?;
         }
