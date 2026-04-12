@@ -32,6 +32,11 @@ pub fn sys_execve(
     }
 
     let path = vm_load_string(path)?;
+    // Linux rejects empty pathname with EINVAL before replacing the image (issue-407; issue-393
+    // theme; NULL `argv` first, issue-325).
+    if path.is_empty() {
+        return Err(AxError::InvalidInput);
+    }
 
     let args = vm_load_until_nul(argv)?
         .into_iter()
