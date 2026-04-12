@@ -116,9 +116,18 @@ pub fn sys_umount2(target: *const c_char, flags: i32) -> AxResult<isize> {
     Ok(0)
 }
 
+/// Linux `FSOPEN_CLOEXEC` (`uapi/linux/mount.h`); `linux_raw_sys` may not export it on this target.
+const FSOPEN_CLOEXEC: u32 = 0x0000_0001;
+/// Allowed `FSOPEN_*` mask until more flags are implemented.
+const FSOPEN_KNOWN_FLAGS: u32 = FSOPEN_CLOEXEC;
+
 /// Linux mount API (`fsopen`): no fs-context layer yet; return **ENODEV** so userland does not get a
 /// misleading `anon_inode:[dummy]` fd (tests accept EINVAL / ENODEV / ENOENT).
-pub fn sys_fsopen(fsname: UserConstPtr<c_char>, _flags: u32) -> AxResult<isize> {
+pub fn sys_fsopen(fsname: UserConstPtr<c_char>, flags: u32) -> AxResult<isize> {
+    // Unknown `FSOPEN_*` bits → **EINVAL** before `fsname` (flags-first; issue-386; Linux `fsopen`).
+    if flags & !FSOPEN_KNOWN_FLAGS != 0 {
+        return Err(AxError::InvalidInput);
+    }
     let name = fsname.get_as_str()?;
     if name.is_empty() {
         return Err(AxError::InvalidInput);

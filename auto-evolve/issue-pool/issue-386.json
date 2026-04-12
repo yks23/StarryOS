@@ -1,0 +1,27 @@
+{
+  "id": "issue-386",
+  "title": "`fsopen(2)`：`sys_fsopen` 忽略 `flags`，未知 `FSOPEN_*` 位未在 `get_as_str` 前拒绝为 `EINVAL`",
+  "status": "resolved",
+  "created_at": "2026-04-13T00:15:00Z",
+  "severity": "low",
+  "description": "`kernel/src/syscall/fs/mount.rs` `sys_fsopen`（约 121–127 行）：形参 `_flags: u32` 未使用。Linux `fsopen(2)` 仅允许定义的 `FSOPEN_*` 掩码（如 `FSOPEN_CLOEXEC`）；保留位或非零未定义组合应 **`EINVAL`**，且常见实现会在 **`copy_from_user(fsname)`** 前后与 **`ENODEV`/不支持** 路径区分错误优先级。\n\n当前实现总是 **`get_as_str`** →空名 **`InvalidInput`** → 否则 **`NoSuchDevice`**，**从未** 因非法 **`flags`** 失败，与 **`sys_mount`** **`validate_mount_flags`**（issue-303）及 **`openat`/`timerfd`** 等 **flags-first** 主题可对照。\n\n建议：定义 `FSOPEN_CLOEXEC`（或自 `linux_raw_sys` 引入）及允许掩码；`flags & !ALLOWED != 0` → **`InvalidInput`**；再读 **`fsname`**。若有意桩实现，应在注释中说明 **`flags`** 校验推迟原因。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["fsopen"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/mount.rs:119-128"],
+    "related_files": ["kernel/src/syscall/fs/mount.rs:62-91"],
+    "key_insight": "`flags & !FSOPEN_KNOWN`先于 `get_as_str` → `InvalidInput`；当前仅 `FSOPEN_CLOEXEC`"
+  },
+  "fix_summary": "`sys_fsopen`：定义 `FSOPEN_CLOEXEC`/`FSOPEN_KNOWN_FLAGS`，在 `get_as_str` 前对未知 `FSOPEN_*` 位返回 `InvalidInput`（issue-386）。",
+  "files_changed": ["kernel/src/syscall/fs/mount.rs"],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：非法 `FSOPEN_*` 位 + 合法 `fsname` 对照 Linux `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "未知 `flags` 返回与 Linux 一致的 EINVAL，或文档化桩行为。",
+    "last_result": ""
+  },
+  "suggested_fix": "校验 `flags` 掩码后再 `get_as_str`；与 `validate_mount_flags` 风格一致。",
+  "references": ["man 2 fsopen", "kernel/src/syscall/fs/mount.rs", "issue-303", "issue-323"]
+}

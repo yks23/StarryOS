@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-386 resolved（**`fsopen`**：**`flags & !FSOPEN_KNOWN`** **先于** **`get_as_str`** **→** **`InvalidInput`**；**`FSOPEN_CLOEXEC=1`**；**`mount.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-385 resolved（**`riscv_flush_icache`** **`LOCAL`**：**`check_access`** **失败** **→** **`BadAddress`**；**`sys.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-384 resolved（**`futex`** **`FUTEX_REQUEUE`/`FUTEX_CMP_REQUEUE`**：**`uaddr2==NULL`** **→** **`InvalidInput`**；**否则** **`check_access`+`vm_read`**；**`futex.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-383 resolved（**`set_robust_list`**：**`size`** **合法** **且** **`head != NULL`** **`check_access`(`robust_list_head`)** **→** **`BadAddress`**；**NULL** **不** **探测**；**`futex.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
