@@ -1,0 +1,27 @@
+{
+  "id": "issue-418",
+  "title": "`setgroups(2)`：`sys_setgroups` 在用户 `list` 读入之后才做特权（`euid==0`）检查，与 Linux `CAP_SETGID` 先于 `copy_from_user` 分层不一致",
+  "status": "resolved",
+  "created_at": "2026-04-13T03:05:00Z",
+  "severity": "low",
+  "description": "`kernel/src/syscall/sys.rs` **`sys_setgroups`**（**约** **111–135** **行** **）** **：** **在** **`size`** **区间** **与** **`list.is_null()`** **之后** **调用** **`UserConstPtr::from(list).get_as_slice(sz)?`** **从** **用户** **态** **拉取** **整** **组** **`gid`** **，** **再** **调用** **`proc_data.set_supplementary_groups(slice)?`** **。** **`set_supplementary_groups`**（**`task/mod.rs`** **）** **首** **行** **才** **检查** **`geteuid() != 0`** **`→`** **`PermissionDenied`（`EPERM`）** **。**\n\n**Linux** **`setgroups(2)`** **内核** **路径** **通常** **先** **做** **`ns_capable(..., CAP_SETGID)`** **（** **或** **等价** **特权** **判定** **）** **，** **失败** **直接** **`-EPERM`** **，** **再** **`copy_from_user`** **读** **`grouplist`** **。** **因此** **对** **无** **特权** **进程** **：** **若** **`grouplist`** **为** **无效** **用户** **指针** **，** **Linux** **多** **返回** **`EPERM`** **（** **能力** **检查** **失败** **早于** **用户** **访问** **）** **；** **Starry** **则** **可能** **在** **`get_as_slice`** **上** **先** **得到** **`EFAULT`/`BadAddress`** **，** **与** **Linux** **错误** **分层** **不同** **。** **（** **`size==0`** **路径** **不** **读** **`list`** **，** **仅** **`EPERM`** **，** **与** **Linux** **子集** **一致** **。）** **。**\n\n建议：**在** **`get_as_slice`** **之前** **调用** **与** **`set_supplementary_groups`** **首段** **相同** **的** **特权** **门控** **（** **或** **拆分** **`may_setgroups`** **`+`** **实际** **写入** **）** **，** **使** **`EPERM`** **先于** **用户** **缓冲** **探测** **。** **注释** **引用** **issue-418** **及** **issue-329** **`getgroups`** **`list`** **NULL** **顺序** **（** **正交** **）** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["setgroups"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/sys.rs:111-135", "kernel/src/task/mod.rs:529-540"],
+    "related_files": [],
+    "key_insight": "非特权 +坏 `list`：Linux常见 EPERM；Starry 先用户读或 EFAULT"
+  },
+  "fix_summary": "`sys_setgroups`：**`size>0`** **时** **`geteuid()!=0`** **`→`** **`PermissionDenied`** **先于** **`list` NULL/`get_as_slice`**，对齐 Linux **`CAP_SETGID`** **先于** **`copy_from_user`**；**`size==0`** **仍** **仅** **`set_supplementary_groups`**。注释 issue-418/issue-329。",
+  "files_changed": ["kernel/src/syscall/sys.rs"],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：非 root、`setgroups(n, invalid_ptr)` 对照 Linux `errno` 与 Starry。",
+    "expected_output_contains": "",
+    "pass_criteria": "无 `CAP_SETGID`/非特权时，在访问 `list` 内容之前返回 `EPERM`（`PermissionDenied`）。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过"
+  },
+  "suggested_fix": "`sys_setgroups`：在 `get_as_slice` 前若 `size>0` 则先 `if current().as_thread().proc_data.geteuid() != 0 { return Err(PermissionDenied); }`，或提取 `ProcessData::may_setgroups()` 与 `apply_setgroups` 两段。",
+  "references": ["man 2 setgroups", "kernel/groups.c", "kernel/src/syscall/sys.rs", "kernel/src/task/mod.rs", "issue-329"]
+}

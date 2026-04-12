@@ -124,6 +124,12 @@ pub fn sys_setgroups(size: isize, list: *const u32) -> AxResult<isize> {
             .set_supplementary_groups(&[])?;
         return Ok(0);
     }
+    // Linux `setgroups`: capability / privileged check before `copy_from_user` so **EPERM** precedes
+    // **EFAULT** on a bad `grouplist` for unprivileged callers (issue-418). `getgroups` NULL ordering:
+    // issue-329 (orthogonal).
+    if current().as_thread().proc_data.geteuid() != 0 {
+        return Err(AxError::PermissionDenied);
+    }
     if list.is_null() {
         return Err(AxError::BadAddress);
     }

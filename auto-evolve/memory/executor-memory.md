@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-418 resolved（**`setgroups`**：**`size>0`** **`geteuid()!=0`** **`→`** **`PermissionDenied`** **先于** **`get_as_slice`**/**`list`** **探测**；**`CAP_SETGID`** **未** **建模** **仍** **用** **euid0**；**`sys.rs`**；**issue-329** **`getgroups`** **正交**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-417 resolved（**`flock`** **阻塞**：**`interruptible`(`poll_fn`)** **`+`** **inode **`waiters`/`wake`** **替代** **`yield_now`**；**`Interrupted`/`EINTR`**；**`flock.rs`**；**`poll`/`wait`** **同类**；**issue-252** **正交**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-416 resolved（**`pidfd_open`**：**`sys_pidfd_open`** **`pid as i32`** **`<= 0`** **`→`** **`InvalidInput`** **先于** **`get_process_data`/`get_task`**；**`usize`** **首参** **对齐** **LP64** **`pid_t`**；**`pidfd.rs`**；**issue-275** **旁**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-415 resolved（**`clone`/`clone3` `exit_signal`**：**`parse_signo_u64`** **`+`** **`parse_signo`** **（** **issue-414** **）** **替代** **`as u8`/`from_repr`**；**`> u32::MAX`** **`/`** **截断** **`/`** **`SIGRTMAX`** **越界** **`→`** **`InvalidInput`**；**`signal.rs`/`clone.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
