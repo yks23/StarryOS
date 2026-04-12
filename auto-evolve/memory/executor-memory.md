@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-13：issue-297 resolved（**legacy** **`mkdir`/`link`/`rmdir`/`unlink`/`symlink`/`rename`**：**`mod.rs`** **`fs ctl`** 段概括注释：**Sysno** 仅 **x86_64**；**riscv**/**aarch64** **`libc`** 走 **`*at`（`AT_FDCWD`）**/**`renameat*`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-296 resolved（**`access(2)`**：**`mod.rs`** **`Sysno::access`** 仅 **x86_64** 注释与 **poll**/**renameat** 同级；**riscv64** **`libc`** **`access`** 走 **`faccessat`/`faccessat2`（`AT_FDCWD`）** → **`sys_faccessat2`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-295 resolved（**`select(2)`**：**`mod.rs`** **`Sysno::select`** 仅 **x86_64** 注释与 **issue-291** **`poll`** 对称；**riscv64** **`libc`** **`select`** 走 **`pselect6`** → **`sys_pselect6`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-294 resolved（**`sendto`**：**`send_impl`** **`Socket::from_fd`** 先于 **`SENDMSG_FLAGS_MASK`**，与 **`sys_sendmsg`**/**`__sys_sendto`** **sockfd_lookup** 顺序一致；**`net/io.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -320,6 +321,7 @@
 | issue-271 | mlock/mlock2 addr 须页对齐 EINVAL | resolved | 2026-04-12 |
 | issue-272 | lseek SEEK_SET 负 offset EINVAL | resolved | 2026-04-12 |
 | issue-273 | prlimit64 跨 pid 权限 EPERM | resolved | 2026-04-12 |
+| issue-297 | legacy mkdir/link/unlink/… x86-only；riscv libc 走 *at | resolved | 2026-04-13 |
 | issue-296 | access x86-only 注释；riscv libc 走 faccessat* → faccessat2 | resolved | 2026-04-13 |
 | issue-295 | select x86-only 注释对称 poll；riscv libc 走 pselect6 | resolved | 2026-04-13 |
 | issue-294 | sendto send_impl from_fd 先于 SENDMSG_FLAGS_MASK | resolved | 2026-04-13 |
@@ -518,6 +520,7 @@
 - **`readlink(2)`/`readlinkat(2)`**：**`bufsiz`**（**`size`**）须 **> 0**，否则 **`InvalidInput`**（**EINVAL**），须在 **`vm_load_string(path)`** 与 **`resolve_no_follow`/`read_link`** 之前校验（issue-140）；勿对 **`size==0`** 返回成功 **0**。**`size>0`** 时 **`buf == NULL`** → **`BadAddress`（EFAULT）**，先于 **`vm_load_string`**（issue-282；与 issue-281 同类）。
 - **`linkat(2)`**：**`flags`** 仅允许 **`AT_EMPTY_PATH | AT_SYMLINK_FOLLOW`**（与 Linux **`VALID_LINKAT_FLAGS`**），否则 **`EINVAL`**；上述与 **`resolve_flags`**（**`FOLLOW` ↔ `NOFOLLOW`** 映射）须在 **`vm_load_string(old_path/new_path)`** 之前完成（issue-137，非法 flags 先 **EINVAL**）。**`resolve_at`** 仍用 **`AT_SYMLINK_NOFOLLOW`** 表示「不 follow」。
 - **`unlinkat(2)`**：**`flags`** 仅 **`0`** 或 **`AT_REMOVEDIR`**，须在 **`vm_load_string(path)`** 之前校验，否则 **`EINVAL`**（issue-138）；勿将未知位当作「删文件」分支。
+- **`mkdir`/`link`/`rmdir`/`unlink`/`symlink`/`rename`（legacy 单路径）**：**`mod.rs`** **`fs ctl`** 段中 **`Sysno::mkdir`**/**`link`**/**`rmdir`**/**`unlink`**/**`symlink`**/**`rename`** 均 **`#[cfg(target_arch = "x86_64")]`**；**riscv64**/**aarch64** 等 **`syscalls::Sysno`** **常** **无** **对应** **legacy** **号**；**glibc**/**musl** **通常** **薄** **包装** **为** **`mkdirat`/`linkat`/`unlinkat`/`symlinkat`（`AT_FDCWD`）**，**`unlink`**/**`rmdir`** **共用** **`unlinkat`**（**`rmdir`** 带 **`AT_REMOVEDIR`**）；**`rename(2)`**/**`renameat(2)`** 与 **`renameat2`** **见** **`renameat2(2)`** **条**（issue-292）。**`mod.rs`** **概括注释** **issue-297**。
 - **`fchmodat(2)`** / **`fchmod`**： **`flags`** 须为 Linux **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW`** 的子集（**`sys_fchmod`** 用 **`AT_EMPTY_PATH`**），否则 **`EINVAL`**；掩码须在 **`vm_load_string(path)`** 之前完成（issue-139，非法 flags 先 **EINVAL** 于 **EFAULT**）；勿未校验即传入 **`resolve_at`**。
 - **`utimensat(2)`**：**`path==NULL`** 时逻辑上含 **`AT_EMPTY_PATH`**；**`flags`** 须为 **`AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH`** 的子集（与 Linux **`VALID_UTIMENSAT_FLAGS`**），在 **`update_times`/`resolve_at`** 前校验，非法位 **`EINVAL`**（含双 **`UTIME_OMIT`** 时亦应先拒绝非法 **`flags`**）。
 - **`fchownat(2)`** / **`fchown`** / **`lchown`**：**`flags`** 须为 **`AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW`** 的子集（**`VALID_FCHOWNAT_FLAGS`**），否则 **`EINVAL`**；掩码须在 **`vm_load_string(path)`** 之前完成（issue-139）。**`sys_fchown`** 用 **`AT_EMPTY_PATH`**，**`lchown`** 用 **`AT_SYMLINK_NOFOLLOW`**。

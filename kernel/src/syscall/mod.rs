@@ -34,6 +34,13 @@ pub fn handle_syscall(uctx: &mut UserContext) {
         Sysno::chdir => sys_chdir(uctx.arg0() as _),
         Sysno::fchdir => sys_fchdir(uctx.arg0() as _),
         Sysno::chroot => sys_chroot(uctx.arg0() as _),
+        // Legacy directory-path syscalls (`mkdir`, `link`, `rmdir`, `unlink`, `symlink`, `rename`)
+        // exist only on ABIs where `syscalls::Sysno` defines them (e.g. x86/x86_64). Linux riscv64 /
+        // aarch64 often omit separate `__NR_*` for these; glibc/musl usually wrap the `*at`
+        // counterparts with `AT_FDCWD` (`mkdirat`, `linkat`, `unlinkat`, `symlinkat`), wiring through
+        // to `sys_mkdirat` / `sys_linkat` / `sys_unlinkat` / `sys_symlinkat` below. `rename(2)`
+        // lowers to `renameat` / `renameat2` (see the riscv64 `renameat` note below, issue-292).
+        // (issue-297)
         #[cfg(target_arch = "x86_64")]
         Sysno::mkdir => sys_mkdir(uctx.arg0() as _, uctx.arg1() as _),
         Sysno::mkdirat => sys_mkdirat(uctx.arg0() as _, uctx.arg1() as _, uctx.arg2() as _),
