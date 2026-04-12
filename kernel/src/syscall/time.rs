@@ -145,6 +145,10 @@ fn read_itimerval_user(p: *const itimerval) -> AxResult<itimerval> {
 
 pub fn sys_getitimer(which: i32, value: *mut itimerval) -> AxResult<isize> {
     let ty = ITimerType::from_repr(which).ok_or(AxError::InvalidInput)?;
+    // Linux `getitimer(2)`: `curr_value` must be writable; NULL → EFAULT.
+    if value.is_null() {
+        return Err(AxError::BadAddress);
+    }
     let (it_interval, it_value) = current().as_thread().time.borrow().get_itimer(ty);
 
     value.vm_write(itimerval {
