@@ -112,6 +112,11 @@ pub fn sys_get_mempolicy(
         "sys_get_mempolicy <= policy {policy:p}, nodemask {nodemask:p}, maxnode {maxnode}, addr {addr:#x}, flags {flags:#x}"
     );
 
+    // Linux EINVAL: non-NULL nodemask requires a positive maxnode (valid bit length).
+    if !nodemask.is_null() && maxnode == 0 {
+        return Err(AxError::InvalidInput);
+    }
+
     // No per-node NUMA policy in this kernel: report default policy (Linux `MPOL_DEFAULT` == 0).
     const MPOL_DEFAULT: i32 = 0;
     if let Some(p) = policy.nullable() {
