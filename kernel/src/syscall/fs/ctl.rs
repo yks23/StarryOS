@@ -248,6 +248,11 @@ pub fn sys_unlinkat(dirfd: i32, path: *const c_char, flags: usize) -> AxResult<i
         return Err(AxError::InvalidInput);
     }
 
+    // Linux do_unlinkat: fdget(dfd) before copy_from_user(pathname) → EBADF first (issue-161).
+    if dirfd != AT_FDCWD {
+        let _ = Directory::from_fd(dirfd)?;
+    }
+
     let path = vm_load_string(path)?;
 
     debug!("sys_unlinkat <= dirfd: {dirfd}, path: {path:?}, flags: {flags}");
