@@ -1,0 +1,28 @@
+{
+  "id": "issue-125",
+  "title": "pwrite64 在 len==0 时早退 Ok(0) 跳过 File::from_fd，无效 fd 不返回 EBADF（偏离 Linux）",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "resolved_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_pwrite64`：先 `File::from_fd(fd)?`，再在 `len==0` 时 `Ok(0)`；无效 fd +零长度与 Linux 一样 `EBADF`。`offset<0` 仍先于 `from_fd`为 `EINVAL`。",
+  "files_changed": ["kernel/src/syscall/fs/io.rs"],
+  "description": "**`sys_pwrite64`**（`kernel/src/syscall/fs/io.rs`）在 **`offset >= 0`** 且 **`len == 0`** 时 **`return Ok(0)`**，**未**调用 **`File::from_fd(fd)?`**。**Linux** **`pwrite64`** 仍会 **`fget`** /校验描述符；**`fd`** 无效时应 **`EBADF`**，而非静默成功。**同文件 **`sys_pread64`**、**`sys_write`**、**`sys_pwritev2`** 等均先 **`from_fd`** / **`get_file_like`** 再 I/O，无此早退。**`issue-108`**已覆盖 **`offset < 0`**，与此 **`len==0`** 路径独立。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["pwrite64"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/io.rs:221-236"],
+    "related_files": ["kernel/src/syscall/fs/io.rs:212-219"],
+    "key_insight": "`len == 0` 在 `from_fd` 之前 `Ok(0)`"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "**`pwrite64(-1, buf, 0, 0)`** 或任意无效 **`fd`** + **`len==0`**；**Linux** **`EBADF`**；对比 **Starry** 是否 **`Ok(0)`**。",
+    "expected_output_contains": "",
+    "pass_criteria": "**`len==0`** 仍解析 **`fd`**，无效则 **`EBADF`**（或与 **Linux** 一致的错误码），或文档化「零长度跳过 **`fd`**」的设计。",
+    "last_result": "2026-04-12：已 `from_fd` 先于 `len==0` 早退；`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` PASS；QEMU 未测"
+  },
+  "suggested_fix": "移除 **`len==0`** 在 **`from_fd`** 之前的早退，或改为 **`let f = File::from_fd(fd)?; if len == 0 { return Ok(0); }`**（再 **`write_at`** 空切片，若底层接受）；以保持与 **Linux** 一致的 **`fd`** 校验。",
+  "references": ["man 2 pwrite", "Linux fs/read_write.c vfs_write"]
+}
