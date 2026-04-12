@@ -14,8 +14,8 @@ use linux_raw_sys::general::*;
 
 use crate::{
     file::{
-        Directory, FD_TABLE, File, FileLike, Pipe, add_file_like, close_file_like, get_file_like,
-        with_fs,
+        Directory, FD_TABLE, File, FileLike, Pipe, add_file_like, close_file_like,
+        dirfd_for_path_resolution, get_file_like, with_fs,
     },
     mm::{UserConstPtr, UserPtr, vm_load_string},
     pseudofs::{Device, dev::tty},
@@ -126,6 +126,7 @@ pub fn sys_openat(
     let mode = mode & !current().as_thread().proc_data.umask();
 
     let options = flags_to_options(flags, mode, (sys_geteuid()? as _, sys_getegid()? as _));
+    let dirfd = dirfd_for_path_resolution(dirfd, path.as_str());
     with_fs(dirfd, |fs| options.open(fs, path))
         .and_then(|it| add_to_fd(it, flags as _))
         .map(|fd| fd as isize)

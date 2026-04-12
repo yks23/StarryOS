@@ -31,7 +31,7 @@ use linux_raw_sys::general::{
 use spin::RwLock;
 
 pub use self::{
-    fs::{Directory, File, location_from_fd, resolve_at, with_fs},
+    fs::{Directory, File, dirfd_for_path_resolution, location_from_fd, resolve_at, with_fs},
     memfd::MemfdCreatedFile,
     inotify::{FanotifyFd, InotifyFd},
     io_uring::IoUringFd,

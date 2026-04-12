@@ -25,7 +25,10 @@ use linux_raw_sys::{
 use starry_vm::{VmPtr, vm_write_slice};
 
 use crate::{
-    file::{Directory, FileLike, get_file_like, location_from_fd, resolve_at, with_fs},
+    file::{
+        Directory, FileLike, dirfd_for_path_resolution, get_file_like, location_from_fd,
+        resolve_at, with_fs,
+    },
     mm::vm_load_string,
     task::AsThread,
     time::TimeValueLike,
@@ -93,16 +96,17 @@ pub fn sys_chroot(path: *const c_char) -> AxResult<isize> {
 }
 
 pub fn sys_mkdirat(dirfd: i32, path: *const c_char, mode: u32) -> AxResult<isize> {
-    // Linux do_mkdirat: fdget(dfd) before copy_from_user(pathname) → EBADF first (issue-160).
-    if dirfd != AT_FDCWD {
-        let _ = Directory::from_fd(dirfd)?;
-    }
     let path = vm_load_string(path)?;
     debug!("sys_mkdirat <= dirfd: {dirfd}, path: {path}, mode: {mode}");
+
+    if dirfd != AT_FDCWD && !path.starts_with('/') {
+        let _ = Directory::from_fd(dirfd)?;
+    }
 
     let mode = mode & !current().as_thread().proc_data.umask();
     let mode = NodePermission::from_bits_truncate(mode as u16);
 
+    let dirfd = dirfd_for_path_resolution(dirfd, path.as_str());
     with_fs(dirfd, |fs| {
         fs.create_dir(path, mode)?;
         Ok(0)
@@ -211,19 +215,22 @@ pub fn sys_linkat(
         resolve_flags |= AT_SYMLINK_NOFOLLOW;
     }
 
-    // Linux do_linkat: fdget(olddfd/newdfd) before copy_from_user(oldname/newname) where applicable.
-    // Skip olddfd directory check when old_path is NULL + AT_EMPTY_PATH (fd may be a regular file).
-    if old_dirfd != AT_FDCWD && !old_path.is_null() {
-        let _ = Directory::from_fd(old_dirfd)?;
-    }
-
     let old_path = old_path.nullable().map(vm_load_string).transpose()?;
 
-    if new_dirfd != AT_FDCWD {
-        let _ = Directory::from_fd(new_dirfd)?;
+    if old_dirfd != AT_FDCWD {
+        let need_old_dir = match old_path.as_deref() {
+            None => false,
+            Some(p) => !p.starts_with('/'),
+        };
+        if need_old_dir {
+            let _ = Directory::from_fd(old_dirfd)?;
+        }
     }
 
     let new_path = vm_load_string(new_path)?;
+    if new_dirfd != AT_FDCWD && !new_path.starts_with('/') {
+        let _ = Directory::from_fd(new_dirfd)?;
+    }
     debug!(
         "sys_linkat <= old_dirfd: {old_dirfd}, old_path: {old_path:?}, new_dirfd: {new_dirfd}, \
          new_path: {new_path}, flags: {flags}"
@@ -235,8 +242,9 @@ pub fn sys_linkat(
     if old.is_dir() {
         return Err(AxError::OperationNotPermitted);
     }
+    let new_dirfd_eff = dirfd_for_path_resolution(new_dirfd, new_path.as_str());
     let (new_dir, new_name) =
-        with_fs(new_dirfd, |fs| fs.resolve_nonexistent(Path::new(&new_path)))?;
+        with_fs(new_dirfd_eff, |fs| fs.resolve_nonexistent(Path::new(&new_path)))?;
 
     new_dir.link(new_name, &old)?;
     Ok(0)
@@ -259,15 +267,15 @@ pub fn sys_unlinkat(dirfd: i32, path: *const c_char, flags: usize) -> AxResult<i
         return Err(AxError::InvalidInput);
     }
 
-    // Linux do_unlinkat: fdget(dfd) before copy_from_user(pathname) → EBADF first (issue-161).
-    if dirfd != AT_FDCWD {
-        let _ = Directory::from_fd(dirfd)?;
-    }
-
     let path = vm_load_string(path)?;
 
     debug!("sys_unlinkat <= dirfd: {dirfd}, path: {path:?}, flags: {flags}");
 
+    if dirfd != AT_FDCWD && !path.starts_with('/') {
+        let _ = Directory::from_fd(dirfd)?;
+    }
+
+    let dirfd = dirfd_for_path_resolution(dirfd, path.as_str());
     with_fs(dirfd, |fs| {
         if flags == AT_REMOVEDIR as _ {
             fs.remove_dir(path)?;
@@ -324,14 +332,15 @@ pub fn sys_symlinkat(
     new_dirfd: i32,
     linkpath: *const c_char,
 ) -> AxResult<isize> {
-    // Linux do_symlinkat: resolve newdfd (fdget) before copy_from_user on pathnames → EBADF first.
-    if new_dirfd != AT_FDCWD {
-        let _ = Directory::from_fd(new_dirfd)?;
-    }
     let target = vm_load_string(target)?;
     let linkpath = vm_load_string(linkpath)?;
     debug!("sys_symlinkat <= target: {target:?}, new_dirfd: {new_dirfd}, linkpath: {linkpath:?}");
 
+    if new_dirfd != AT_FDCWD && !linkpath.starts_with('/') {
+        let _ = Directory::from_fd(new_dirfd)?;
+    }
+
+    let new_dirfd = dirfd_for_path_resolution(new_dirfd, linkpath.as_str());
     with_fs(new_dirfd, |fs| {
         fs.symlink(target, linkpath)?;
         Ok(0)
@@ -354,15 +363,15 @@ pub fn sys_readlinkat(
         return Err(AxError::InvalidInput);
     }
 
-    // Linux do_readlinkat: fdget(dfd) before copy_from_user(pathname) → EBADF first (issue-162).
-    if dirfd != AT_FDCWD {
-        let _ = Directory::from_fd(dirfd)?;
-    }
-
     let path = vm_load_string(path)?;
 
     debug!("sys_readlinkat <= dirfd: {dirfd}, path: {path:?}");
 
+    if dirfd != AT_FDCWD && !path.starts_with('/') {
+        let _ = Directory::from_fd(dirfd)?;
+    }
+
+    let dirfd = dirfd_for_path_resolution(dirfd, path.as_str());
     with_fs(dirfd, |fs| {
         let entry = fs.resolve_no_follow(path)?;
         let link = entry.read_link()?;
@@ -400,13 +409,17 @@ pub fn sys_fchownat(
         return Err(AxError::InvalidInput);
     }
 
-    // Linux do_fchownat: fdget(dfd) before copy_from_user(pathname) for pathname lookups;
-    // skip when path is NULL + AT_EMPTY_PATH (dirfd may be a non-directory open file).
-    if dirfd != AT_FDCWD && !path.is_null() {
-        let _ = Directory::from_fd(dirfd)?;
+    let path = path.nullable().map(vm_load_string).transpose()?;
+    if dirfd != AT_FDCWD {
+        let needs_dir = match path.as_deref() {
+            None => false,
+            Some(p) => !p.starts_with('/'),
+        };
+        if needs_dir {
+            let _ = Directory::from_fd(dirfd)?;
+        }
     }
 
-    let path = path.nullable().map(vm_load_string).transpose()?;
     let loc = resolve_at(dirfd, path.as_deref(), flags)?
         .into_file()
         .ok_or(AxError::BadFileDescriptor)?;
@@ -446,11 +459,17 @@ pub fn sys_fchmodat(dirfd: i32, path: *const c_char, mode: u32, flags: u32) -> A
         return Err(AxError::InvalidInput);
     }
 
-    if dirfd != AT_FDCWD && !path.is_null() {
-        let _ = Directory::from_fd(dirfd)?;
+    let path = path.nullable().map(vm_load_string).transpose()?;
+    if dirfd != AT_FDCWD {
+        let needs_dir = match path.as_deref() {
+            None => false,
+            Some(p) => !p.starts_with('/'),
+        };
+        if needs_dir {
+            let _ = Directory::from_fd(dirfd)?;
+        }
     }
 
-    let path = path.nullable().map(vm_load_string).transpose()?;
     resolve_at(dirfd, path.as_deref(), flags)?
         .into_file()
         .ok_or(AxError::BadFileDescriptor)?
@@ -468,11 +487,17 @@ fn update_times(
     mtime: Option<Duration>,
     flags: u32,
 ) -> AxResult<()> {
-    if dirfd != AT_FDCWD && !path.is_null() {
-        let _ = Directory::from_fd(dirfd)?;
+    let path = path.nullable().map(vm_load_string).transpose()?;
+    if dirfd != AT_FDCWD {
+        let needs_dir = match path.as_deref() {
+            None => false,
+            Some(p) => !p.starts_with('/'),
+        };
+        if needs_dir {
+            let _ = Directory::from_fd(dirfd)?;
+        }
     }
 
-    let path = path.nullable().map(vm_load_string).transpose()?;
     resolve_at(dirfd, path.as_deref(), flags)?
         .into_file()
         .ok_or(AxError::BadFileDescriptor)?
@@ -602,23 +627,26 @@ pub fn sys_renameat2(
         return Err(AxError::InvalidInput);
     }
 
-    // Linux do_renameat2: fdget(olddfd) before copy_from_user(oldname), then newdfd before newname.
-    if old_dirfd != AT_FDCWD {
+    let old_path = vm_load_string(old_path)?;
+    if old_dirfd != AT_FDCWD && !old_path.starts_with('/') {
         let _ = Directory::from_fd(old_dirfd)?;
     }
-    let old_path = vm_load_string(old_path)?;
 
-    if new_dirfd != AT_FDCWD {
+    let new_path = vm_load_string(new_path)?;
+    if new_dirfd != AT_FDCWD && !new_path.starts_with('/') {
         let _ = Directory::from_fd(new_dirfd)?;
     }
-    let new_path = vm_load_string(new_path)?;
     debug!(
         "sys_renameat2 <= old_dirfd: {old_dirfd}, old_path: {old_path:?}, new_dirfd: {new_dirfd}, \
          new_path: {new_path}, flags: {flags}"
     );
 
-    let (old_dir, old_name) = with_fs(old_dirfd, |fs| fs.resolve_parent(Path::new(&old_path)))?;
-    let (new_dir, new_name) = with_fs(new_dirfd, |fs| fs.resolve_parent(Path::new(&new_path)))?;
+    let old_dirfd_eff = dirfd_for_path_resolution(old_dirfd, old_path.as_str());
+    let new_dirfd_eff = dirfd_for_path_resolution(new_dirfd, new_path.as_str());
+    let (old_dir, old_name) =
+        with_fs(old_dirfd_eff, |fs| fs.resolve_parent(Path::new(&old_path)))?;
+    let (new_dir, new_name) =
+        with_fs(new_dirfd_eff, |fs| fs.resolve_parent(Path::new(&new_path)))?;
     let old_name = old_name.as_ref();
     let new_name = new_name.as_ref();
 
