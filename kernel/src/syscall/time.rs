@@ -118,25 +118,27 @@ pub fn sys_setitimer(
     let ty = ITimerType::from_repr(which).ok_or(AxError::InvalidInput)?;
     let curr = current();
 
-    let (interval, remained) = match new_value.nullable() {
+    let old = match new_value.nullable() {
         Some(new_value) => {
             // FIXME: AnyBitPattern
             let new_value = unsafe { new_value.vm_read_uninit()?.assume_init() };
-            (
-                new_value.it_interval.try_into_time_value()?.as_nanos() as usize,
-                new_value.it_value.try_into_time_value()?.as_nanos() as usize,
-            )
+            let interval = new_value.it_interval.try_into_time_value()?.as_nanos() as usize;
+            let remained = new_value.it_value.try_into_time_value()?.as_nanos() as usize;
+            debug!("sys_setitimer <= type: {ty:?}, interval: {interval:?}, remained: {remained:?}");
+            curr
+                .as_thread()
+                .time
+                .borrow_mut()
+                .set_itimer(ty, interval, remained)
         }
-        None => (0, 0),
+        None => {
+            if old_value.nullable().is_none() {
+                return Ok(0);
+            }
+            debug!("sys_setitimer <= type: {ty:?}, new_value: NULL (no change)");
+            curr.as_thread().time.borrow().get_itimer(ty)
+        }
     };
-
-    debug!("sys_setitimer <= type: {ty:?}, interval: {interval:?}, remained: {remained:?}");
-
-    let old = curr
-        .as_thread()
-        .time
-        .borrow_mut()
-        .set_itimer(ty, interval, remained);
 
     if let Some(old_value) = old_value.nullable() {
         old_value.vm_write(itimerval {

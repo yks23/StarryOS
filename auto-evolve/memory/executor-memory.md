@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-153 resolved（**`setitimer`**：**`new_value==NULL`** 不调用 **`set_itimer`**，仅 **`old_value`** 非空时 **`get_itimer`** 写回；两参皆 **`NULL`** 为 no-op；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-152 resolved（**`shmctl` `IPC_STAT`**：**`buf`** 必填可写 **`shmid_ds`**，**`NULL`** → **`BadAddress`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-151 resolved（**`getrandom`**：**`GRND_FLAGS_MASK`** 校验先于 **`len==0`** **`Ok(0)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-150 resolved（**`socketpair`**：第二端 **`add_to_fd_table`** 失败时 **`close_file_like(fd1)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）

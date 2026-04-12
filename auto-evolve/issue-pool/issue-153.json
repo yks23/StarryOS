@@ -1,0 +1,27 @@
+{
+  "id": "issue-153",
+  "title": "setitimer 将 new_value==NULL 当作 (0,0) 调用 set_itimer，与 Linux「不修改定时器」不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "medium",
+  "fix_summary": "`sys_setitimer`：`new_value==NULL` 时不再调用 `set_itimer(0,0)` 误撤除定时器；`old_value` 非空时用 `get_itimer` 写回当前值；两指针皆 NULL 时直接 `Ok(0)`。`Some(new_value)` 路径仍为 `vm_read` + `set_itimer`。",
+  "files_changed": ["kernel/src/syscall/time.rs"],
+  "description": "**`sys_setitimer`**（`kernel/src/syscall/time.rs`）对 **`new_value.nullable()`** 为 **`None`** 时使用 **`(interval, remained) = (0, 0)`**，随后仍调用 **`set_itimer(ty, 0, 0)`**（经 **`Time`** 包装）。**`set_itimer`**（`kernel/src/task/timer.rs`）以 **`ITimer::new(0, 0)`** 替换原状态，等效于**撤除/清零**该 **`itimer`**。**Linux **`setitimer(2)`** 明确：**`new_value == NULL`** 时**不修改**当前间隔定时器，仅可在 **`old_value`** 非空时写出旧值（**`getitimer`** 语义）。因此 **Starry** 在 **`new_value==NULL`** 时会**错误地 disarm** 已武装的 **`ITIMER_*`**，与 **Linux** 行为不一致；亦与 **`old_value`** 分支使用 **`nullable!`** 允许 **`NULL`** 的「只查询」用法不匹配。",
+  "category": "syscall-semantic",
+  "affected_syscalls": ["setitimer"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/time.rs:113-147", "kernel/src/task/timer.rs:206-223"],
+    "related_files": [],
+    "key_insight": "`new_value` NULL 映射为 `(0,0)` 仍调用 `set_itimer`"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "先 **`setitimer`** 武装 **`ITIMER_REAL`**；再 **`setitimer(ITIMER_REAL, NULL, &old)`**；在 **Linux** 上定时器应保持武装，在 **Starry** 上易被清零。",
+    "expected_output_contains": "",
+    "pass_criteria": "**`new_value==NULL`** 时不调用 **`set_itimer`** 修改内核状态，仅用 **`get_itimer`**（或等价）填充 **`old_value`**。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0）"
+  },
+  "suggested_fix": "对 `new_value.nullable()`：`None` 时用 `get_itimer` 取旧值并视 `old_value` 写回，不调用 `set_itimer`；`Some` 时再 `vm_read` 并 `set_itimer`。",
+  "references": ["man 2 setitimer", "Linux do_setitimer"]
+}
