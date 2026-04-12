@@ -1,0 +1,30 @@
+{
+  "id": "issue-210",
+  "title": "signalfd4：用户 `SignalSet` 仍 `vm_read_uninit`+`assume_init`，与 `signal.rs` 已字段读不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "将 **`signal.rs`** 中 **`read_signal_set_user`** 提升为 **`pub(crate)`**（**`kernel_sigset_t.sig[0]` 字级 `vm_read`**）。**`sys_signalfd4`** 改为 **`read_signal_set_user(mask)?`**，去掉 **`vm_read_uninit`/`assume_init`** 与 **`starry_vm::VmPtr`** 依赖，与 **`rt_sigprocmask`** 等路径一致。",
+  "files_changed": [
+    "kernel/src/syscall/signal.rs",
+    "kernel/src/syscall/fs/signalfd.rs"
+  ],
+  "description": "**`kernel/src/syscall/fs/signalfd.rs`** **`sys_signalfd4`** 在 **`check_sigset_size`** 与 **`mask` 非空校验之后，仍用 **`unsafe { mask.vm_read_uninit()?.assume_init() }`** 读整颗 **`SignalSet`**（约 **60** 行）。**`kernel/src/syscall/signal.rs`** 已对 **`rt_sigprocmask`/`rt_sigsuspend`/`rt_sigtimedwait`** 等路径提供 **`read_signal_set_user`**（**`kernel_sigset_t` 字级 `vm_read`**），**不**再对 **`SignalSet`** 整结构 **`assume_init`**。**signalfd** 与 **issue-206** 历史描述同源（**`sigset_t`/`SignalSet`**），但文件独立；**更稳妥**：将 **`read_signal_set_user`** 提升为 **`pub(crate)`** 并在 **`signalfd4`** 复用，或在本文件复制同一字段读逻辑，消除 **`assume_init`**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["signalfd4"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/signalfd.rs:40-61"],
+    "related_files": ["kernel/src/syscall/signal.rs:69-73"],
+    "key_insight": "`signal.rs` 已 `read_signal_set_user`；`signalfd` 未复用"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；将 **`read_signal_set_user`** 导出后 **`signalfd`** 试编译。",
+    "expected_output_contains": "",
+    "pass_criteria": "**`signalfd4`** 读 **`mask`** 与 **`rt_sigprocmask`** 读 **`set`** 使用同一 **`sigset_t`** 安全路径。",
+    "last_result": "通过：`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`（exit 0，仅有既有 warning）。"
+  },
+  "suggested_fix": "**`pub(crate) fn read_signal_set_user`**（或 **`crate::syscall::signal::...`**）供 **`signalfd.rs`** 调用；删除 **`assume_init`**。",
+  "references": ["man 2 signalfd", "issue-206", "issue-012"]
+}

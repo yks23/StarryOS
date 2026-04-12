@@ -2,11 +2,10 @@ use axerrno::{AxError, AxResult};
 use bitflags::bitflags;
 use linux_raw_sys::general::{O_CLOEXEC, O_NONBLOCK};
 use starry_signal::SignalSet;
-use starry_vm::VmPtr;
 
 use crate::{
     file::{FileLike, add_file_like, signalfd::Signalfd},
-    syscall::signal::check_sigset_size,
+    syscall::signal::{check_sigset_size, read_signal_set_user},
 };
 
 // SFD flag definitions (if not available in linux_raw_sys)
@@ -56,8 +55,8 @@ pub fn sys_signalfd4(
         return Err(AxError::BadAddress);
     }
 
-    // Read the signal mask from user space before handling the request mode.
-    let mask = unsafe { mask.vm_read_uninit()?.assume_init() };
+    // issue-210: same word-wise path as `rt_sigprocmask` / `read_signal_set_user`.
+    let mask = read_signal_set_user(mask)?;
 
     // If fd is not -1, we should modify the existing signalfd
     if fd != -1 {

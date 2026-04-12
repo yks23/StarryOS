@@ -99,7 +99,7 @@ fn read_kernel_sigaction_user(p: *const kernel_sigaction) -> AxResult<kernel_sig
     }
 }
 
-fn read_signal_set_user(p: *const SignalSet) -> AxResult<SignalSet> {
+pub(crate) fn read_signal_set_user(p: *const SignalSet) -> AxResult<SignalSet> {
     let p = p.cast::<kernel_sigset_t>();
     let word = unsafe { core::ptr::addr_of!((*p).sig[0]).vm_read()? };
     Ok(kernel_sigset_t { sig: [word] }.into())
