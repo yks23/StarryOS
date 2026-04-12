@@ -1,5 +1,3 @@
-use alloc::sync::Arc;
-
 use axerrno::{AxError, AxResult};
 use axhal::time::TimeValue;
 use axtask::current;
@@ -9,27 +7,12 @@ use starry_vm::{VmMutPtr, VmPtr};
 
 use crate::{
     mm::AddrSpace,
-    task::{AsThread, ProcessData, Thread, get_process_data, get_task, time_value_from_nanos},
+    task::{
+        AsThread, Thread, get_process_data, get_task, may_peer_process_by_cred,
+        time_value_from_nanos,
+    },
     time::TimeValueLike,
 };
-
-/// Linux `prlimit(2)`: cross-process access requires same thread group, `CAP_SYS_RESOURCE`,
-/// root effective uid, or matching real uid (`man 2 prlimit`; `do_prlimit` / LSM).
-#[inline]
-fn may_prlimit_peer(caller: &Arc<ProcessData>, target: &Arc<ProcessData>) -> bool {
-    if Arc::ptr_eq(caller, target) {
-        return true;
-    }
-    const CAP_SYS_RESOURCE: u32 = 24;
-    if caller.geteuid() == 0 {
-        return true;
-    }
-    let (eff, _, _) = caller.get_capabilities();
-    if eff & (1 << CAP_SYS_RESOURCE) != 0 {
-        return true;
-    }
-    caller.getuid() == target.getuid()
-}
 
 #[inline]
 fn rss_kb_from_aspace(aspace: &AddrSpace) -> i64 {
@@ -48,7 +31,7 @@ pub fn sys_prlimit64(
 
     let proc_data = get_process_data(pid)?;
     let caller_pd = current().as_thread().proc_data.clone();
-    if !may_prlimit_peer(&caller_pd, &proc_data) {
+    if !may_peer_process_by_cred(&caller_pd, &proc_data) {
         return Err(AxError::OperationNotPermitted);
     }
 

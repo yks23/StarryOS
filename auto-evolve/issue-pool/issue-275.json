@@ -1,0 +1,31 @@
+{
+  "id": "issue-275",
+  "title": "pidfd_open：未做 Linux 式 ptrace/同凭证校验，任意进程可为他人 pid 创建 pidfd",
+  "status": "resolved",
+  "created_at": "2026-04-12T18:00:00Z",
+  "severity": "medium",
+  "fix_summary": "抽出 `task::may_peer_process_by_cred`（与原先 `prlimit64` 门禁一致：同 `ProcessData`、euid==0、`CAP_SYS_RESOURCE`、或与目标 ruid 相同）；`sys_pidfd_open` 在 `PIDFD_THREAD`/进程两种路径解析目标后未授权则 `OperationNotPermitted`（EPERM）。`sys_prlimit64` 改为调用同一函数。",
+  "files_changed": [
+    "kernel/src/task/ops.rs",
+    "kernel/src/syscall/resources.rs",
+    "kernel/src/syscall/fs/pidfd.rs"
+  ],
+  "description": "**`kernel/src/syscall/fs/pidfd.rs`** **`sys_pidfd_open`**（约 **19–39** 行）在校验 **`flags`**、拒绝 **`pid==0`** 后，仅通过 **`get_task(pid)`**（**`PIDFD_THREAD`**）或 **`get_process_data(pid)`**（进程 **pidfd**）解析 **目标**，**未** 校验 **调用者** 是否 **有权** 对 **该** **任务/进程** **建立** **pidfd** **句柄**。\n\n**Linux `pidfd_open(2)`**（及 **`kernel/pid.c` `pidfd_open`** **路径**）：调用者通常需满足 **ptrace** **可附加** **语义**（**如** **`PTRACE_MODE_ATTACH_REALCREDS`** **等**）、**或为** **目标** **父进程** **等** **条件**（**具体** **以** **当前** **内核/LSM** **为准**），**否则** **`EPERM`**。**当前** **Starry** **只要** **`pid`** **存在** **即可** **成功** **创建** **pidfd**，**进而** **可** **配合** **`pidfd_getfd`**/**`pidfd_send_signal`** **等** **访问** **他进程** **资源**（**后者** **路径** **亦** **假设** **pidfd** **已** **受控** **获得**）。\n\n**建议**：在 **解析** **目标** **`ProcessData`/`Thread`** **之后**、**构造** **`PidFd`** **之前**，增加 **与** **Linux** **`ptrace_may_access`**/**`ns_capable`** **等** **对齐** **的** **门禁**（**或** **复用** **与** **`kill`**/**`prlimit`** **类似** **的** **uid/ns** **策略** **并** **文档化** **差异**）。\n\n**注意**：**`pid==0`** **已** **EINVAL**（**与** **`get_process_data(0)`** **→** **current** **的** **语义** **区分**）**已** **在** **注释** **中** **说明**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["pidfd_open"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/pidfd.rs:19-39"],
+    "related_files": ["kernel/src/syscall/fs/pidfd.rs:42-74", "kernel/src/task/ops.rs:97-109"],
+    "key_insight": "pidfd_open 无 ptrace/uid 门禁，与 Linux EPERM 分叉"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 Linux `pidfd_open` 手册与内核 `pidfd_open` 权限路径。",
+    "expected_output_contains": "",
+    "pass_criteria": "未授权目标 → EPERM（或等价），或与 Linux 一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `sys_pidfd_open` 中于目标解析成功后增加 `ptrace`/`cred` 检查，对齐 Linux `pidfd_open` 的 `may_ptrace`/`ns_capable` 等策略。",
+  "references": ["man 2 pidfd_open", "kernel/src/syscall/fs/pidfd.rs", "Linux kernel pidfd_open"]
+}

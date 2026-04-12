@@ -1,11 +1,14 @@
 use axerrno::{AxError, AxResult};
+use axtask::current;
 use bitflags::bitflags;
 use starry_signal::SignalInfo;
 
 use crate::{
     file::{FD_TABLE, FileLike, PidFd, add_file_like},
     syscall::signal::make_queue_signal_info,
-    task::{AsThread, get_process_data, get_task, send_signal_to_process},
+    task::{
+        AsThread, get_process_data, get_task, may_peer_process_by_cred, send_signal_to_process,
+    },
 };
 
 bitflags! {
@@ -27,10 +30,20 @@ pub fn sys_pidfd_open(pid: u32, flags: u32) -> AxResult<isize> {
         return Err(AxError::InvalidInput);
     }
 
+    let caller_pd = current().as_thread().proc_data.clone();
     let fd = if flags.contains(PidFdFlags::THREAD) {
-        PidFd::new_thread(get_task(pid)?.as_thread())
+        let task = get_task(pid)?;
+        let target_pd = task.as_thread().proc_data.clone();
+        if !may_peer_process_by_cred(&caller_pd, &target_pd) {
+            return Err(AxError::OperationNotPermitted);
+        }
+        PidFd::new_thread(task.as_thread())
     } else {
-        PidFd::new_process(&get_process_data(pid)?)
+        let target_pd = get_process_data(pid)?;
+        if !may_peer_process_by_cred(&caller_pd, &target_pd) {
+            return Err(AxError::OperationNotPermitted);
+        }
+        PidFd::new_process(&target_pd)
     };
     if flags.contains(PidFdFlags::NONBLOCK) {
         fd.set_nonblocking(true)?;

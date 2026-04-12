@@ -108,6 +108,29 @@ pub fn get_process_data(pid: Pid) -> AxResult<Arc<ProcessData>> {
         .ok_or(AxError::NoSuchProcess)
 }
 
+/// Linux-aligned peer access for `prlimit(2)`, `pidfd_open(2)`, and similar paths that mirror
+/// `ptrace_may_access` / `PTRACE_MODE_ATTACH_REALCREDS`-style checks: same process,
+/// root effective uid, `CAP_SYS_RESOURCE`, or matching real uid (`man 2 prlimit`,
+/// `man 2 pidfd_open`; kernel `do_prlimit` / `pidfd_open`).
+#[inline]
+pub(crate) fn may_peer_process_by_cred(
+    caller: &Arc<ProcessData>,
+    target: &Arc<ProcessData>,
+) -> bool {
+    if Arc::ptr_eq(caller, target) {
+        return true;
+    }
+    const CAP_SYS_RESOURCE: u32 = 24;
+    if caller.geteuid() == 0 {
+        return true;
+    }
+    let (eff, _, _) = caller.get_capabilities();
+    if eff & (1 << CAP_SYS_RESOURCE) != 0 {
+        return true;
+    }
+    caller.getuid() == target.getuid()
+}
+
 /// Keep [`ProcessData`] alive after the last thread exits until the parent `wait`s.
 pub fn register_zombie_process_data(pd: Arc<ProcessData>) {
     ZOMBIE_PROCESS_DATA.write().insert(pd.proc.pid(), pd);

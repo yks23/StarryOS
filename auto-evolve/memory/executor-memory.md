@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-275 resolved（**`pidfd_open`**：跨进程须 **`may_peer_process_by_cred`**（与 **`prlimit64`** 同：**`euid==0`** / **`CAP_SYS_RESOURCE`** / **`ruid` 相同**），否则 **`EPERM`**；**`task/ops.rs`**/**`pidfd.rs`**/**`resources.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-274 resolved（**UDP `shutdown`**：**`SHUT_RD`/`SHUT_WR`** 置 **`rx_shut`/`tx_shut`**，**`recv`/`send`/`poll`** 分支；**`SHUT_RDWR`** 仍 **`socket.close()`**；**`axnet-ng` `udp.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-273 resolved（**`prlimit64`**：跨 **`pid`** 须 **`may_prlimit_peer`**（同 **`ProcessData`** / **`euid==0`** / **`CAP_SYS_RESOURCE`** / **`ruid` 相同**），否则 **`OperationNotPermitted`（EPERM）**；**`resources.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-272 resolved（**`lseek`**：**`SEEK_SET`** 且 **`offset<0`** → **`InvalidInput`（EINVAL）**，勿 **`as u64`** 环绕；**`fs/io.rs`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -298,6 +299,7 @@
 | issue-271 | mlock/mlock2 addr 须页对齐 EINVAL | resolved | 2026-04-12 |
 | issue-272 | lseek SEEK_SET 负 offset EINVAL | resolved | 2026-04-12 |
 | issue-273 | prlimit64 跨 pid 权限 EPERM | resolved | 2026-04-12 |
+| issue-275 | pidfd_open 凭证门禁 EPERM | resolved | 2026-04-12 |
 | issue-274 | UDP shutdown 按 how 半关闭 | resolved | 2026-04-12 |
 | issue-219 | waitpid __WNOTHREAD → Unsupported | resolved | 2026-04-12 |
 | issue-225 | fallocate FALLOC_FL 掩码 + 非零 EOPNOTSUPP | resolved | 2026-04-12 |
@@ -521,6 +523,7 @@
 - **`getsockname`/`getpeername`**（**`net/name.rs`**）：**`addr==NULL`** 时仅 **`local_addr()`/`peer_addr()`** 校验套接字状态后 **`Ok(0)`**，不读 **`addrlen`**、不 **`write_to_user`**（与 Linux **`move_addr_to_user`** 省略拷贝，issue-256）。**`addr` 非空**时 **`addrlen.get_as_mut()`** 仍须早于 **`local_addr`/`peer_addr`**（issue-119），再 **`write_to_user`**（**`addr`** 在 **`fill_addr`** 写回时访问；**`*addrlen==0`** 见 issue-090 **`InvalidInput`**）。
 - **`socket(2)`/`socketpair(2)`**：**`type`** 仅允许 **`SOCK_TYPE_MASK`（0xf）** 内 **`SOCK_*`** 与 **`O_CLOEXEC|O_NONBLOCK`**；其它位 **`InvalidInput`**（对齐 Linux **`EINVAL`**）。**`ty`** 取 **`raw_ty & SOCK_TYPE_MASK`**。**`AF_UNIX`**：**`proto` 须为 0**，否则 **`EPROTONOSUPPORT`**（issue-241；**`AF_INET`** 仍按 **`IPPROTO_TCP`/`UDP`**）。**`AF_UNIX` `SOCK_SEQPACKET`**：未实现 Unix SEQPACKET 传输；**`socket`** 与 **`socketpair`** 均 **`ESOCKTNOSUPPORT`**，勿将 **`SOCK_SEQPACKET`** 与 **`DgramTransport`** 混用（issue-251）。**`socketpair`**：先 **`fds.get_as_mut()`** 再依次 **`add_to_fd_table`**；第二端失败须 **`close_file_like`** 已装第一端（issue-150，与 issue-148 **`pipe2`** 同类）。
 - **`shutdown(2)`**（**`AF_INET` UDP**）：**`UdpSocket`** **`SHUT_RD`/`SHUT_WR`** 分别置 **`rx_shut`/`tx_shut`**，**`recv`**/**`send`** 失败（**`EINVAL`/`EPIPE`** 类），**`poll`** 不再对关闭侧置 **`IN`/`OUT`**；**`SHUT_RDWR`** 置两标志并 **`smoltcp` `close()`**（issue-274；此前凡 **`how`** 均 **`close()`**）。
+- **`pidfd_open(2)`**：解析 **`get_task`/`get_process_data`** 后、装 **`PidFd`** 前须 **`may_peer_process_by_cred`**（与 **`prlimit64`** 同：**`euid==0`** / **`CAP_SYS_RESOURCE`** / **`ruid` 相同**），否则 **`EPERM`**（issue-275；**`pid==0`** 仍 **`EINVAL`**，issue-109）。
 - **`listen(2)`**：**`AF_UNIX` `SOCK_DGRAM`**（**`Transport::Dgram`**）→ **`OperationNotSupported`（EOPNOTSUPP）**；**`SOCK_STREAM`** 仍为 **`Ok`**（**`vendor/axnet-ng` `UnixSocket::listen`**，issue-254）。TCP：**`tcp_listen_syn_queue_cap`** 按 Linux **`(unsigned int)backlog`** 与 **`SOMAXCONN`** 取 **`min`**（issue-156、issue-261）。
 - **`setsockopt(2)`**：**`optlen`** 须 **`>=`** 选项值 **`sizeof(T)`**（与 Linux / **`getsockopt`** 侧一致），只使用缓冲区前 **`sizeof(T)`** 字节；**`optlen < sizeof(T)`** → **`EINVAL`**。**`SO_RCVTIMEO`/`SO_SNDTIMEO`**（**`SOL_SOCKET`**）用户 **`timeval`** 须经 **`read_timeval_user`** 字段读，勿经 **`UserConstPtr::get_as_ref::<timeval>`** 整结构拷贝（issue-217）。
 - **`getsockopt(2)`**（**`net/opt.rs`**）：**`Socket::from_fd`** 须早于 **`optlen.get_as_mut`**，使无效 **`fd`** 先 **`EBADF`**，再触碰 **`optlen`/`optval`**（与 Linux **`sockfd_lookup`** 顺序及 **`setsockopt`** 对称）；日志仅用 **`UserPtr::address`** 避免提前用户读。**`SO_RCVTIMEO`/`SO_SNDTIMEO`**：**`GetSocketOption::ReceiveTimeout`/`SendTimeout`** + **`write_timeval_user`** 字段写 **`timeval`**，**`*optlen = sizeof(timeval)`**（issue-223，与 issue-217 **`setsockopt`** 对称）。
