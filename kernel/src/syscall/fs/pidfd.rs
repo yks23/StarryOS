@@ -1,6 +1,7 @@
 use axerrno::{AxError, AxResult};
 use axtask::current;
 use bitflags::bitflags;
+use starry_process::Pid;
 use starry_signal::SignalInfo;
 
 use crate::{
@@ -19,16 +20,19 @@ bitflags! {
     }
 }
 
-pub fn sys_pidfd_open(pid: u32, flags: u32) -> AxResult<isize> {
+pub fn sys_pidfd_open(pid: usize, flags: u32) -> AxResult<isize> {
     debug!("sys_pidfd_open <= pid: {pid}, flags: {flags}");
 
     let flags = PidFdFlags::from_bits(flags).ok_or(AxError::InvalidInput)?;
 
-    // Linux `pidfd_open(2)`：`pid`/`tid` 须为真实目标 id，`0` 非法（**EINVAL**），
-    // 勿复用 `get_process_data`/`get_task` 对 `0` → current 的约定。
-    if pid == 0 {
+    // Linux `pidfd_open(2)`：`pid`/`tid` 为 `pid_t`（有符号）；`pid <= 0` → **EINVAL**，早于
+    // `get_process_data`/`get_task` 的 **ESRCH**。勿将参数当无符号（`-1` 须为 **EINVAL**，非
+    // `u32::MAX` → ESRCH）。issue-416；issue-275 `pidfd_open` 旁。
+    let pid = pid as i32;
+    if pid <= 0 {
         return Err(AxError::InvalidInput);
     }
+    let pid = pid as Pid;
 
     let caller_pd = current().as_thread().proc_data.clone();
     let fd = if flags.contains(PidFdFlags::THREAD) {

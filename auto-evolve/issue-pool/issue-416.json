@@ -1,0 +1,27 @@
+{
+  "id": "issue-416",
+  "title": "`pidfd_open(2)`：`sys_pidfd_open` 将 `arg0` 转为 `u32 pid`，负 `pid_t`（如 -1）变成极大无符号值，越过 Linux `pid <= 0` 的 `EINVAL` 语义",
+  "status": "resolved",
+  "created_at": "2026-04-13T01:05:00Z",
+  "severity": "low",
+  "description": "`kernel/src/syscall/mod.rs` **`Sysno::pidfd_open`** **：** **`sys_pidfd_open(uctx.arg0() as _, …)`** **将** **第一** **参数** **cast** **为** **`u32`** **（** **见** **`pidfd.rs`** **`pub fn sys_pidfd_open(pid: u32, flags: u32)`** **）** **。**\n\n**Linux** **`pidfd_open(2)`** **`pid`** **类型** **为** **`pid_t`（有符号）** **：** **`pid <= 0`** **（** **含** **`-1`** **）** **为** **非法** **，** **通常** **`EINVAL`** **（** **与** **`pid==0`** **同类** **，** **早于** **`ESRCH`** **类** **「** **无** **此** **进程** **」** **）** **。** **在** **LP64** **ABI** **上** **用户** **传入** **`-1`** **时** **寄存器** **常为** **`0xffff_ffff`** **，** **按** **`u32`****解释** **为** **`4294967295`** **，** **仅** **被** **`pid == 0`** **拒绝** **，** **随后** **`get_process_data`/`get_task`** **更** **可能** **得到** **`ESRCH`/`NoSuchProcess`** **而** **非** **`EINVAL`** **，** **与** **Linux** **分层** **不一致** **。**\n\n**当前** **仅** **显式** **拒绝** **`pid == 0`** **（** **`pidfd.rs`** **27–31** **行** **）** **。**\n\n建议：**在** **进入** **`get_process_data`/`get_task`** **前** **按** **有** **符号** **解释** **或** **范围** **校验** **：** **例如** **`let pid = uctx.arg0() as i32`** **，** **`if pid <= 0 { return Err(InvalidInput); }`** **再** **`pid as u32`/`Pid`** **；** **或** **`arg0 as u32 as i32 <= 0`** **（** **对** **`0`** **与** **`0xffff_ffff`** **均** **成立** **）** **。** **注释** **引用** **issue-416** **及** **issue-275** **`pidfd_open`** **凭证** **旁** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["pidfd_open"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/pidfd.rs:22-31", "kernel/src/syscall/mod.rs:320"],
+    "related_files": [],
+    "key_insight": "`u32 pid` 无法表达负 `pid_t`；`pid_t -1` → `u32::MAX` 绕过 `pid==0` 早退"
+  },
+  "fix_summary": "`sys_pidfd_open`：首参改为 **`usize`**，**`pid as i32`**后 **`pid <= 0` → `InvalidInput`**（**EINVAL**），再 **`as Pid`**；**`-1`/`u32::MAX` 寄存器模式** **不再** **误走** **ESRCH**。注释 issue-416/issue-275。",
+  "files_changed": ["kernel/src/syscall/fs/pidfd.rs"],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：`pidfd_open(-1, 0)` 对照 Linux `EINVAL` 与 Starry `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "凡 `pid <= 0`（按 Linux `pid_t`）先返回 `EINVAL`（`InvalidInput`），不得仅因无进程而 `ESRCH`。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过"
+  },
+  "suggested_fix": "`sys_pidfd_open`：先以 `i32`/`pid_t` 语义拒绝 `<= 0`，再转换为内部 `Pid`；`mod.rs` 传参与此一致。",
+  "references": ["man 2 pidfd_open", "kernel/pid.c", "kernel/src/syscall/fs/pidfd.rs", "kernel/src/syscall/mod.rs", "issue-275", "issue-320"]
+}
