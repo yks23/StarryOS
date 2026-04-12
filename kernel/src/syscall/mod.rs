@@ -295,6 +295,10 @@ pub fn handle_syscall(uctx: &mut UserContext) {
 
         // pipe
         Sysno::pipe2 => sys_pipe2(uctx.arg0() as _, uctx.arg1() as _),
+        // Legacy `pipe(2)` syscall number exists only on ABIs where `syscalls::Sysno` defines
+        // `Sysno::pipe` (x86/x86_64). Linux riscv64/aarch64 typically have no separate `__NR_pipe`;
+        // libc implements `pipe(2)` via `pipe2` / `__NR_pipe2` → `sys_pipe2` with flags=0 (same
+        // handler as `Sysno::pipe2` above, issue-298; symmetric to poll/select, issue-291/295).
         #[cfg(target_arch = "x86_64")]
         Sysno::pipe => sys_pipe2(uctx.arg0() as _, 0),
 
