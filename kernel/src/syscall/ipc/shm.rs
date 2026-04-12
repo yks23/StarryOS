@@ -129,17 +129,21 @@ impl ShmInner {
         }
     }
 
-    /// Updates the pid of last shmop and checks if the size and mapping flags
-    /// match.
+    /// Updates the pid of last shmop for an existing key (`shmget` open path).
+    ///
+    /// Linux only returns `EINVAL` when the requested `size` is **greater** than
+    /// `shm_segsz`; `size == 0` means access-only (issue-381). Mode bits must still match.
     pub fn try_update(
         &mut self,
         size: usize,
         mapping_flags: MappingFlags,
         pid: Pid,
     ) -> AxResult<isize> {
-        if size as __kernel_size_t != self.shmid_ds.shm_segsz
-            || mapping_flags.bits() as __kernel_mode_t != self.shmid_ds.shm_perm.mode
-        {
+        let segsz = self.shmid_ds.shm_segsz as usize;
+        if size != 0 && size > segsz {
+            return Err(AxError::InvalidInput);
+        }
+        if mapping_flags.bits() as __kernel_mode_t != self.shmid_ds.shm_perm.mode {
             return Err(AxError::InvalidInput);
         }
         self.shmid_ds.shm_lpid = pid as i32;
@@ -387,11 +391,6 @@ impl ShmManager {
 pub static SHM_MANAGER: Mutex<ShmManager> = Mutex::new(ShmManager::new());
 
 pub fn sys_shmget(key: i32, size: usize, shmflg: usize) -> AxResult<isize> {
-    let page_num = memory_addr::align_up_4k(size) / PAGE_SIZE_4K;
-    if page_num == 0 {
-        return Err(AxError::InvalidInput);
-    }
-
     let mut mapping_flags = MappingFlags::from_name("USER").unwrap();
     if shmflg & 0o400 != 0 {
         mapping_flags.insert(MappingFlags::READ);
@@ -415,6 +414,13 @@ pub fn sys_shmget(key: i32, size: usize, shmflg: usize) -> AxResult<isize> {
             let mut shm_inner = shm_inner.lock();
             return shm_inner.try_update(size, mapping_flags, cur_pid);
         }
+    }
+
+    // New segment only: `size == 0` is EINVAL (Linux: new `shmget` must have positive size).
+    // Existing key path above allows `size == 0` as access-only (issue-381).
+    let page_num = memory_addr::align_up_4k(size) / PAGE_SIZE_4K;
+    if page_num == 0 {
+        return Err(AxError::InvalidInput);
     }
 
     // Create a new shm_inner
