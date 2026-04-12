@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-18：issue-392 resolved（**`chdir`**：**`path.is_empty()`** **`resolve`** **前** **→** **`InvalidInput`**；**`ctl.rs`**（**issue-391** **`chroot`** **对称**）；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-17：issue-391 resolved（**`chroot`**：**`path.is_empty()`** **`resolve`** **前** **→** **`InvalidInput`**；**`ctl.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-16：issue-390 resolved（**`nanosleep`/`clock_nanosleep`**：**`checked_sub`** **`Some(0)`** **→** **`Ok(0)`**；**仅** **非零** **`rem`** **→** **`EINTR`**；**`schedule.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-15：issue-389 resolved（**`SocketAddrExt::family`(`SocketAddrEx`)** **委托** **`Ip`/`Unix`/`Vsock`** **`family()`**；**`addr.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）

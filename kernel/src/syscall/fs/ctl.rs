@@ -67,6 +67,11 @@ pub fn sys_chdir(path: *const c_char) -> AxResult<isize> {
     let path = vm_load_string(path)?;
     debug!("sys_chdir <= path: {path}");
 
+    // Linux rejects empty pathname with EINVAL before path resolution (issue-392; `sys_chroot`, issue-391).
+    if path.is_empty() {
+        return Err(AxError::InvalidInput);
+    }
+
     let mut fs = FS_CONTEXT.lock();
     let entry = fs.resolve(path)?;
     fs.set_current_dir(entry)?;
