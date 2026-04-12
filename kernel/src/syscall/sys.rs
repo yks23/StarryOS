@@ -152,6 +152,10 @@ const UTSNAME: new_utsname = new_utsname {
 };
 
 pub fn sys_uname(name: *mut new_utsname) -> AxResult<isize> {
+    // Linux `uname(2)`: `buf` must be writable; NULL → EFAULT.
+    if name.is_null() {
+        return Err(AxError::BadAddress);
+    }
     name.vm_write(UTSNAME)?;
     Ok(0)
 }
@@ -223,6 +227,11 @@ fn sysinfo_load_avg_fixed() -> [u64; 3] {
 }
 
 pub fn sys_sysinfo(info: *mut sysinfo) -> AxResult<isize> {
+    // Linux `sysinfo(2)`: `info` must be writable; NULL → EFAULT.
+    if info.is_null() {
+        return Err(AxError::BadAddress);
+    }
+
     let total = total_ram_size();
     let free_pool = global_allocator()
         .available_pages()

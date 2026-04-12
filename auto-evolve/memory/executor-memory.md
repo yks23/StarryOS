@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-230 resolved（**`uname`/`sysinfo`**：输出指针 **`NULL` → `BadAddress`（EFAULT）**，与 **`getrusage`** 显式风格一致；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-229 resolved（**`mprotect`**：**`length == 0` → `InvalidInput`（EINVAL）**，与 **`sys_mmap`**/**Linux** 对齐；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-221 resolved（**`getdents64`**：**`DirBuffer`**：**`NAME_MAX`**、**`d_reclen`**（**`u16::try_from`**）、**`d_off`**（**`i64::try_from`**）与 **`SAFETY`** 注释；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-219 resolved（**`waitpid`/`wait4`**：**`__WNOTHREAD`** → **`Unsupported`**，勿静默忽略；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -209,6 +210,7 @@
 |----------|------|------|------|
 | issue-221 | getdents64 dirent64 NAME_MAX/d_reclen/d_off | resolved | 2026-04-12 |
 | issue-229 | mprotect length==0 → EINVAL（对齐 mmap） | resolved | 2026-04-12 |
+| issue-230 | uname/sysinfo 输出 NULL → BadAddress | resolved | 2026-04-12 |
 | issue-219 | waitpid __WNOTHREAD → Unsupported | resolved | 2026-04-12 |
 | issue-225 | fallocate FALLOC_FL 掩码 + 非零 EOPNOTSUPP | resolved | 2026-04-12 |
 | issue-227 | shmat 无效 shmid 不 unwrap（EINVAL） | resolved | 2026-04-12 |
@@ -391,6 +393,7 @@
 - **SysV `shmat`**：未知或已回收 **`shmid`** → **`get_inner_by_shmid` `None`** → **`InvalidInput`**（**EINVAL**），勿 **`unwrap`**（issue-227；与 **`sys_shmdt`/`sys_shmctl`** 一致）。
 - **`getrusage(RUSAGE_CHILDREN)`**：须为 **`wait`** 回收子进程的 **CPU** 累计（**`ProcessData::child_utime_ns`/`child_stime_ns`**），与 **`times`/`waitpid`** 累加路径一致；**勿**把 **`proc.threads()`** 中除当前线程外的 **pthread** 当作子进程。
 - **`getrusage(2)`**：**`who`** 非法 → **`InvalidInput`**（**EINVAL**）；**`usage`** 为 **NULL** → **`BadAddress`**（**EFAULT**），须在聚合 **`Rusage`** 之前检查，与 Linux 顺序一致。
+- **`uname(2)`/`sysinfo(2)`**：输出结构体指针 **必填可写**；**`NULL` → `BadAddress`**（**EFAULT**），在 **`vm_write`** 前显式检查（issue-230；与 **`getrusage`** 一致）。
 - **`prlimit64`**：对齐 Linux **`do_prlimit`**（issue-141）：**`old_limit` 非空**时先在进程内保存变更前的 **`rlimit64`**；**`new_limit` 非空**时先 **`vm_read`** 并校验（**`rlim_cur`≤`rlim_max`**、非法抬高硬上限 **`EPERM`**，同 issue-044），成功后再更新内核 **`rlimit`**；最后再 **`vm_write(old_limit)`** 写出快照。**`new_limit`** 读/校验失败时不应已写出 **`old`**。可降低硬上限或保持不变并更新 **`rlim_cur`**（在 **`rlim_cur <= rlim_max`** 前提下）。
 - **`ioctl(FIONBIO)`**：第三参为 **`int *`**（Linux）；用 **`(arg as *const c_int).vm_read()`** 读整型，**`set_nonblocking(value != 0)`**；勿只读单字节、勿将取值限制为 0/1（**`2`**、**`256`** 等小端首字节为 0 的非零值须启用 **`O_NONBLOCK`**）。
 - **`getrandom(2)`**：**`flags`** 须为 **`linux_raw_sys::general`** 中 **`GRND_NONBLOCK|GRND_RANDOM|GRND_INSECURE`** 的子集（与 **`uapi/linux/random.h`** 一致），否则 **`EINVAL`**；掩码校验须先于 **`len==0`** 的 **`Ok(0)`** 早退（issue-151，与 issue-042 互补）。勿用 **`from_bits_retain`** 静默丢弃未知位。
