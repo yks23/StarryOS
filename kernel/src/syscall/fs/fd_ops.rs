@@ -194,12 +194,15 @@ pub fn sys_openat(
     flags: i32,
     mode: __kernel_mode_t,
 ) -> AxResult<isize> {
+    // Linux do_sys_open: build_open_flags before getname/copy of pathname (EINVAL for bad flag
+    // combinations before EFAULT on bad path pointer; issue-323; same theme as issue-318/issue-305).
+    validate_open_flags(flags as u32)?;
+
     let path = vm_load_string(path)?;
     debug!("sys_openat <= {dirfd} {path:?} {flags:#o} {mode:#o}");
 
     let mode = mode & !current().as_thread().proc_data.umask();
 
-    validate_open_flags(flags as u32)?;
     let options = flags_to_options(flags, mode, (sys_geteuid()? as _, sys_getegid()? as _));
     let dirfd = dirfd_for_path_resolution(dirfd, path.as_str());
     with_fs(dirfd, |fs| options.open(fs, path))
