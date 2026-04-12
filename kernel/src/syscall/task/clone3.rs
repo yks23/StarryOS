@@ -77,6 +77,12 @@ pub fn sys_clone3(uctx: &UserContext, args: *const u8, size: usize) -> AxResult<
         return Err(AxError::InvalidInput);
     }
 
+    // NULL `args` → **EFAULT** (`BadAddress`), after `size` check so **EINVAL** still wins for
+    // undersized `size` (same theme as `capget`/`sched_getaffinity`, issue-304, issue-306).
+    if args.is_null() {
+        return Err(AxError::BadAddress);
+    }
+
     let mut buffer = [0u8; core::mem::size_of::<Clone3Args>()];
     // Linux ignores trailing bytes when size exceeds the struct; never slice past `buffer`.
     let read_len = size.min(buffer.len());

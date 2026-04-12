@@ -1,0 +1,27 @@
+{
+  "id": "issue-308",
+  "title": "`clone3(2)`：`sys_clone3` 在 `vm_read_slice(args, …)` 前未对 `args` 显式 `NULL` → `BadAddress`，与同仓库 `capget`/issue-304、`sched_getaffinity`/issue-306 的输出/输入指针显式早退风格不一致",
+  "status": "resolved",
+  "created_at": "2026-04-17T12:10:00Z",
+  "severity": "low",
+  "fix_summary": "在 `sys_clone3` 中于 `MIN_CLONE_ARGS_SIZE` 校验之后、`vm_read_slice` 之前增加 `args.is_null()` → `AxError::BadAddress`，并注释与 `capget`/`sched_getaffinity`（issue-304/306）一致：过短 `size` 仍先 `EINVAL`。更新 `executor-memory` 最近更新、表格与 `clone3(2)` 条。",
+  "files_changed": ["kernel/src/syscall/task/clone3.rs", "auto-evolve/memory/executor-memory.md"],
+  "description": "**`kernel/src/syscall/task/clone3.rs`** **`sys_clone3`** **（** **约** **72–94** **行** **）** **在** **`size < MIN_CLONE_ARGS_SIZE`** **校验** **之后** **直接** **`vm_read_slice(args, …)`** **，** **未** **在** **入口** **对** **`args.is_null()`** **显式** **返回** **`AxError::BadAddress`** **。** **当** **`args == NULL`** **且** **`size >= sizeof(struct clone_args)`** **时** **，** **`vm_read_slice`** **会** **失败** **，** **但** **缺少** **与** **`sys_capget`**/**`sys_sched_getaffinity`** **同类** **的** **显式** **注释** **/** **早退** **，** **可读性** **与** **错误** **路径** **自** **描述** **性** **较弱** **。** **`args == NULL`** **且** **`size`** **过小** **时** **仅** **返回** **`EINVAL`** **（** **与** **Linux** **对** **过短** **`size`** **的** **处理** **是否** **优先** **于** **`EFAULT`** **需** **对照** **上游** **）** **。**\n\n**建议** **：** **在** **`vm_read_slice`** **前** **增加** **`args.is_null()`** **→** **`BadAddress`** **（** **位置** **可** **对照** **Linux** **`copy_clone_args_from_user`** **顺序** **）** **，** **或** **补充** **模块** **注释** **说明** **依赖** **`vm_read_slice`** **的** **EFAULT** **语义** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["clone3"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/clone3.rs:72-100"],
+    "related_files": ["kernel/src/syscall/task/ctl.rs", "kernel/src/syscall/task/schedule.rs"],
+    "key_insight": "clone3 args 指针未显式 NULL 早退"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：`args==NULL` 且合法 `size` 对照 Linux EFAULT。",
+    "expected_output_contains": "",
+    "pass_criteria": "显式 `NULL` 早退或注释与 issue-304/306 风格一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `sys_clone3` 中于 `vm_read_slice` 之前加入 `args.is_null()` 检查并返回 `BadAddress`，或补充注释。",
+  "references": ["man 2 clone3", "kernel/src/syscall/task/clone3.rs", "issue-304", "issue-306"]
+}
