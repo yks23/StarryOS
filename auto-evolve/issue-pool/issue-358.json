@@ -1,0 +1,32 @@
+{
+  "id": "issue-358",
+  "title": "`mprotect(2)`：`sys_mprotect` 对含 `PROT_GROWSUP`/`PROT_GROWSDOWN` 的 `prot` 一律 `EINVAL`，源码 `TODO` 未实现 Linux 栈 VMA 随访问增长/收缩语义；与依赖该标志的 glibc/用户栈工具行为不一致",
+  "status": "resolved",
+  "created_at": "2026-04-13T22:35:00Z",
+  "resolved_at": "2026-04-13T00:00:00Z",
+  "severity": "medium",
+  "description": "**`kernel/src/syscall/mm/mmap.rs`** **`sys_mprotect`** **（** **约** **322–331** **行** **）** **：** **存在** **`TODO: implement PROT_GROWSUP & PROT_GROWSDOWN`** **。** **当** **`MmapProt`** **解析** **成功** **且** **`prot`** **含** **`GROWDOWN`/`GROWSUP`** **时** **直接** **`return Err(InvalidInput)`** **，** **等价** **于** **用户态** **无法** **通过** **`mprotect`** **设置** **与** **Linux** **`mm/mprotect.c`** **`do_mprotect_pkey`** **中** **栈** **扩展** **相关** **的** **保护** **位** **。** **影响** **：** **依赖** **将** **栈** **映射** **标** **为** **`PROT_GROW*`** **的** **工作负载** **或** **对照** **测试** **会** **得到** **与** **上游** **不同** **的** **errno** **/** **能力** **缺失** **。**\n\n**建议** **：** **在** **`AddrSpace`** **/`VMA`** **层** **实现** **或** **部分** **实现** **`Linux`** **栈** **增长** **语义** **；** **或** **在** `executor-memory.md` **/** **手册** **中** **明确** **Starry** **不支持** **`PROT_GROW*`** **且** `EINVAL` **为** **有意** **行为** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["mprotect"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/mm/mmap.rs:322-331"],
+    "related_files": [],
+    "key_insight": "mprotect PROT_GROWSUP/GROWSDOWN stub vs Linux stack VMA"
+  },
+  "fix_summary": "`sys_mprotect`：两 `PROT_GROW*` 同时置位 → `EINVAL`；否则从 `MmapProt` 减去 `GROW*` 再 `MappingFlags`/`protect`（缺页栈扩展仍未实现）。`executor-memory` 记录与 `mmap` 拒绝 `PROT_GROW*`（issue-065）之分流。",
+  "files_changed": [
+    "kernel/src/syscall/mm/mmap.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-358.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：用户态对栈映射 `mprotect(..., PROT_READ|PROT_WRITE|PROT_GROWSDOWN)` 对照 Linux。",
+    "expected_output_contains": "",
+    "pass_criteria": "实现 `PROT_GROW*` 语义或与 Linux 的明确不支持文档化及 errno 一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `aspace`/`Backend` 中建模栈 VMA 的 grow 标志；若永久不支持，则集中文档化并考虑专用 errno。",
+  "references": ["man 2 mprotect", "kernel/mm/mprotect.c", "kernel/src/syscall/mm/mmap.rs"]
+}

@@ -26,9 +26,9 @@ bitflags::bitflags! {
         const WRITE = PROT_WRITE;
         /// Page can be executed.
         const EXEC = PROT_EXEC;
-        /// Extend change to start of growsdown vma (mprotect only).
+        /// Stack grow-down hint (`mprotect` only; stripped before PTE update, issue-358).
         const GROWDOWN = PROT_GROWSDOWN;
-        /// Extend change to start of growsup vma (mprotect only).
+        /// Stack grow-up hint (`mprotect` only; stripped before PTE update, issue-358).
         const GROWSUP = PROT_GROWSUP;
     }
 }
@@ -320,15 +320,20 @@ pub fn sys_munmap(addr: usize, length: usize) -> AxResult<isize> {
 }
 
 pub fn sys_mprotect(addr: usize, length: usize, prot: u32) -> AxResult<isize> {
-    // TODO: implement PROT_GROWSUP & PROT_GROWSDOWN
     let Some(permission_flags) = MmapProt::from_bits(prot) else {
         return Err(AxError::InvalidInput);
     };
     debug!("sys_mprotect <= addr: {addr:#x}, length: {length:x}, prot: {permission_flags:?}");
 
-    if permission_flags.intersects(MmapProt::GROWDOWN | MmapProt::GROWSUP) {
+    // A single range cannot be both grow-down and grow-up (Linux `mprotect_fixup` / VMA flags).
+    if permission_flags.contains(MmapProt::GROWDOWN) && permission_flags.contains(MmapProt::GROWSUP) {
         return Err(AxError::InvalidInput);
     }
+
+    // `PROT_GROWSDOWN`/`PROT_GROWSUP` are stack-VMA hints on Linux; fault-driven expansion is not
+    // modeled in AddrSpace yet — apply only `PROT_READ|WRITE|EXEC|NONE` to the page tables
+    // (issue-358).
+    let base_prot = permission_flags - (MmapProt::GROWDOWN | MmapProt::GROWSUP);
 
     let start_addr = VirtAddr::from(addr);
     // Linux/POSIX: `addr` must be page-aligned (issue-270).
@@ -345,7 +350,7 @@ pub fn sys_mprotect(addr: usize, length: usize, prot: u32) -> AxResult<isize> {
     let curr = current();
     let mut aspace = curr.as_thread().proc_data.aspace.write();
     let length = align_up_4k(length);
-    aspace.protect(start_addr, length, permission_flags.into())?;
+    aspace.protect(start_addr, length, base_prot.into())?;
 
     Ok(0)
 }
