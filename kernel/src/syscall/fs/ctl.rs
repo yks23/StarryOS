@@ -113,6 +113,11 @@ pub fn sys_mkdirat(dirfd: i32, path: *const c_char, mode: u32) -> AxResult<isize
     let path = vm_load_string(path)?;
     debug!("sys_mkdirat <= dirfd: {dirfd}, path: {path}, mode: {mode}");
 
+    // Linux rejects empty pathname with EINVAL (issue-393; `sys_chdir`/`sys_chroot`, issue-391/392).
+    if path.is_empty() {
+        return Err(AxError::InvalidInput);
+    }
+
     if dirfd != AT_FDCWD && !path.starts_with('/') {
         let _ = Directory::from_fd(dirfd)?;
     }

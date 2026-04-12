@@ -1,0 +1,27 @@
+{
+  "id": "issue-393",
+  "title": "`mkdirat(2)`：空相对路径 `path==\"\"` 未在 `create_dir` 前拒绝为 `EINVAL`",
+  "status": "resolved",
+  "created_at": "2026-04-19T00:05:00Z",
+  "severity": "low",
+  "description": "`kernel/src/syscall/fs/ctl.rs` **`sys_mkdirat`**（约 112–127 行）：**`vm_load_string(path)?`** 后直接进入 **`Directory::from_fd`** / **`with_fs`** / **`fs.create_dir(path, mode)`**，**无** **`path.is_empty()`** 早退。\n\nLinux **`mkdirat(2)`** / **`mkdir(2)`** 对 **空路径组件** 通常 **`EINVAL`**（在 **`ENOENT`** 等 VFS 结果之前或与路径解析规则一致），与同文件 **`sys_chdir`**/**`sys_chroot`**（issue-392 **verified** / issue-391 **verified**）已采用的 **`resolve` 前空串拒绝** 主题一致。\n\n**`cfg(x86_64)`** **`sys_mkdir`** 走 **`sys_mkdirat`**，修复 **`mkdirat`** 一并覆盖 legacy **`mkdir`**。\n\n建议：**`vm_load_string`** **之后**、**`from_fd`/`with_fs`** **之前** **`path.is_empty()`** **`→`** **`InvalidInput`**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["mkdirat", "mkdir"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/ctl.rs:112-128"],
+    "related_files": ["kernel/src/syscall/fs/ctl.rs:66-79", "kernel/src/syscall/fs/ctl.rs:89-110"],
+    "key_insight": "`create_dir` 前 `path.is_empty()` → `InvalidInput`；与 issue-391/392 对称"
+  },
+  "fix_summary": "`sys_mkdirat`：`vm_load_string` 后、`from_fd`/`with_fs` 前对 `path.is_empty()` 返回 `InvalidInput`（`sys_mkdir` 经 `mkdirat`，issue-393）。",
+  "files_changed": ["kernel/src/syscall/fs/ctl.rs"],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：`mkdirat(AT_FDCWD, \"\", …)` 对照 Linux `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "空路径返回 EINVAL（`InvalidInput`）。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（仓库既有警告）"
+  },
+  "suggested_fix": "在 `sys_mkdirat` 中于 `debug!` 后增加与 `sys_chdir` 相同的 `path.is_empty()` 检查。",
+  "references": ["man 2 mkdirat", "kernel/src/syscall/fs/ctl.rs", "issue-391", "issue-392", "issue-297"]
+}
