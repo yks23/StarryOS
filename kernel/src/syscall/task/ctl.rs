@@ -210,8 +210,27 @@ pub fn sys_prctl(
             }
         }
         PR_SET_MM => {
-            // not implemented; but avoid annoying warnings
-            return Err(AxError::InvalidInput);
+            // Linux: known `PR_SET_MM_*` subcommands require `CAP_SYS_RESOURCE`; without it → **EPERM**.
+            // Unknown / out-of-range `arg2` → **EINVAL** (issue-176).
+            let cmd = u32::try_from(arg2).map_err(|_| AxError::InvalidInput)?;
+            return match cmd {
+                PR_SET_MM_START_CODE
+                | PR_SET_MM_END_CODE
+                | PR_SET_MM_START_DATA
+                | PR_SET_MM_END_DATA
+                | PR_SET_MM_START_STACK
+                | PR_SET_MM_START_BRK
+                | PR_SET_MM_BRK
+                | PR_SET_MM_ARG_START
+                | PR_SET_MM_ARG_END
+                | PR_SET_MM_ENV_START
+                | PR_SET_MM_ENV_END
+                | PR_SET_MM_AUXV
+                | PR_SET_MM_EXE_FILE
+                | PR_SET_MM_MAP
+                | PR_SET_MM_MAP_SIZE => Err(AxError::OperationNotPermitted),
+                _ => Err(AxError::InvalidInput),
+            };
         }
         _ => {
             warn!("sys_prctl: unsupported option {option}");
