@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-204 resolved（**`setitimer`**：**`itimerval`**/**`timeval`** 字段级 **`vm_read`**；去掉 **`assume_init`/`FIXME`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-202 resolved（**`capget`/`capset`**：**`__user_cap_header_struct`**/**`__user_cap_data_struct`** 字段级 **`vm_read`**；去掉 **`assume_init`/`FIXME`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-201 resolved（**`utimensat`/`utime`/`utimes`**：**`timespec`/`timeval`/`utimbuf`** 字段级 **`vm_read`**，去掉 **`assume_init`/`FIXME`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-194 resolved（**`getcwd`**：**`size==0`**/**负 `size`** → **`EINVAL`**；**`NULL` `buf`**+正 **`size`** → **`EFAULT`**；缓冲过短仍 **`ERANGE`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）

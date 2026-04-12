@@ -115,6 +115,25 @@ pub fn sys_times(tms: *mut Tms) -> AxResult<isize> {
     Ok(nanos_to_ticks(monotonic_time_nanos()) as _)
 }
 
+/// Read one user `timeval` field-by-field (issue-204 / no bulk `assume_init` on padding).
+fn read_timeval_user(p: *const timeval) -> AxResult<timeval> {
+    unsafe {
+        Ok(timeval {
+            tv_sec: core::ptr::addr_of!((*p).tv_sec).vm_read()?,
+            tv_usec: core::ptr::addr_of!((*p).tv_usec).vm_read()?,
+        })
+    }
+}
+
+fn read_itimerval_user(p: *const itimerval) -> AxResult<itimerval> {
+    unsafe {
+        Ok(itimerval {
+            it_interval: read_timeval_user(core::ptr::addr_of!((*p).it_interval))?,
+            it_value: read_timeval_user(core::ptr::addr_of!((*p).it_value))?,
+        })
+    }
+}
+
 pub fn sys_getitimer(which: i32, value: *mut itimerval) -> AxResult<isize> {
     let ty = ITimerType::from_repr(which).ok_or(AxError::InvalidInput)?;
     let (it_interval, it_value) = current().as_thread().time.borrow().get_itimer(ty);
@@ -136,8 +155,7 @@ pub fn sys_setitimer(
 
     let old = match new_value.nullable() {
         Some(new_value) => {
-            // FIXME: AnyBitPattern
-            let new_value = unsafe { new_value.vm_read_uninit()?.assume_init() };
+            let new_value = read_itimerval_user(new_value)?;
             let interval = new_value.it_interval.try_into_time_value()?.as_nanos() as usize;
             let remained = new_value.it_value.try_into_time_value()?.as_nanos() as usize;
             debug!("sys_setitimer <= type: {ty:?}, interval: {interval:?}, remained: {remained:?}");
