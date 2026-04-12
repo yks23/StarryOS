@@ -10,7 +10,7 @@ use linux_raw_sys::{
 use crate::{
     file::{FileLike, Socket},
     mm::{UserConstPtr, UserPtr},
-    time::read_timeval_user,
+    time::{read_timeval_user, write_timeval_user},
 };
 
 const PROTO_TCP: u32 = linux_raw_sys::net::IPPROTO_TCP as u32;
@@ -178,6 +178,23 @@ pub fn sys_getsockopt(
         let mut val = 0u8;
         socket.get_option(GetSocketOption::Ttl(&mut val))?;
         *get(optval, optlen)? = conv::IpTtl::rust_to_sys(val)?;
+        return Ok(0);
+    }
+    // issue-223: symmetric with `setsockopt` SO_RCVTIMEO/SO_SNDTIMEO (issue-217).
+    if level == SOL_SOCKET && (optname == SO_RCVTIMEO || optname == SO_SNDTIMEO) {
+        if (*optlen as usize) < size_of::<timeval>() {
+            return Err(AxError::InvalidInput);
+        }
+        let mut d = core::time::Duration::ZERO;
+        if optname == SO_RCVTIMEO {
+            socket.get_option(GetSocketOption::ReceiveTimeout(&mut d))?;
+        } else {
+            socket.get_option(GetSocketOption::SendTimeout(&mut d))?;
+        }
+        let tv = conv::Duration::rust_to_sys(d)?;
+        *optlen = size_of::<timeval>() as socklen_t;
+        let p = optval.address().as_usize() as *mut timeval;
+        write_timeval_user(p, tv)?;
         return Ok(0);
     }
     macro_rules! dispatch {
