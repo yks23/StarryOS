@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-409 resolved（**`fanotify_init`**：**`validate_fanotify_init_combined`** **对齐** **Linux** **`fanotify_user.c`** **（** **class/PIDFD+TID/MNT/FID/`O_ACCMODE`/NAME/TARGET_FID** **）**；**未知** **`flags`** **位** **仍** **最先**；**`notify.rs`**；**issue-328** **`event_f_flags`** **保存** **正交**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-407 resolved（**`execve`**：**`path.is_empty()`** **`load_user_app`**/**`argv`/`envp`** **解析** **前** **→** **`InvalidInput`**；**`argv.is_null()`** **仍** **最先**（**issue-325**）；**`execve.rs`**；**issue-405/issue-393** **同类**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-406 resolved（**`truncate`**：**`path.is_empty()`** **`OpenOptions::open`** **前** **→** **`InvalidInput`**；**`get_as_str`** **后** **`length < 0`** **前**（**issue-318** **读** **path** **先于** **length**）；**`ftruncate`** **无** **path**（**issue-316**）；**`io.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-13：issue-405 resolved（**`openat`/`open`**：**`path.is_empty()`** **`with_fs`/`options.open`** **前** **→** **`InvalidInput`**；**`validate_open_flags`** **仍** **先于** **`vm_load_string`**（**issue-323**）；**`fd_ops.rs`**；**issue-393** **同类**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）

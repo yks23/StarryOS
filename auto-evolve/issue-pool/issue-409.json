@@ -1,0 +1,27 @@
+{
+  "id": "issue-409",
+  "title": "`fanotify_init(2)`：`sys_fanotify_init` 仅校验「未知 `flags`/`event_f_flags` 位」，未对齐 Linux 对 `flags` 组合的多条 `EINVAL` 规则",
+  "status": "resolved",
+  "created_at": "2026-04-12T14:00:00Z",
+  "severity": "low",
+  "description": "`kernel/src/syscall/fs/notify.rs` **`sys_fanotify_init`**（约 65–75 行）：在 **`flags & !VALID_FANOTIFY_INIT_FLAGS`** 与 **`event_f_flags & !VALID_FANOTIFY_EVENT_F_FLAGS`** 之后直接 **`FanotifyFd::new`** **`/`** **`add_file_like`**，**未** **复现** **Linux** **`fs/notify/fanotify/fanotify_user.c`** **`SYSCALL_DEFINE2(fanotify_init, …)`** **中** **对** **`flags`** **的** **组合** **校验** **（** **桩** **实现** **仍** **应** **拒绝** **非法** **组合** **，** **以免** **与** **glibc** **/** **探测** **代码** **分层** **不一致** **）** **。**\n\n**与** **issue-328** **（** **`event_f_flags`** **保存** **）** **正交** **：** **本** **issue** **仅** **`init`** **`flags`** **语义** **。**\n\n**Linux** **侧** **（** **摘要** **）** **：**\n\n1. **`class = flags & (FAN_CLASS_CONTENT|FAN_CLASS_PRE_CONTENT)`** **`switch(class)`** **：** **仅** **`0`** **（** **即** **`FAN_CLASS_NOTIF`** **）** **、** **`FAN_CLASS_CONTENT`** **、** **`FAN_CLASS_PRE_CONTENT`** **合法** **；** **二者** **类** **位** **同时** **置位** **（** **如** **`0xC`** **）** **走** **`default`** **`→`** **`EINVAL`** **。**\n2. **`(flags & FAN_REPORT_PIDFD) && (flags & FAN_REPORT_TID)`** **`→`** **`EINVAL`** **。**\n3. **`(flags & FAN_REPORT_MNT)`** **时** **：** **`class`****须** **为** **`FAN_CLASS_NOTIF`** **；** **且** **不得** **再** **带** **`FANOTIFY_FID_BITS`** **或** **`FAN_REPORT_FD_ERROR`** **（** **Linux** **`uapi`** **掩码** **）** **。**\n4. **`(flags & FANOTIFY_FID_BITS) != 0 && class != FAN_CLASS_NOTIF`** **`→`** **`EINVAL`** **（** **非** **NOTIF** **类** **不得** **带** **FID** **族** **报告** **位** **）** **。**\n5. **`FAN_REPORT_NAME`** **须** **含** **`FAN_REPORT_DIR_FID`** **；** **`FAN_REPORT_TARGET_FID`** **须** **同时** **含** **`FAN_REPORT_NAME`** **与** **`FAN_REPORT_FID`** **（** **Linux** **在** **`init`** **阶段** **即** **拒绝** **）** **。**\n\n**当前** **Starry** **仅** **允许** **掩码** **内** **任意** **组合** **，** **例如** **`FAN_CLASS_CONTENT|FAN_CLASS_PRE_CONTENT`** **或** **`FAN_REPORT_FID|FAN_CLASS_CONTENT`** **均** **能** **成功** **`add_file_like`** **。**\n\n建议：**在** **`event_f_flags`** **校验** **之后** **、** **`FanotifyFd::new`** **之前** **按** **Linux** **顺序** **插入** **上述** **条件** **（** **可** **对照** **`fanotify_user.c`** **1640–1685** **行** **附近** **）** **，** **统一** **`→`** **`InvalidInput`** **；** **注释** **引用** **issue-409** **及** **issue-328** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["fanotify_init"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/notify.rs"],
+    "related_files": ["kernel/src/file/inotify.rs"],
+    "key_insight": "`validate_fanotify_init_combined`：`FANOTIFY_FID_BITS`=`DFID_NAME_TARGET`；未知 `flags` 位仍最先；随后 Linux 顺序：PIDFD/TID、MNT、`event_f_flags` 掩码、`O_ACCMODE`、FID+class、NAME/DIR_FID、TARGET_FID、`switch(class)` default"
+  },
+  "fix_summary": "新增 `validate_fanotify_init_combined`：对齐 `fanotify_user.c` 的 PIDFD/TID 互斥、`FAN_REPORT_MNT` 须 NOTIF class 且无 `FANOTIFY_FID_BITS`/`FAN_REPORT_FD_ERROR`、`event_f_flags` 掩码与 `O_ACCMODE`（仅 `O_RDONLY`/`O_WRONLY`/`O_RDWR`）、`FANOTIFY_FID_BITS` 仅与 NOTIF class、`FAN_REPORT_NAME` 须 `FAN_REPORT_DIR_FID`、`FAN_REPORT_TARGET_FID` 须 `FAN_REPORT_NAME`+`FAN_REPORT_FID`、非法双 class 位。未知 `flags` 位仍最先拒绝。",
+  "files_changed": ["kernel/src/syscall/fs/notify.rs"],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：构造 `fanotify_init` 非法 `flags` 对照 Linux `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "与 Linux `fanotify_init` 一致的 `EINVAL`（`InvalidInput`）分层；未知位仍先拒绝。",
+    "last_result": "通过：`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`（exit 0）"
+  },
+  "suggested_fix": "在 `sys_fanotify_init` 中于 `FanotifyFd::new` 前实现与 Linux `fanotify_user.c` 对齐的 `flags`/`event_f_flags` 组合校验（至少：`class` 三值、PIDFD&TID 互斥、MNT 与 FID/FD_ERROR、FID 位与 NOTIF class、NAME/DIR_FID、TARGET_FID 依赖）。",
+  "references": ["man 2 fanotify_init", "linux fs/notify/fanotify/fanotify_user.c", "linux include/uapi/linux/fanotify.h", "kernel/src/syscall/fs/notify.rs", "issue-328"]
+}
