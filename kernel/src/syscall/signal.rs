@@ -295,12 +295,21 @@ pub fn sys_kill(pid: i32, signo: u32) -> AxResult<isize> {
 }
 
 pub fn sys_tkill(tid: Pid, signo: u32) -> AxResult<isize> {
+    // Linux `tkill(2)`: `tid` must be a valid thread ID; `0` is EINVAL (not "current thread";
+    // `get_task(0)` maps to `current()` for other syscalls only).
+    if tid == 0 {
+        return Err(AxError::InvalidInput);
+    }
     let sig = make_siginfo(signo, SI_TKILL)?;
     send_signal_to_thread(None, tid, sig)?;
     Ok(0)
 }
 
 pub fn sys_tgkill(tgid: Pid, tid: Pid, signo: u32) -> AxResult<isize> {
+    // Linux `tgkill(2)`: `tid` must be non-zero; `0` is EINVAL (issue-249).
+    if tid == 0 {
+        return Err(AxError::InvalidInput);
+    }
     let sig = make_siginfo(signo, SI_TKILL)?;
     send_signal_to_thread(Some(tgid), tid, sig)?;
     Ok(0)

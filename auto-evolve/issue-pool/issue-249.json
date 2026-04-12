@@ -1,0 +1,27 @@
+{
+  "id": "issue-249",
+  "title": "tkill/tgkill：`tid==0` 被 `get_task(0)` 当作当前线程，与 Linux EINVAL 不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "medium",
+  "fix_summary": "`sys_tkill`/`sys_tgkill`：在 `send_signal_to_thread`/`get_task(tid)` 之前若 `tid==0` 则返回 `InvalidInput`（EINVAL），与 Linux 手册一致；`get_task(0)`→`current()` 仍仅用于其它 syscall，不在此路径误用。",
+  "files_changed": ["kernel/src/syscall/signal.rs"],
+  "description": "**`kernel/src/task/ops.rs`** **`get_task(0)`** 返回 **`current()`**（约 **84–88** 行），便于部分 **`pid==0`→当前进程** 类路径；但 **`kernel/src/syscall/signal.rs`** **`sys_tkill`** / **`sys_tgkill`**（约 **297–306** 行）将 **`tid`** 直接传入 **`send_signal_to_thread`** → **`get_task(tid)`**。\n\n**Linux `tkill(2)`/`tgkill(2)`**：**`tid`** 必须是**有效线程 ID**；**`0`** **不是**合法 TID，应 **`EINVAL`**（见手册 **ERRORS**）。**当前** **`tkill(0, sig)`** 与 **`tgkill(tgid, 0, sig)`** 会命中 **`get_task(0)`**，把信号发给**当前线程**，**不会**失败，与 **Linux** 可观察 **`errno`** 分叉（安全/兼容性：依赖 **EINVAL** 探测非法 TID 的程序会误判成功）。\n\n**建议**：在 **`sys_tkill`/`sys_tgkill` 入口** **`if tid == 0 { return Err(AxError::InvalidInput); }`**（**EINVAL**）；**勿**改变其它仍依赖 **`get_task(0)`** 的 syscall，除非单独审计。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["tkill", "tgkill"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/signal.rs:297-306"],
+    "related_files": ["kernel/src/task/ops.rs:84-88", "kernel/src/task/signal.rs:109-122"],
+    "key_insight": "`get_task(0)`→current 与 tkill TID 语义冲突"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；用户态 `tkill(0,0)`、`tgkill(getpid(),0,0)` 与 Linux 对照。",
+    "expected_output_contains": "",
+    "pass_criteria": "`tid==0` → EINVAL；与 man 2 tkill/tgkill 一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0）"
+  },
+  "suggested_fix": "`sys_tkill`/`sys_tgkill` 在调用 `get_task` 前拒绝 `tid==0`。",
+  "references": ["man 2 tkill", "man 2 tgkill"]
+}
