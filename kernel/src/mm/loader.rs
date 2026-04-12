@@ -10,10 +10,10 @@ use axhal::{
     mem::virt_to_phys,
     paging::{MappingFlags, PageSize},
 };
-use axsync::Mutex;
 use kernel_elf_parser::{AuxEntry, ELFHeaders, ELFHeadersBuilder, ELFParser, app_stack_region};
 use memory_addr::{MemoryAddr, PAGE_SIZE_4K, VirtAddr};
 use ouroboros::self_referencing;
+use spin::RwLock;
 use uluru::LRUCache;
 
 use crate::{
@@ -171,40 +171,61 @@ impl ElfCacheEntry {
 
 struct ElfLoader(LRUCache<ElfCacheEntry, 32>);
 
-type LoadResult = Result<(VirtAddr, Vec<AuxEntry>), Vec<u8>>;
-
 impl ElfLoader {
     const fn new() -> Self {
         Self(LRUCache::new())
     }
 
-    fn load(&mut self, uspace: &mut AddrSpace, path: &str) -> AxResult<LoadResult> {
-        let loc = FS_CONTEXT.lock().resolve(path)?;
+    fn lookup_entry(&self, loc: &Location) -> Option<&ElfCacheEntry> {
+        self.0
+            .iter()
+            .find(|e| e.borrow_cache().location().ptr_eq(loc))
+    }
+}
 
-        if !self.0.touch(|e| e.borrow_cache().location().ptr_eq(&loc)) {
-            match ElfCacheEntry::load(loc)? {
-                Ok(e) => {
-                    self.0.insert(e);
-                }
-                Err(data) => {
-                    return Ok(Err(data));
-                }
-            }
+/// Ensure `loc` is present in the ELF LRU. File read happens **without** holding the ELF lock.
+fn ensure_elf_cached(loc: Location) -> AxResult<Result<(), Vec<u8>>> {
+    {
+        let cache = ELF_LOADER.read();
+        if cache.lookup_entry(&loc).is_some() {
+            return Ok(Ok(()));
         }
+    }
+    match ElfCacheEntry::load(loc.clone())? {
+        Ok(entry) => {
+            let mut cache = ELF_LOADER.write();
+            if cache.lookup_entry(&loc).is_none() {
+                cache.0.insert(entry);
+            }
+            Ok(Ok(()))
+        }
+        Err(data) => Ok(Err(data)),
+    }
+}
 
-        uspace.clear();
-        map_trampoline(uspace)?;
+fn ensure_elf_cached_executable(loc: Location) -> AxResult<()> {
+    match ensure_elf_cached(loc)? {
+        Ok(()) => Ok(()),
+        Err(_) => Err(AxError::InvalidInput),
+    }
+}
 
-        let entry = self.0.front().unwrap();
-        let ldso = if let Some(header) = entry
+fn map_cached_elf_into_uspace(
+    uspace: &mut AddrSpace,
+    loc: &Location,
+) -> AxResult<(VirtAddr, Vec<AuxEntry>)> {
+    let ldso_loc_opt: Option<Location> = {
+        let cache = ELF_LOADER.read();
+        let main_entry = cache.lookup_entry(loc).ok_or(AxError::InvalidData)?;
+        if let Some(header) = main_entry
             .borrow_elf()
             .ph
             .iter()
             .find(|ph| ph.get_type() == Ok(xmas_elf::program::Type::Interp))
         {
-            let cache = entry.borrow_cache();
+            let cache_file = main_entry.borrow_cache();
             let mut data = vec![0; header.file_size as usize];
-            let read = cache.read_at(&mut data[..], header.offset)?;
+            let read = cache_file.read_at(&mut data[..], header.offset)?;
             assert_eq!(data.len(), read);
 
             let ldso = CStr::from_bytes_with_nul(&data)
@@ -212,50 +233,46 @@ impl ElfLoader {
                 .and_then(|cstr| cstr.to_str().ok())
                 .ok_or(AxError::InvalidInput)?;
             debug!("Loading dynamic linker: {ldso}");
-            Some(ldso.to_owned())
+            Some(FS_CONTEXT.lock().resolve(ldso)?)
         } else {
             None
-        };
+        }
+    };
 
-        let (elf, ldso) = if let Some(ldso) = ldso {
-            let loc = FS_CONTEXT.lock().resolve(ldso)?;
-            if !self.0.touch(|e| e.borrow_cache().location().ptr_eq(&loc)) {
-                let e = ElfCacheEntry::load(loc)?.map_err(|_| AxError::InvalidInput)?;
-                self.0.insert(e);
-            }
-
-            let mut iter = self.0.iter();
-            let ldso = iter.next().unwrap();
-            let elf = iter.next().unwrap();
-            (elf, Some(ldso))
-        } else {
-            (entry, None)
-        };
-
-        let elf = map_elf(uspace, crate::config::USER_SPACE_BASE, elf)?;
-        let ldso = ldso
-            .map(|elf| map_elf(uspace, crate::config::USER_INTERP_BASE, elf))
-            .transpose()?;
-
-        let entry = VirtAddr::from_usize(
-            ldso.as_ref()
-                .map_or_else(|| elf.entry(), |ldso| ldso.entry()),
-        );
-        let auxv = elf
-            .aux_vector(PAGE_SIZE_4K, ldso.map(|elf| elf.base()))
-            .collect::<Vec<_>>();
-
-        Ok(Ok((entry, auxv)))
+    if let Some(ref ldso_loc) = ldso_loc_opt {
+        ensure_elf_cached_executable(ldso_loc.clone())?;
     }
+
+    let cache = ELF_LOADER.read();
+    let main_entry = cache.lookup_entry(loc).ok_or(AxError::InvalidData)?;
+    let ldso_entry = ldso_loc_opt.as_ref().and_then(|l| cache.lookup_entry(l));
+
+    uspace.clear();
+    map_trampoline(uspace)?;
+
+    let elf = map_elf(uspace, crate::config::USER_SPACE_BASE, main_entry)?;
+    let ldso = ldso_entry
+        .map(|e| map_elf(uspace, crate::config::USER_INTERP_BASE, e))
+        .transpose()?;
+
+    let entry = VirtAddr::from_usize(
+        ldso.as_ref()
+            .map_or_else(|| elf.entry(), |ldso| ldso.entry()),
+    );
+    let auxv = elf
+        .aux_vector(PAGE_SIZE_4K, ldso.map(|elf| elf.base()))
+        .collect::<Vec<_>>();
+
+    Ok((entry, auxv))
 }
 
-static ELF_LOADER: Mutex<ElfLoader> = Mutex::new(ElfLoader::new());
+static ELF_LOADER: RwLock<ElfLoader> = RwLock::new(ElfLoader::new());
 
 /// Clear the ELF cache.
 ///
 /// Useful for removing noises during memory leak detect.
 pub fn clear_elf_cache() {
-    ELF_LOADER.lock().0.clear();
+    ELF_LOADER.write().0.clear();
 }
 
 /// Load the user app to the user address space.
@@ -287,8 +304,9 @@ pub fn load_user_app(
         return load_user_app(uspace, None, &new_args, envs);
     }
 
-    let (entry, auxv) = match { ELF_LOADER.lock().load(uspace, path)? } {
-        Ok((entry, auxv)) => (entry, auxv),
+    let loc = FS_CONTEXT.lock().resolve(path)?;
+    let (entry, auxv) = match ensure_elf_cached(loc.clone())? {
+        Ok(()) => map_cached_elf_into_uspace(uspace, &loc)?,
         Err(data) => {
             if data.starts_with(b"#!") {
                 let head = &data[2..data.len().min(256)];
