@@ -336,7 +336,7 @@ impl SocketOps for TcpSocket {
         }
 
         let bound_port = self.bound_endpoint()?.port;
-        self.general.recv_poller(self, || {
+        self.general.recv_poller(self, RecvFlags::default(), || {
             poll_interfaces();
             LISTEN_TABLE.accept(bound_port).map(|handle| {
                 let socket = TcpSocket::new_connected(handle);
@@ -381,31 +381,53 @@ impl SocketOps for TcpSocket {
         if self.rx_closed.load(Ordering::Acquire) {
             return Err(AxError::NotConnected);
         }
-        self.general.recv_poller(self, || {
-            poll_interfaces();
-            self.with_smol_socket(|socket| {
-                if !socket.is_active() {
-                    Err(AxError::NotConnected)
-                } else if !socket.may_recv() {
-                    Ok(0)
-                } else if socket.recv_queue() == 0 {
-                    Err(AxError::WouldBlock)
-                } else if options.flags.contains(RecvFlags::PEEK) {
-                    dst.write(
-                        socket
-                            .peek(dst.remaining_mut())
-                            .map_err(|_| ax_err_type!(NotConnected, "not connected?"))?,
-                    )
-                } else {
-                    socket
-                        .recv(|buf| {
-                            let result = dst.write(buf);
-                            let len = result.unwrap_or(0);
-                            (len, result)
-                        })
-                        .map_err(|_| ax_err_type!(NotConnected, "not connected?"))?
+        let peek = options.flags.contains(RecvFlags::PEEK);
+        let waitall = options.flags.contains(RecvFlags::WAITALL);
+
+        self.general.recv_poller(self, options.flags, || {
+            let mut total = 0usize;
+            loop {
+                poll_interfaces();
+                if dst.remaining_mut() == 0 {
+                    break;
                 }
-            })
+
+                let n = self.with_smol_socket(|socket| {
+                    if !socket.is_active() {
+                        return Err(AxError::NotConnected);
+                    }
+                    if !socket.may_recv() {
+                        return Ok(0usize);
+                    }
+                    if socket.recv_queue() == 0 {
+                        return Err(AxError::WouldBlock);
+                    }
+
+                    if peek {
+                        let data = socket
+                            .peek(dst.remaining_mut())
+                            .map_err(|_| ax_err_type!(NotConnected, "not connected?"))?;
+                        dst.write(data)
+                    } else {
+                        socket
+                            .recv(|buf| {
+                                let result = dst.write(buf);
+                                let len = result.unwrap_or(0);
+                                (len, result)
+                            })
+                            .map_err(|_| ax_err_type!(NotConnected, "not connected?"))?
+                    }
+                })?;
+
+                if n == 0 {
+                    break;
+                }
+                total += n;
+                if !waitall || peek {
+                    break;
+                }
+            }
+            Ok(total)
         })
     }
 

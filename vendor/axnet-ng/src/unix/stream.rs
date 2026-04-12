@@ -6,7 +6,7 @@ use core::{
 
 use async_trait::async_trait;
 use axerrno::{AxError, AxResult};
-use axio::{IoBuf, Read, Write};
+use axio::{IoBuf, IoBufMut, Read, Write};
 use axpoll::{IoEvents, PollSet, Pollable};
 use axsync::Mutex;
 use ringbuf::{
@@ -15,7 +15,7 @@ use ringbuf::{
 };
 
 use crate::{
-    RecvOptions, SendFlags, SendOptions, Shutdown,
+    RecvFlags, RecvOptions, SendFlags, SendOptions, Shutdown,
     general::GeneralOptions,
     options::{Configurable, GetSocketOption, SetSocketOption, UnixCredentials},
     unix::{Transport, TransportOps, UnixSocketAddr},
@@ -256,28 +256,46 @@ impl TransportOps for StreamTransport {
         })
     }
 
-    fn recv(&self, mut dst: impl Write, _options: RecvOptions) -> AxResult<usize> {
-        self.general.recv_poller(self, || {
-            let mut guard = self.channel.lock();
-            let Some(chan) = guard.as_mut() else {
-                return Err(AxError::NotConnected);
-            };
+    fn recv(&self, mut dst: impl Write + IoBufMut, options: RecvOptions<'_>) -> AxResult<usize> {
+        if options.flags.contains(RecvFlags::PEEK) || options.flags.contains(RecvFlags::TRUNCATE) {
+            return Err(AxError::OperationNotSupported);
+        }
+        let waitall = options.flags.contains(RecvFlags::WAITALL);
 
-            let count = {
-                let (left, right) = chan.rx.as_slices();
-                let mut count = dst.write(left)?;
-                if count >= left.len() {
-                    count += dst.write(right)?;
+        self.general.recv_poller(self, options.flags, || {
+            let mut total = 0usize;
+            loop {
+                let mut guard = self.channel.lock();
+                let Some(chan) = guard.as_mut() else {
+                    return Err(AxError::NotConnected);
+                };
+
+                let count = {
+                    let (left, right) = chan.rx.as_slices();
+                    let mut count = dst.write(left)?;
+                    if count >= left.len() {
+                        count += dst.write(right)?;
+                    }
+                    unsafe { chan.rx.advance_read_index(count) };
+                    count
+                };
+                if count > 0 {
+                    chan.poll_update.wake();
                 }
-                unsafe { chan.rx.advance_read_index(count) };
-                count
-            };
-            if count > 0 {
-                chan.poll_update.wake();
-                Ok(count)
-            } else {
-                Err(AxError::WouldBlock)
+                drop(guard);
+
+                if count == 0 {
+                    if total == 0 {
+                        return Err(AxError::WouldBlock);
+                    }
+                    break;
+                }
+                total += count;
+                if !waitall || dst.remaining_mut() == 0 {
+                    break;
+                }
             }
+            Ok(total)
         })
     }
 

@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use axerrno::{AxError, AxResult};
 use axfs_ng::{FS_CONTEXT, OpenOptions};
 use axfs_ng_vfs::NodeType;
-use axio::{IoBuf, Read, Write};
+use axio::{IoBuf, IoBufMut, Read, Write};
 use axpoll::{IoEvents, Pollable};
 use axsync::Mutex;
 use axtask::future::{block_on, interruptible};
@@ -49,7 +49,7 @@ pub trait TransportOps: Configurable + Pollable + Send + Sync {
     /// Send data through the transport.
     fn send(&self, src: impl Read + IoBuf, options: SendOptions) -> AxResult<usize>;
     /// Receive data from the transport.
-    fn recv(&self, dst: impl Write, options: RecvOptions<'_>) -> AxResult<usize>;
+    fn recv(&self, dst: impl Write + IoBufMut, options: RecvOptions<'_>) -> AxResult<usize>;
 
     /// Shutdown the transport.
     fn shutdown(&self, _how: Shutdown) -> AxResult {
@@ -217,7 +217,7 @@ impl SocketOps for UnixSocket {
         self.transport.send(src, options)
     }
 
-    fn recv(&self, dst: impl Write, options: RecvOptions<'_>) -> AxResult<usize> {
+    fn recv(&self, dst: impl Write + IoBufMut, options: RecvOptions<'_>) -> AxResult<usize> {
         self.transport.recv(dst, options)
     }
 

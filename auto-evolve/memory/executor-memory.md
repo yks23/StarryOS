@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-103 resolved（**`recvfrom`/`recvmsg`**：**`RecvFlags`对齐 Linux `MSG_*`**、**`recv_poller` `MSG_DONTWAIT`**；**`MSG_WAITALL`** 在 **TCP/vsock/Unix stream**；**`MSG_OOB`/`ERRQUEUE`/…** **`Unsupported`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-104 resolved（**`pwritev`/`pwritev2`**：**`write_at` + `IoVectorBuf::into_io()`**；**`preadv2`/`pwritev2`**：**`offset < 0` → `InvalidInput`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-102 resolved（**`sendto`/`sendmsg`**：**`SendFlags::from_bits_truncate`**；**vendor `axnet-ng`**：**`SendFlags`** 对齐 Linux **`MSG_*`**，**`send_poller`** 合并 **`MSG_DONTWAIT`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-16：issue-101 resolved（**`exit`/`exit_group`**：**`(exit_code & 0xff) << 8`** 再 **`do_exit`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）

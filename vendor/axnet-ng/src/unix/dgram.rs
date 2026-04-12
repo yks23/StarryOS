@@ -4,7 +4,7 @@ use core::task::Context;
 use async_channel::TryRecvError;
 use async_trait::async_trait;
 use axerrno::{AxError, AxResult};
-use axio::{Read, Write};
+use axio::{IoBufMut, Read, Write};
 use axpoll::{IoEvents, PollSet, Pollable};
 use axsync::Mutex;
 use spin::RwLock;
@@ -220,8 +220,11 @@ impl TransportOps for DgramTransport {
         Ok(len)
     }
 
-    fn recv(&self, mut dst: impl Write, mut options: RecvOptions) -> AxResult<usize> {
-        self.general.recv_poller(self, move || {
+    fn recv(&self, mut dst: impl Write + IoBufMut, mut options: RecvOptions<'_>) -> AxResult<usize> {
+        if options.flags.contains(RecvFlags::PEEK) {
+            return Err(AxError::OperationNotSupported);
+        }
+        self.general.recv_poller(self, options.flags, move || {
             let mut guard = self.data_rx.lock();
             let Some((rx, _)) = guard.as_mut() else {
                 return Err(AxError::NotConnected);

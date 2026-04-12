@@ -11,7 +11,7 @@ use axtask::future::{block_on, poll_io, timeout};
 use crate::{
     get_service,
     options::{Configurable, GetSocketOption, SetSocketOption},
-    SendFlags,
+    RecvFlags, SendFlags,
 };
 
 /// General options for all sockets.
@@ -90,11 +90,13 @@ impl GeneralOptions {
     pub fn recv_poller<P: Pollable, F: FnMut() -> AxResult<T>, T>(
         &self,
         pollable: &P,
+        msg_flags: RecvFlags,
         f: F,
     ) -> AxResult<T> {
+        let nonblock = self.nonblocking() || msg_flags.contains(RecvFlags::DONTWAIT);
         block_on(timeout(
             self.recv_timeout(),
-            poll_io(pollable, IoEvents::IN, self.nonblocking(), f),
+            poll_io(pollable, IoEvents::IN, nonblock, f),
         ))?
     }
 }

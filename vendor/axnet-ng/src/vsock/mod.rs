@@ -31,7 +31,7 @@ pub trait VsockTransportOps: Configurable + Pollable + Send + Sync {
     /// Send data through the transport.
     fn send(&self, src: impl Read + IoBuf, options: SendOptions) -> AxResult<usize>;
     /// Receive data from the transport.
-    fn recv(&self, dst: impl Write, options: RecvOptions<'_>) -> AxResult<usize>;
+    fn recv(&self, dst: impl Write + IoBufMut, options: RecvOptions<'_>) -> AxResult<usize>;
     /// Shutdown the transport.
     fn shutdown(&self, _how: Shutdown) -> AxResult;
     /// Get the local address, if bound.

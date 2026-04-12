@@ -2,7 +2,7 @@ use alloc::sync::Arc;
 use core::task::Context;
 
 use axerrno::{AxError, AxResult, ax_bail, ax_err_type};
-use axio::prelude::*;
+use axio::{IoBufMut, prelude::*};
 use axpoll::{IoEvents, Pollable};
 use axsync::Mutex;
 
@@ -107,7 +107,7 @@ impl VsockTransportOps for VsockStreamTransport {
         let local_port = conn.lock().local_addr().port;
 
         // wait for connection
-        self.general.recv_poller(self, || {
+        self.general.recv_poller(self, RecvFlags::default(), || {
             let mut manager = VSOCK_CONN_MANAGER.lock();
 
             if !manager.can_accept(local_port) {
@@ -229,48 +229,69 @@ impl VsockTransportOps for VsockStreamTransport {
         result
     }
 
-    fn recv(&self, mut dst: impl Write, options: RecvOptions) -> AxResult<usize> {
+    fn recv(&self, mut dst: impl Write + IoBufMut, options: RecvOptions<'_>) -> AxResult<usize> {
         let conn = self.get_connection()?;
 
-        self.general.recv_poller(self, || {
-            let mut conn_guard = conn.lock();
+        let peek = options.flags.contains(RecvFlags::PEEK);
+        let waitall = options.flags.contains(RecvFlags::WAITALL);
 
-            if conn_guard.rx_closed() && conn_guard.rx_buffer_used() == 0 {
-                return Ok(0); // EOF
-            }
+        self.general.recv_poller(self, options.flags, || {
+            let mut total = 0usize;
+            loop {
+                let mut conn_guard = conn.lock();
 
-            // should allow read when connection is closed, to read remaining data
-            if !matches!(
-                conn_guard.state(),
-                ConnectionState::Connected | ConnectionState::Closed
-            ) {
-                return Err(AxError::NotConnected);
-            }
+                if conn_guard.rx_closed() && conn_guard.rx_buffer_used() == 0 {
+                    return Ok(total);
+                }
 
-            if conn_guard.rx_buffer_used() == 0 {
-                return Err(AxError::WouldBlock);
-            }
+                if !matches!(
+                    conn_guard.state(),
+                    ConnectionState::Connected | ConnectionState::Closed
+                ) {
+                    return Err(AxError::NotConnected);
+                }
 
-            let (left, right) = conn_guard.rx_slices();
-            let mut count = dst.write(left)?;
+                if conn_guard.rx_buffer_used() == 0 {
+                    drop(conn_guard);
+                    if total == 0 {
+                        return Err(AxError::WouldBlock);
+                    }
+                    if waitall && !peek && dst.remaining_mut() > 0 {
+                        return Err(AxError::WouldBlock);
+                    }
+                    return Ok(total);
+                }
 
-            if count >= left.len() && !right.is_empty() {
-                count += dst.write(right)?;
-            }
-            if !options.flags.contains(RecvFlags::PEEK) {
-                conn_guard.advance_rx_read(count);
-            }
+                let (left, right) = conn_guard.rx_slices();
+                let mut count = dst.write(left)?;
 
-            if count > 0 {
-                trace!(
-                    "Recv {} bytes from connection (buffer_remaining={}/{})",
-                    count,
-                    conn_guard.rx_buffer_used(),
-                    VSOCK_RX_BUFFER_SIZE
-                );
-                Ok(count)
-            } else {
-                Err(AxError::WouldBlock)
+                if count >= left.len() && !right.is_empty() {
+                    count += dst.write(right)?;
+                }
+                if !peek {
+                    conn_guard.advance_rx_read(count);
+                }
+
+                if count > 0 {
+                    trace!(
+                        "Recv {} bytes from connection (buffer_remaining={}/{})",
+                        count,
+                        conn_guard.rx_buffer_used(),
+                        VSOCK_RX_BUFFER_SIZE
+                    );
+                }
+                drop(conn_guard);
+
+                if count == 0 {
+                    if total == 0 {
+                        return Err(AxError::WouldBlock);
+                    }
+                    return Ok(total);
+                }
+                total += count;
+                if !waitall || peek || dst.remaining_mut() == 0 {
+                    return Ok(total);
+                }
             }
         })
     }

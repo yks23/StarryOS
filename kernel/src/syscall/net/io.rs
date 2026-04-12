@@ -22,6 +22,10 @@ const RECVMSG_FLAGS_MASK: u32 = MSG_OOB
     | MSG_ERRQUEUE
     | MSG_CMSG_CLOEXEC;
 
+/// `recvmsg` 掩码内、Starry 尚未实现的 `MSG_*`（显式 **`Unsupported`**，勿静默忽略）。
+const RECVMSG_FLAGS_UNSUPPORTED: u32 =
+    MSG_OOB | MSG_DONTROUTE | MSG_ERRQUEUE | MSG_CMSG_CLOEXEC;
+
 /// Linux `sendmsg(2)` / `sendto(2)` flags：与 `recv` 掩码不同（不含 **`MSG_PEEK`** 等仅接收语义位）。
 const SENDMSG_FLAGS_MASK: u32 = MSG_OOB
     | MSG_DONTROUTE
@@ -133,17 +137,14 @@ fn recv_impl(
     if flags & !RECVMSG_FLAGS_MASK != 0 {
         return Err(AxError::InvalidInput);
     }
+    if flags & RECVMSG_FLAGS_UNSUPPORTED != 0 {
+        return Err(AxError::OperationNotSupported);
+    }
 
     debug!("sys_recv <= fd: {fd}, flags: {flags}");
 
     let socket = Socket::from_fd(fd)?;
-    let mut recv_flags = RecvFlags::empty();
-    if flags & MSG_PEEK != 0 {
-        recv_flags |= RecvFlags::PEEK;
-    }
-    if flags & MSG_TRUNC != 0 {
-        recv_flags |= RecvFlags::TRUNCATE;
-    }
+    let recv_flags = RecvFlags::from_bits_truncate(flags);
 
     let mut cmsg = Vec::new();
 

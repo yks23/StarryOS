@@ -5,7 +5,7 @@ use core::{
 };
 
 use axerrno::{AxError, AxResult, ax_bail, ax_err_type};
-use axio::prelude::*;
+use axio::{IoBufMut, prelude::*};
 use axpoll::{IoEvents, Pollable};
 use axsync::Mutex;
 use smoltcp::{
@@ -220,7 +220,7 @@ impl SocketOps for UdpSocket {
         })
     }
 
-    fn recv(&self, mut dst: impl Write, options: RecvOptions) -> AxResult<usize> {
+    fn recv(&self, mut dst: impl Write + IoBufMut, options: RecvOptions) -> AxResult<usize> {
         if self.local_addr.read().is_none() {
             ax_bail!(NotConnected);
         }
@@ -234,7 +234,7 @@ impl SocketOps for UdpSocket {
             None => ExpectedRemote::Expecting(self.remote_endpoint()?.0),
         };
 
-        self.general.recv_poller(self, || {
+        self.general.recv_poller(self, options.flags, || {
             poll_interfaces();
             self.with_smol_socket(|socket| {
                 if !socket.is_open() {

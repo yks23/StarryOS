@@ -97,15 +97,20 @@ bitflags! {
 bitflags! {
     /// Flags for receiving data from a socket.
     ///
+    /// Bit values match Linux `MSG_*` (see `include/uapi/linux/socket.h`) so the
+    /// kernel can forward `recv`/`recvmsg` flags with `RecvFlags::from_bits_truncate`.
+    ///
     /// See [`SocketOps::recv`].
     #[derive(Default, Debug, Clone, Copy)]
     pub struct RecvFlags: u32 {
-        /// Receive data without removing it from the queue.
-        const PEEK = 0x01;
-        /// For datagram-like sockets, requires [`SocketOps::recv`] to return
-        /// the real size of the datagram, even when it is larger than the
-        /// buffer.
-        const TRUNCATE = 0x02;
+        const OOB = 1;
+        const PEEK = 2;
+        const DONTROUTE = 4;
+        const TRUNCATE = 32;
+        const DONTWAIT = 64;
+        const WAITALL = 256;
+        const ERRQUEUE = 8192;
+        const CMSG_CLOEXEC = 0x4000_0000;
     }
 }
 
