@@ -15,7 +15,7 @@ use spin::RwLock;
 
 mod backend;
 
-pub use self::backend::*;
+pub use self::backend::{BackendOps, *};
 
 /// The virtual memory address space.
 pub struct AddrSpace {
@@ -184,6 +184,36 @@ impl AddrSpace {
         self.validate_region(start, size)?;
 
         self.areas.unmap(start, size, &mut self.pt)?;
+        Ok(())
+    }
+
+    /// Linux `MADV_DONTNEED` for anonymous / private COW mappings: drop populated
+    /// PTEs and free anonymous frames so the next access repopulates zeroed pages.
+    ///
+    /// Other backends (`Shared`, `Linear`, `File`) are skipped (Linux allows
+    /// varying behavior).
+    pub fn madvise_dontneed(&mut self, start: VirtAddr, size: usize) -> AxResult {
+        self.validate_region(start, size)?;
+        let end = start + size;
+        let mut pos = start;
+        while pos < end {
+            let Some(area) = self.areas.find(pos) else {
+                ax_bail!(NoMemory);
+            };
+            let seg_end = area.end().min(end);
+            if seg_end <= pos {
+                ax_bail!(NoMemory);
+            }
+            if matches!(area.backend(), Backend::Cow(_)) {
+                let sub_size = seg_end - pos;
+                BackendOps::unmap(
+                    area.backend(),
+                    VirtAddrRange::from_start_size(pos, sub_size),
+                    &mut self.pt.cursor(),
+                )?;
+            }
+            pos = seg_end;
+        }
         Ok(())
     }
 

@@ -319,12 +319,44 @@ pub fn sys_mremap(addr: usize, old_size: usize, new_size: usize, flags: u32) -> 
 
 pub fn sys_madvise(addr: usize, length: usize, advice: i32) -> AxResult<isize> {
     debug!("sys_madvise <= addr: {addr:#x}, length: {length:x}, advice: {advice:#x}");
+    let length = align_up_4k(length);
+    let start = VirtAddr::from(addr);
+
+    match advice as u32 {
+        MADV_DONTNEED | MADV_FREE => {
+            let curr = current();
+            let mut aspace = curr.as_thread().proc_data.aspace.write();
+            aspace.madvise_dontneed(start, length)?;
+        }
+        _ => {}
+    }
     Ok(0)
 }
 
 pub fn sys_msync(addr: usize, length: usize, flags: u32) -> AxResult<isize> {
     debug!("sys_msync <= addr: {addr:#x}, length: {length:x}, flags: {flags:#x}");
 
+    if length == 0 {
+        return Err(AxError::InvalidInput);
+    }
+    let has_async = flags & MS_ASYNC != 0;
+    let has_sync = flags & MS_SYNC != 0;
+    if has_async == has_sync {
+        return Err(AxError::InvalidInput);
+    }
+    if flags & !(MS_ASYNC | MS_SYNC | MS_INVALIDATE) != 0 {
+        return Err(AxError::InvalidInput);
+    }
+
+    let length = align_up_4k(length);
+    let start = VirtAddr::from(addr);
+    let curr = current();
+    let aspace = curr.as_thread().proc_data.aspace.read();
+    if !aspace.contains_range(start, length)
+        || !aspace.can_access_range(start, length, MappingFlags::READ)
+    {
+        return Err(AxError::NoMemory);
+    }
     Ok(0)
 }
 
@@ -332,6 +364,22 @@ pub fn sys_mlock(addr: usize, length: usize) -> AxResult<isize> {
     sys_mlock2(addr, length, 0)
 }
 
-pub fn sys_mlock2(_addr: usize, _length: usize, _flags: u32) -> AxResult<isize> {
+pub fn sys_mlock2(addr: usize, length: usize, flags: u32) -> AxResult<isize> {
+    const MLOCK_ONFAULT: u32 = 1;
+    if flags & !MLOCK_ONFAULT != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    if length == 0 {
+        return Err(AxError::InvalidInput);
+    }
+    let length = align_up_4k(length);
+    let start = VirtAddr::from(addr);
+    let curr = current();
+    let aspace = curr.as_thread().proc_data.aspace.read();
+    if !aspace.contains_range(start, length)
+        || !aspace.can_access_range(start, length, MappingFlags::READ)
+    {
+        return Err(AxError::NoMemory);
+    }
     Ok(0)
 }

@@ -2,12 +2,13 @@
 
 ## 最近更新
 - 日期：2026-04-13
-- 本轮尝试修复：issue-018（sched_getscheduler RR桩 / duplicate issue-002）
-- 结果：resolved（主线已实现 `Thread` policy/priority + syscall；本次仅闭合 issue 池条目与文档；`cargo clippy --target riscv64gc-unknown-none-elf -F qemu` 通过）
+- 本轮尝试修复：issue-019（madvise DONTNEED / msync / mlock 校验）
+- 结果：resolved（`CowBackend` 上 `MADV_DONTNEED`/`MADV_FREE` unmap+再填零页；`msync`/`mlock*` 参数与映射校验；`cargo clippy --target riscv64gc-unknown-none-elf -F qemu` 通过）
 
 ## 修复历史
 | Issue ID | 标题 | 结果 | 日期 |
 |----------|------|------|------|
+| issue-019 | madvise/msync/mlock 桩 | resolved | 2026-04-13 |
 | issue-018 | sched_getscheduler RR 桩（同 issue-002） | resolved | 2026-04-13 |
 | issue-008 | shared futex 全局 FutexTables Mutex | resolved | 2026-04-13 |
 | issue-007 | ELF 加载器 Mutex 串行 execve | resolved | 2026-04-13 |
@@ -58,8 +59,10 @@
 - **`getpriority` / `setpriority`**：每进程 **`ProcessData::nice`**（**-20..=19**，默认 **0**）；`fork` 经 **`copy_credentials_from`** 继承。**`setpriority`** 为新 syscall 分发。**`PRIO_PGRP`/`PRIO_USER`** 在 **`processes()`** 上取匹配进程的 **最小 nice**（最高调度优先级）。未建模 **`CAP_SYS_NICE`** 与特权 **`nice`** 下限等 **`EPERM`**。
 - **ELF `execve` 缓存**：全局 **`ELF_LOADER`** 为 **`spin::RwLock<ElfLoader>`**（LRU 32）。**`ensure_elf_cached`**：先读锁命中则返回；未命中则在**无 ELF 锁**下 **`ElfCacheEntry::load`**，再写锁 **去重插入**。**`map_cached_elf_into_uspace`** 持**读锁**做 **`lookup_entry`**、**`uspace.clear`**、**`map_elf`**（多进程可并发读同一缓存项）。写锁仅覆盖 LRU 变更；高并发 + 满缓存时仍存在 **LRU 驱逐** 与「装入后、映射前被挤掉」的极小理论窗口（可后续改为 `Arc` 条目或分片）。
 - **跨进程 shared futex**：**`futex_table_for(Shared)`** 使用 **`SHARED_FUTEX_TABLES[shard]`**（**16** 个 **`Mutex<FutexTables>`**），**`shard = (ptr ^ ptr>>12 ^ ptr>>24) % 16`**，`ptr` 为 **`Weak::as_ptr(region)`**。每片内仍为 **`BTreeMap` + 约每 100 次 `retain` GC**；不同共享 region 多数走不同分片。私有 futex 仍 **`ProcessData::futex_table`**。
+- **`madvise` / `msync` / `mlock`**：**`MADV_DONTNEED`/`MADV_FREE`** 对 **`CowBackend`** 调用 **`BackendOps::unmap`** 后由缺页 **`populate`** 再分配零页；**`Shared`/`File`/`Linear`** 不丢页（跳过）。**`msync`** 校验 **`MS_ASYNC`与 `MS_SYNC` 二选一**、允许标志位及区间已映射可读（无真实磁盘回写）。**`mlock`/`mlock2`** 仅校验 **`MLOCK_ONFAULT`**、**`len>0`**、映射可读；未接 **`RLIMIT_MEMLOCK`** 与物理钉页。
 
 ## 给 Debugger 的消息
+- issue-019：请跑 **`/bin/test_mm_noop`**（**`MADV_DONTNEED`** 后读零）。
 - issue-018 / issue-002：可在 rootfs 跑 **`/bin/test_sched_stubs`** 或 **`/bin/test_sched_policy_stubs`**。
 - issue-008：请在 rootfs 跑 `/bin/test_futex_shared_stress`（pthread/musl futex）。
 - issue-007：请在 rootfs 放 `/bin/true`，跑 `/bin/test_elf_parallel_exec`（双进程并行 `execve`）。
