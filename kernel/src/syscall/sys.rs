@@ -93,11 +93,13 @@ pub fn sys_getgroups(size: isize, list: *mut u32) -> AxResult<isize> {
     if sz == 0 {
         return Ok(ngroups as isize);
     }
-    if sz < ngroups {
-        return Err(AxError::InvalidInput);
-    }
+    // Linux getgroups: with gidsetsize > 0, NULL grouplist → EFAULT before EINVAL for too-small
+    // buffer (issue-329; same theme as issue-304/issue-306).
     if list.is_null() {
         return Err(AxError::BadAddress);
+    }
+    if sz < ngroups {
+        return Err(AxError::InvalidInput);
     }
     if ngroups > 0 {
         vm_write_slice(list as *mut u8, cast_slice(groups.as_slice()))?;

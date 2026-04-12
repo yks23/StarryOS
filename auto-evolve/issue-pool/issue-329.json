@@ -1,0 +1,27 @@
+{
+  "id": "issue-329",
+  "title": "`getgroups(2)`：`sys_getgroups` 在 `list.is_null()` → `EFAULT` 之前执行 `sz < ngroups` → `EINVAL`，与 Linux 在 `gidsetsize > 0` 时先对用户 `grouplist` 做访问/`copy_to_user` 语义（`EFAULT`）再判缓冲区不足（`EINVAL`）的常见路径相比，「过小的 `size`」与「NULL `list`」同时成立时 `EINVAL`/`EFAULT` 优先级可能不完全一致",
+  "status": "resolved",
+  "created_at": "2026-04-13T20:05:00Z",
+  "severity": "low",
+  "fix_summary": "在 `sz>0` 时将 `list.is_null()` → `BadAddress` 提前到 `sz < ngroups` 之前，使 EFAULT 先于缓冲区不足的 EINVAL；注释 issue-329 及 issue-304/issue-306 同类。更新 `executor-memory` 补充组/getgroups 条、表格与最近更新；新增 `issue-329.json`。",
+  "files_changed": ["kernel/src/syscall/sys.rs", "auto-evolve/memory/executor-memory.md", "auto-evolve/issue-pool/issue-329.json"],
+  "description": "**`kernel/src/syscall/sys.rs`** **`sys_getgroups`** **（** **约** **84–105** **行** **）** **顺序** **：** **`size < 0`** **→** **`sz == 0`** **返回** **计数** **→** **`sz < ngroups`** **→** **`InvalidInput`** **→** **`list.is_null()`** **→** **`BadAddress`** **。** **当** **`ngroups > 0`** **、** **`0 < sz < ngroups`** **且** **`list == NULL`** **时** **，** **本** **实现** **固定** **先** **`EINVAL`** **（** **缓冲区** **不足** **）** **；** **Linux** **常** **在** **`gidsetsize > 0`** **时** **先** **因** **无效** **用户** **指针** **得到** **`EFAULT`** **。**\n\n**建议** **：** **对照** **Linux** **`kernel/groups.c`** **`SYSCALL_DEFINE2(getgroups, ...)`** **，** **将** **`list`** **可** **写** **性** **/** **`NULL`** **拒绝** **（** **`EFAULT`** **）** **提前** **到** **`sz < ngroups`** **判断** **之前** **（** **在** **`sz > 0`** **前提** **下** **）** **，** **或** **注释** **说明** **与** **上游** **差异** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["getgroups"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/sys.rs:84-105"],
+    "related_files": [],
+    "key_insight": "getgroups EINVAL buffer too small vs EFAULT null list order"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：`ngroups>0` 且 `size` 过小且 `list==NULL` 对照 Linux 返回顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游 `getgroups` 错误优先级一致，或注释说明差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `sz > 0` 时先拒绝 `list.is_null()` → `EFAULT`，再比较 `sz` 与 `ngroups`；与 Linux 对齐。",
+  "references": ["man 2 getgroups", "kernel/src/syscall/sys.rs"]
+}

@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-05-08：issue-329 resolved（**`getgroups`**：**`size>0`** **时** **`list.is_null()`** **先于** **`sz < ngroups`**，**`EFAULT`** **先于** **缓冲区** **不足** **`EINVAL`**；**`sys.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-05-07：issue-328 resolved（**`fanotify_init`**：**`FanotifyFd`** **保存** **`event_f_flags`** **`+ event_f_flags()`**；**`inotify.rs`**/**`notify.rs`**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-05-06：issue-327 resolved（**`prlimit64`**：**`get_process_data`/`may_peer_process_by_cred`** **先于** **`resource >= RLIM_NLIMITS`**，**`ESRCH`/`EPERM`** **先于** **越界** **`resource`** **的** **`EINVAL`**；**`resources.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-05-05：issue-326 resolved（**`sendfile`**：**`get_file_like(in/out)`** **先于** **`in_fd == out_fd`**，**`EBADF`** **先于** **同** **fd** **`EINVAL`**；**`fs/io.rs`** **注释**；**`executor-memory`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -352,6 +353,7 @@
 | issue-271 | mlock/mlock2 addr 须页对齐 EINVAL | resolved | 2026-04-12 |
 | issue-272 | lseek SEEK_SET 负 offset EINVAL | resolved | 2026-04-12 |
 | issue-273 | prlimit64 跨 pid 权限 EPERM | resolved | 2026-04-12 |
+| issue-329 | getgroups NULL list 先于 size<ngroups EINVAL | resolved | 2026-05-08 |
 | issue-328 | fanotify FanotifyFd 存 event_f_flags | resolved | 2026-05-07 |
 | issue-327 | prlimit64 pid/凭证 先于 resource 边界 | resolved | 2026-05-06 |
 | issue-326 | sendfile get_file_like 先于 in_fd==out_fd | resolved | 2026-05-05 |
@@ -629,7 +631,7 @@
 - **`arch_prctl(2)`（x86）`ARCH_GET_FS`/`ARCH_GET_GS`**：**`addr==0`**（用户 **NULL**）→ **`BadAddress`（EFAULT）**，在 **`vm_write`** **之前**（**issue-309**；与 **`capget`/`clone3`** **issue-304**/**issue-308** **同类**）；**`ARCH_SET_FS`/`ARCH_SET_GS`** **的** **`addr`** **为** **段** **基址** **非** **输出** **缓冲**（**`thread.rs`** **`sys_arch_prctl`**）。
 - 地址空间并发：`ProcessData.aspace` 为 `Arc<RwLock<AddrSpace>>`；修改页表（缺页 populate、mmap 等）用 `write()`；纯查询（如 mincore、`mremap` 查 VMA、futex 地址解析、部分 `can_access_range`）用 `read()`。缺页仍会写锁直至支持按页或 per-VMA 锁。
 - 进程凭证：`ProcessData` 中 **`ruid/euid/suid`** 与 **`rgid/egid/sgid`**（`AtomicU32`）；`getuid`→`ruid`，`geteuid`→`euid`，gid 同理；**`get_resuid`/`get_resgid`** 供 **`getresuid(2)`/`getresgid(2)`** 一次读三组；`setuid`/`setgid` 为三 ID 同步设置；`setresuid`/`setresgid` 中 **`CRED_NO_CHANGE`=`u32::MAX`** 表示不改；**`euid==0`（或 `egid==0`）** 视为特权可任意改，否则新值须属于当前 `{r,e,s}` 之一否则 **`PermissionDenied`**。`clone` 新建进程在 `ProcessData::new` 后 **`copy_credentials_from`** 父 `ProcessData`。完整 Linux 能力集与 setfsuid 等仍未建模。
-- 补充组：**`supplementary_gids`**（`Mutex<Vec<u32>>`，上限 **`SUPP_GROUPS_MAX`**）；`getgroups` 仅列补充组不含主 `rgid`；`setgroups` 需 **`euid==0`**；`getgroups(0,…)` 返回个数。**`seccomp(2)`** 未实现时 **`Unsupported`（ENOSYS）**。**`prctl(PR_SET_SECCOMP)`**：**`arg2`>2**（非 **`SECCOMP_MODE_*`**）→ **`EINVAL`**；mode **0/1/2** 未实现 → **`Unsupported`**。**`prctl(PR_MCE_KILL)`**：**`arg2`** 须 **`CLEAR`/`SET`**；**`SET`** 时 **`arg3`**≤**`DEFAULT`**，否则 **`EINVAL`**；合法组合未实现 → **`Unsupported`**。
+- 补充组：**`supplementary_gids`**（`Mutex<Vec<u32>>`，上限 **`SUPP_GROUPS_MAX`**）；**`getgroups`**：**`size>0`** **时** **`list==NULL` → `BadAddress`** **先于** **`size < ngroups`** **`InvalidInput`**（**issue-329**；**`size==0`** **仅** **返回** **计数** **不** **读** **`list`**）；仅列补充组不含主 `rgid`；`setgroups` 需 **`euid==0`**。**`seccomp(2)`** 未实现时 **`Unsupported`（ENOSYS）**。**`prctl(PR_SET_SECCOMP)`**：**`arg2`>2**（非 **`SECCOMP_MODE_*`**）→ **`EINVAL`**；mode **0/1/2** 未实现 → **`Unsupported`**。**`prctl(PR_MCE_KILL)`**：**`arg2`** 须 **`CLEAR`/`SET`**；**`SET`** 时 **`arg3`**≤**`DEFAULT`**，否则 **`EINVAL`**；合法组合未实现 → **`Unsupported`**。
 - **`execve` 多线程**：在替换映像前若 **`proc.threads().len() > 1`**，对其余 tid **`SIGKILL`** 并 **`yield_now`** 直至仅剩当前线程（对齐 Linux 先杀线程组再 exec）；长时间未收敛则 **`WouldBlock`**。非 vfork/线程本地存储析构等细语义仍弱于 Linux。
 - **`execve(2)`**：**`argv==NULL` → `BadAddress`** **先于** **`vm_load_string(path)`**，**`EFAULT`** **（NULL argv）** **先于** **不可读** **`pathname`** **的** **`BadAddress`**（**issue-325**；与 **issue-323**/**issue-321** **同类**）；**`envp==NULL`** 继承 **`ProcessData::environment`**（**`fork`** 子进程复制父 **`environment`**；**`init`**/**成功 exec** 后更新 **`cmdline`** 与 **`environment`**，issue-243）。
 - **`accept` / `accept4`**：向用户写入的 sockaddr 必须是 **`peer_addr()`**（远端），勿用 **`local_addr()`**（本端监听地址）；与 **`getpeername(accepted_fd)`** 一致。**`accept4`**：**`Socket::from_fd(fd)`** **先于** **`flags`** **掩码** **校验**（**仅** **`O_CLOEXEC | O_NONBLOCK`**，未知位 **`EINVAL`**），**`EBADF`** **先于** **`EINVAL`**（**issue-322**；与 **issue-317**/**issue-315**/**issue-320** **同类**）。**`addr` 非空**时须先 **`write_to_user`**/**`addrlen`**（**`get_as_mut`**）再 **`add_to_fd_table`**，避免 **`copy_to_user`** 失败时已装新 **fd** 却未返回 **fd** 号（issue-149，与 issue-148 **`pipe2`** 同类）。**`addr==NULL`** 无地址写回，仍直接装表。
