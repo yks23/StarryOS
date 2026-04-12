@@ -409,6 +409,11 @@ pub fn sys_mremap(
 
 /// `linux/uapi` `MADV_*` values Linux accepts as valid `advice` to `madvise(2)`; other integers
 /// (e.g. `0xdeadbeef`) return `EINVAL`.
+///
+/// Values listed here but not given real reclaim/unmap/poison support in [`sys_madvise`] are treated
+/// as successful no-ops where Linux typically allows the syscall to succeed (hints, KSM, hugepage,
+/// cold/pageout, …). A few destructive/kernel-specific operations stay `ENOTSUP` until modeled
+/// (issue-360).
 const KNOWN_MADV_ADVICE: &[u32] = &[
     MADV_COLD,
     MADV_COLLAPSE,
@@ -454,7 +459,7 @@ pub fn sys_madvise(addr: usize, length: usize, advice: i32) -> AxResult<isize> {
     }
 
     match a {
-        MADV_DONTNEED | MADV_FREE => {
+        MADV_DONTNEED | MADV_FREE | MADV_DONTNEED_LOCKED => {
             let curr = current();
             let mut aspace = curr.as_thread().proc_data.aspace.write();
             aspace.madvise_dontneed(start, length)?;
@@ -471,7 +476,15 @@ pub fn sys_madvise(addr: usize, length: usize, advice: i32) -> AxResult<isize> {
         }
         // Pure locality hints; no Starry pager policy yet.
         MADV_NORMAL | MADV_RANDOM | MADV_SEQUENTIAL => {}
-        _ => return Err(AxError::OperationNotSupported),
+        // Unmap volatile ranges / hardware page state: not modeled; keep `ENOTSUP` (issue-360).
+        MADV_REMOVE | MADV_HWPOISON | MADV_SOFT_OFFLINE => {
+            return Err(AxError::OperationNotSupported);
+        }
+        // Other `KNOWN_MADV_ADVICE` entries (KSM, hugepage hints, `MADV_COLD`/`PAGEOUT`, fork/dump
+        // flags, guards when ignored, …): Linux usually returns success as no-op or best-effort;
+        // Starry has no MM policy for them yet — treat as `Ok(0)` for probe/glibc compatibility
+        // (issue-360).
+        _ => {}
     }
     Ok(0)
 }
