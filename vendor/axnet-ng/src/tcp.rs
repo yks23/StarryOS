@@ -37,13 +37,11 @@ pub(crate) fn new_tcp_socket() -> smol::Socket<'static> {
     )
 }
 
-/// Linux `listen(2)`: negative `backlog` → `EINVAL`; cap at `SOMAXCONN`.
+/// Linux `net/socket.c` `__sys_listen_socket`: compare `(unsigned int)backlog` to `somaxconn`, clamp.
+/// Negative `backlog` becomes a large unsigned value and is capped to `SOMAXCONN`.
 #[inline]
-fn tcp_listen_syn_queue_cap(backlog: i32) -> AxResult<usize> {
-    if backlog < 0 {
-        return Err(AxError::InvalidInput);
-    }
-    Ok((backlog as usize).min(SOMAXCONN))
+fn tcp_listen_syn_queue_cap(backlog: i32) -> usize {
+    (backlog as u32 as usize).min(SOMAXCONN)
 }
 
 /// A TCP socket that provides POSIX-like APIs.
@@ -334,7 +332,7 @@ impl SocketOps for TcpSocket {
     }
 
     fn listen(&self, backlog: i32) -> AxResult {
-        let syn_cap = tcp_listen_syn_queue_cap(backlog)?;
+        let syn_cap = tcp_listen_syn_queue_cap(backlog);
         if let Ok(guard) = self.state.lock(State::Idle) {
             guard.transit(State::Listening, || {
                 let bound_endpoint = self.with_smol_socket(|socket| socket.get_bound_endpoint());

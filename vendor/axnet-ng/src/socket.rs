@@ -188,7 +188,8 @@ pub trait SocketOps: Configurable {
 
     /// Starts listening on the bound address and port.
     ///
-    /// `backlog` is the requested listen queue size (Linux `listen(2)`); negative values are invalid.
+    /// `backlog` is the requested listen queue size (Linux `listen(2)`); TCP caps like
+    /// `(unsigned int)backlog` vs `somaxconn` (negative values are not `EINVAL`).
     fn listen(&self, backlog: i32) -> AxResult {
         let _ = backlog;
         Err(AxError::OperationNotSupported)

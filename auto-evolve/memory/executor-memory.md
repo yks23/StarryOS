@@ -1,6 +1,7 @@
 # Executor Memory
 
 ## 最近更新
+- 日期：2026-04-12：issue-261 resolved（**`listen`**：TCP **`tcp_listen_syn_queue_cap`** 对齐 Linux **`__sys_listen_socket`**，**`backlog`** 先 **`as u32`** 再 **`min(SOMAXCONN)`**，负值不再 **`EINVAL`**；**`axnet-ng`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-260 resolved（**`statx`**：**`mask & STATX__RESERVED`** → **`InvalidInput`（EINVAL）**；先于 **`vm_load_string(path)`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-259 resolved（**`openat`/`open`**：**`O_PATH`** 时 **`flags`** 须为 Linux **`O_PATH_FLAGS`** 子集（**`O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC|O_PATH`**），否则 **`InvalidInput`（EINVAL）**；**`validate_open_flags`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-258 resolved（**`memfd_create`/`memfd_secret`**：**`MFD_EXEC`** 与 **`MFD_NOEXEC_SEAL`** 同置 → **`InvalidInput`（EINVAL）**；**`validate_memfd_flags`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -102,7 +103,7 @@
 - 日期：2026-04-12：issue-159 resolved（**`syncfs`**：复用 **`location_from_fd`**，**`MemfdCreatedFile`**/**memfd** **fd** 可 **`filesystem().flush()`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-158 resolved（**`symlinkat`**：**`new_dirfd != AT_FDCWD`** 时先 **`Directory::from_fd`** 再 **`vm_load_string`**，**`EBADF`** 先于路径读；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-157 resolved（**`fstatfs`**：**`location_from_fd`** 支持 **`Directory`**/**`MemfdCreatedFile`**/**`File`** 取 **`Location`**再 **`statfs`**，对齐 Linux目录 **fd**；非 VFS **fd** → **`InvalidInput`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
-- 日期：2026-04-12：issue-156 resolved（**`listen`**：**`SocketOps::listen(backlog)`**；TCP **`LISTEN_TABLE`** 按 **`min(backlog, SOMAXCONN)`** 限制 **`syn_queue`**；**`backlog < 0`** → **`InvalidInput`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
+- 日期：2026-04-12：issue-156 resolved（**`listen`**：**`SocketOps::listen(backlog)`**；TCP **`LISTEN_TABLE`** 按 **`min(backlog, SOMAXCONN)`** 限制 **`syn_queue`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过；负 **`backlog`** 曾误 **`EINVAL`**，见 **issue-261**）
 - 日期：2026-04-12：issue-155 resolved（**`statx`**：**`Kstat::into_statx_with_mask`**按 **`STATX_*`** 填 **`struct statx`** 与 **`stx_mask`**；**`sys_statx`** 使用用户 **`mask`**；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-154 resolved（**`msgsnd`**：去掉 **`msg_qnum+1` vs `msg_qbytes`** 错误比较；满队列仅按 **`total_bytes + msgsz` vs `msg_qbytes`**，与 **`enqueue_message`**/**Linux** 字节配额一致；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
 - 日期：2026-04-12：issue-153 resolved（**`setitimer`**：**`new_value==NULL`** 不调用 **`set_itimer`**，仅 **`old_value`** 非空时 **`get_itimer`** 写回；两参皆 **`NULL`** 为 no-op；**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过）
@@ -271,6 +272,7 @@
 | issue-258 | memfd MFD_EXEC 与 MFD_NOEXEC_SEAL 互斥 EINVAL | resolved | 2026-04-12 |
 | issue-259 | openat O_PATH 仅允许 O_PATH_FLAGS 组合 EINVAL | resolved | 2026-04-12 |
 | issue-260 | statx mask 含 STATX__RESERVED → EINVAL | resolved | 2026-04-12 |
+| issue-261 | listen TCP 负 backlog 无符号截断非 EINVAL | resolved | 2026-04-12 |
 | issue-219 | waitpid __WNOTHREAD → Unsupported | resolved | 2026-04-12 |
 | issue-225 | fallocate FALLOC_FL 掩码 + 非零 EOPNOTSUPP | resolved | 2026-04-12 |
 | issue-227 | shmat 无效 shmid 不 unwrap（EINVAL） | resolved | 2026-04-12 |
@@ -490,7 +492,7 @@
 - **`accept` / `accept4`**：向用户写入的 sockaddr 必须是 **`peer_addr()`**（远端），勿用 **`local_addr()`**（本端监听地址）；与 **`getpeername(accepted_fd)`** 一致。**`accept4`** 第四参 **`flags`** 须为 **`O_CLOEXEC | O_NONBLOCK`**（与 Linux **`SOCK_CLOEXEC`/`SOCK_NONBLOCK`** 同值），否则 **`EINVAL`**。**`addr` 非空**时须先 **`write_to_user`**/**`addrlen`**（**`get_as_mut`**）再 **`add_to_fd_table`**，避免 **`copy_to_user`** 失败时已装新 **fd** 却未返回 **fd** 号（issue-149，与 issue-148 **`pipe2`** 同类）。**`addr==NULL`** 无地址写回，仍直接装表。
 - **`getsockname`/`getpeername`**（**`net/name.rs`**）：**`addr==NULL`** 时仅 **`local_addr()`/`peer_addr()`** 校验套接字状态后 **`Ok(0)`**，不读 **`addrlen`**、不 **`write_to_user`**（与 Linux **`move_addr_to_user`** 省略拷贝，issue-256）。**`addr` 非空**时 **`addrlen.get_as_mut()`** 仍须早于 **`local_addr`/`peer_addr`**（issue-119），再 **`write_to_user`**（**`addr`** 在 **`fill_addr`** 写回时访问；**`*addrlen==0`** 见 issue-090 **`InvalidInput`**）。
 - **`socket(2)`/`socketpair(2)`**：**`type`** 仅允许 **`SOCK_TYPE_MASK`（0xf）** 内 **`SOCK_*`** 与 **`O_CLOEXEC|O_NONBLOCK`**；其它位 **`InvalidInput`**（对齐 Linux **`EINVAL`**）。**`ty`** 取 **`raw_ty & SOCK_TYPE_MASK`**。**`AF_UNIX`**：**`proto` 须为 0**，否则 **`EPROTONOSUPPORT`**（issue-241；**`AF_INET`** 仍按 **`IPPROTO_TCP`/`UDP`**）。**`AF_UNIX` `SOCK_SEQPACKET`**：未实现 Unix SEQPACKET 传输；**`socket`** 与 **`socketpair`** 均 **`ESOCKTNOSUPPORT`**，勿将 **`SOCK_SEQPACKET`** 与 **`DgramTransport`** 混用（issue-251）。**`socketpair`**：先 **`fds.get_as_mut()`** 再依次 **`add_to_fd_table`**；第二端失败须 **`close_file_like`** 已装第一端（issue-150，与 issue-148 **`pipe2`** 同类）。
-- **`listen(2)`**：**`AF_UNIX` `SOCK_DGRAM`**（**`Transport::Dgram`**）→ **`OperationNotSupported`（EOPNOTSUPP）**；**`SOCK_STREAM`** 仍为 **`Ok`**（**`vendor/axnet-ng` `UnixSocket::listen`**，issue-254）。TCP **`backlog`**/**`syn_queue`** 见 issue-156。
+- **`listen(2)`**：**`AF_UNIX` `SOCK_DGRAM`**（**`Transport::Dgram`**）→ **`OperationNotSupported`（EOPNOTSUPP）**；**`SOCK_STREAM`** 仍为 **`Ok`**（**`vendor/axnet-ng` `UnixSocket::listen`**，issue-254）。TCP：**`tcp_listen_syn_queue_cap`** 按 Linux **`(unsigned int)backlog`** 与 **`SOMAXCONN`** 取 **`min`**（issue-156、issue-261）。
 - **`setsockopt(2)`**：**`optlen`** 须 **`>=`** 选项值 **`sizeof(T)`**（与 Linux / **`getsockopt`** 侧一致），只使用缓冲区前 **`sizeof(T)`** 字节；**`optlen < sizeof(T)`** → **`EINVAL`**。**`SO_RCVTIMEO`/`SO_SNDTIMEO`**（**`SOL_SOCKET`**）用户 **`timeval`** 须经 **`read_timeval_user`** 字段读，勿经 **`UserConstPtr::get_as_ref::<timeval>`** 整结构拷贝（issue-217）。
 - **`getsockopt(2)`**（**`net/opt.rs`**）：**`Socket::from_fd`** 须早于 **`optlen.get_as_mut`**，使无效 **`fd`** 先 **`EBADF`**，再触碰 **`optlen`/`optval`**（与 Linux **`sockfd_lookup`** 顺序及 **`setsockopt`** 对称）；日志仅用 **`UserPtr::address`** 避免提前用户读。**`SO_RCVTIMEO`/`SO_SNDTIMEO`**：**`GetSocketOption::ReceiveTimeout`/`SendTimeout`** + **`write_timeval_user`** 字段写 **`timeval`**，**`*optlen = sizeof(timeval)`**（issue-223，与 issue-217 **`setsockopt`** 对称）。
 - **`bind(2)`/`connect(2)`**（**`socket.rs`**）：**`Socket::from_fd`** 须早于 **`SocketAddrEx::read_from_user`**，无效 **`fd`** 先 **`BadFileDescriptor`**（**EBADF**），与 Linux **`sockfd_lookup`** 及 **`sys_accept4`** 顺序一致（issue-132）。
