@@ -57,6 +57,19 @@ case "${1:-help}" in
     monitor)
         python3 "$DIR/monitor.py" run
         ;;
+    test)
+        shift
+        python3 "$DIR/test-harness.py" "$@"
+        ;;
+    test-build)
+        python3 "$DIR/test-harness.py" build "$@"
+        ;;
+    test-list)
+        python3 "$DIR/test-harness.py" list
+        ;;
+    test-report)
+        python3 "$DIR/test-harness.py" report
+        ;;
     help|--help|-h)
         echo "Auto-Evolve: Starry OS 自动迭代体系"
         echo ""
@@ -80,6 +93,13 @@ case "${1:-help}" in
         echo "  ./auto-evolve/evolve send executor '请修复 timerfd'"
         echo "  ./auto-evolve/evolve gui"
         echo "  ./auto-evolve/evolve report"
+        echo ""
+        echo "测试:"
+        echo "  test run [--test NAME]  编译+注入+QEMU+解析 全流程"
+        echo "  test build              只编译测试"
+        echo "  test inject             编译+注入 rootfs"
+        echo "  test-list               列出所有测试"
+        echo "  test-report             查看最近测试结果"
         ;;
     *)
         echo "未知命令: $1（使用 --help 查看帮助）"

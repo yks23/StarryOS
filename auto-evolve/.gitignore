@@ -1,7 +1,12 @@
 kernel-state.json
 daemon-state.json
 daemon.pid
+progress-report.json
 msg-queue/debugger/*.json
 msg-queue/executor/*.json
 logs/*.log
 __pycache__/
+
+# 测试构建产物和结果
+test-build/
+test-results/
