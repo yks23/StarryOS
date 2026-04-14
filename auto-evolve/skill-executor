@@ -82,9 +82,41 @@ auto-evolve/
 3. 用真实逻辑替换 stub
 4. 确保错误路径正确返回对应的 errno
 
-### Phase 4: 编译验证
+### Phase 4: Git 分支管理（重要！）
 
-修改完成后：
+**每个 issue 必须在独立分支上修复，不要在主分支上直接改。**
+
+```bash
+# 1. 从 main 创建独立分支，分支名包含 issue ID
+git checkout main
+git checkout -b fix/issue-NNN-简短描述
+
+# 2. 在分支上修改代码、提交
+#    commit 信息格式: fix(module): description (closes issue-NNN)
+git add kernel/src/...
+git commit -m "fix(syscall): implement timerfd_create/settime/gettime (closes issue-011)"
+
+# 3. 修复完成后推送分支
+git push -u origin fix/issue-NNN-简短描述
+```
+
+**分支命名规范**：
+- bug 修复：`fix/issue-NNN-简短描述`（如 `fix/issue-011-timerfd`）
+- 功能增强：`feat/issue-NNN-简短描述`（如 `feat/issue-029-getresuid`）
+- 性能改进：`perf/issue-NNN-简短描述`（如 `perf/issue-004-aspace-rwlock`）
+
+**禁止**：
+- 不要在 `main` 上直接 commit
+- 不要把多个不相关 issue 的修复混在同一个分支
+- 不要把 issue-pool JSON 的改动和内核代码的改动放在同一个 commit
+
+**相关 issue 可以合并到一个分支**：
+- 比如 issue-005（membarrier）和 issue-024（membarrier cmd 编码）是同一个子系统，可以放在 `fix/membarrier-fence-and-cmd` 分支
+- 但 timerfd 和 SIGSTOP 必须分开
+
+### Phase 5: 编译验证
+
+修改完成后（在 fix 分支上）：
 
 1. **格式检查**：`cargo fmt --all --check`
 2. **静态分析**：`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -- -D warnings -A unused`
@@ -93,13 +125,14 @@ auto-evolve/
 5. **运行测试**：将测试程序注入 rootfs，在 QEMU 中运行，对照 `test.pass_criteria` 判定
 6. **回归检查**：运行 `auto-evolve/tests/` 下所有已有的测试，确保不破坏已修复的问题
 
-### Phase 5: 标记结果
+### Phase 6: 标记结果
 
 **修复成功**：
 1. 将 issue JSON 的 `status` 改为 `"resolved"`
 2. 添加 `resolved_at` 时间戳
 3. 添加 `fix_summary` 字段简述改动
 4. 添加 `files_changed` 字段列出修改的文件
+5. 添加 `branch` 字段记录修复所在分支
 
 ```json
 {
@@ -110,13 +143,15 @@ auto-evolve/
     "kernel/src/file/timerfd.rs",
     "kernel/src/syscall/fs/timerfd.rs",
     "kernel/src/syscall/mod.rs"
-  ]
+  ],
+  "branch": "fix/issue-011-timerfd"
 }
 ```
 
 **修复失败（本轮无法完成）**：
 1. 保持 `status: "open"`（不要留在 in-progress）
-2. 在 executor-memory 中记录卡住的原因
+2. 删除未完成的 fix 分支：`git checkout main && git branch -D fix/issue-NNN-xxx`
+3. 在 executor-memory 中记录卡住的原因
 
 ### Phase 6: 更新记忆
 

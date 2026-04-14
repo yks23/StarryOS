@@ -597,17 +597,27 @@ class Scheduler:
         print(f"[kernel] executor: 取 {issue_id} [{severity}] {title}")
 
         issue_content = json.dumps(issue, indent=2, ensure_ascii=False)
+
+        # 生成分支名
+        slug = issue_id.replace("issue-", "")
+        title_slug = re.sub(r'[^a-zA-Z0-9]+', '-', title.lower()).strip('-')[:30]
+        branch_name = f"fix/issue-{slug}-{title_slug}"
+
         prompt = (
             f"请处理以下问题（优先级: {severity}）：\n\n"
             f"```json\n{issue_content}\n```\n\n"
+            f"**重要：每个 issue 必须在独立分支上修复！**\n\n"
             f"按照 skill-executor 工作流程执行：\n"
-            f"1. 将 status 改为 in-progress\n"
-            f"2. 阅读 source_context 定位代码\n"
-            f"3. 实施修复（修改 kernel/src/ 下的源码）\n"
-            f"4. 运行 cargo clippy --target riscv64gc-unknown-none-elf -F qemu\n"
-            f"5. 编译通过后将 status 改为 resolved，填写 fix_summary 和 files_changed\n"
-            f"6. 更新 auto-evolve/memory/executor-memory.md\n"
-            f"7. git add && git commit 你的改动"
+            f"1. `git checkout main && git checkout -b {branch_name}`\n"
+            f"2. 将 issue status 改为 in-progress\n"
+            f"3. 阅读 source_context 定位代码\n"
+            f"4. 实施修复（修改 kernel/src/ 下的源码）\n"
+            f"5. 运行 cargo clippy --target riscv64gc-unknown-none-elf -F qemu\n"
+            f"6. 编译通过后将 status 改为 resolved，填写 fix_summary、files_changed 和 branch\n"
+            f"7. `git add kernel/ && git commit -m 'fix(...): ... (closes {issue_id})'`\n"
+            f"8. `git push -u origin {branch_name}`\n"
+            f"9. 更新 auto-evolve/memory/executor-memory.md\n"
+            f"10. `git checkout main`（回到 main 准备处理下一个 issue）"
         )
         self.executor.send_message(prompt)
 
@@ -649,17 +659,24 @@ class Scheduler:
         print(f"[kernel] debugger→executor: 积压 {open_count} 个，帮忙处理 {issue_id} [{severity}]")
 
         issue_content = json.dumps(issue, indent=2, ensure_ascii=False)
+
+        slug = issue_id.replace("issue-", "")
+        title_slug = re.sub(r'[^a-zA-Z0-9]+', '-', title.lower()).strip('-')[:30]
+        branch_name = f"fix/issue-{slug}-{title_slug}"
+
         prompt = (
             f"当前问题池积压较多（{open_count} 个 open），你暂时切换为 executor 角色帮忙消化。\n\n"
             f"请处理以下问题（优先级: {severity}）：\n\n"
             f"```json\n{issue_content}\n```\n\n"
-            f"请按照 auto-evolve/skill-executor 中定义的工作流程执行：\n"
-            f"1. 将 status 改为 in-progress\n"
-            f"2. 阅读 source_context 定位代码\n"
-            f"3. 实施修复（修改 kernel/src/ 下的源码）\n"
+            f"**重要：必须在独立分支上修复！**\n\n"
+            f"1. `git checkout main && git checkout -b {branch_name}`\n"
+            f"2. 将 status 改为 in-progress\n"
+            f"3. 实施修复\n"
             f"4. 运行 cargo clippy --target riscv64gc-unknown-none-elf -F qemu\n"
-            f"5. 编译通过后将 status 改为 resolved\n"
-            f"6. git add && git commit 你的改动"
+            f"5. 编译通过后标记 resolved\n"
+            f"6. `git add kernel/ && git commit -m 'fix(...): ... (closes {issue_id})'`\n"
+            f"7. `git push -u origin {branch_name}`\n"
+            f"8. `git checkout main`"
         )
         self.debugger.send_message(prompt)
         self._last_debugger_wake = time.time()
