@@ -627,7 +627,9 @@ pub fn handle_syscall(uctx: &mut UserContext) {
             sys_dummy_fd(sysno)
         }
 
-        Sysno::timer_create | Sysno::timer_gettime | Sysno::timer_settime => Ok(0),
+        Sysno::timer_create | Sysno::timer_gettime | Sysno::timer_settime => {
+            Err(AxError::Unsupported)
+        }
 
         _ => {
             warn!("Unimplemented syscall: {sysno}");
