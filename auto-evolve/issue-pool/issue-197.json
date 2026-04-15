@@ -1,0 +1,31 @@
+{
+  "id": "issue-197",
+  "title": "sendmsg：`msghdr` 仍为用户内存别名，未整体快照，`msg_control`/`msg_controllen`/`msg_iov` 存在字段级 TOCTOU",
+  "status": "resolved",
+  "created_at": "2026-04-15T00:00:00Z",
+  "severity": "medium",
+  "fix_summary": "**`sys_sendmsg`** 在 **`flags` 校验后**立即 **`let msg = *msg.get_as_ref()?`**，将 **`linux_raw_sys::msghdr`** **整结构拷贝到内核栈**；**`msg_control`/`msg_controllen` 遍历**与 **`IoVectorBuf::new(msg.msg_iov, msg.msg_iovlen)`**、**`msg_name`/`msg_namelen`** 均只使用该快照，避免对同一用户 **`&msghdr`** 的字段级交错读取。**`msg_controllen`** 与 **`checked_add`** 直接使用 **`usize`** 字段（去掉冗余 **`as usize`**）。**`iov` 数组每项**仍在 **`IoVectorBuf`/`send`** 路径按指针从用户读（未做 **`import_iovec` 式深拷贝**，可后续加固）。**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过。",
+  "files_changed": [
+    "kernel/src/syscall/net/io.rs",
+    "auto-evolve/issue-pool/issue-197.json",
+    "auto-evolve/memory/executor-memory.md"
+  ],
+  "description": "**`kernel/src/syscall/net/io.rs`** **`sys_sendmsg`** 使用 **`msg.get_as_ref()?`** 得到 **`&msghdr`**，该引用指向**用户态**结构体（与 **`cmsghdr`** 逐项快照不同）。随后用 **`msg.msg_control`** 与 **`msg.msg_controllen`** 计算 **`ptr`/`ptr_end`** 遍历 ancillary，再在 **`send_on_socket`** 中使用 **`msg.msg_iov`/`msg.msg_iovlen`**、**`msg.msg_name`/`msg.msg_namelen`**。任一次对 **`msg` 字段的读取**都可能与用户线程对 **`msghdr` 的并发写入**交错：**`msg_control` 指针与 `msg_controllen` 不必来自同一逻辑快照**（两次 load 之间用户可改写其一）；用户亦可在遍历 cmsg 后、组 **`IoVectorBuf`** 前修改 **`msg_iov`**。**Linux `__sys_sendmsg`** 通常 **`copy_msghdr_from_user`** 将 **`struct msghdr`**（及后续 **`iov`/`sockaddr` 策略**）按内核规则拷贝或校验，避免依赖「悬在用户页上的 **`&msghdr`**」。**issue-195** 已消除 **`cmsghdr.cmsg_len`** 的二次读取；本条覆盖更外层 **`msghdr`**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["sendmsg"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/io.rs:111-154"],
+    "related_files": [],
+    "key_insight": "`get_as_ref` →用户 `msghdr`；控制缓冲边界与 iov 非原子读取"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "双线程：一线程 **`sendmsg`**，另一线程在 syscall 进行时改写 **`msghdr.msg_controllen`**、**`msg_control`** 或 **`msg_iov`**；对照 **Linux** 在 **`copy_msghdr_from_user`** 后的行为。",
+    "expected_output_contains": "",
+    "pass_criteria": "与 **Linux** 一致地 **`copy_from_user`/`import_iovec`** 或等价快照；或文档化可接受的竞态模型。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（2026-04-12）"
+  },
+  "suggested_fix": "将 **`msghdr` 主字段**读入内核栈（**`msg_control`/`msg_controllen`/`msg_iov`/`msg_iovlen`/…**），后续逻辑仅用内核副本；**`iov`** 按 **Linux** 做 **`copy_iovec_from_user`** 或现有 **`IoVectorBuf` 安全封装**复核。",
+  "references": ["man 2 sendmsg", "Linux __sys_sendmsg", "issue-195"]
+}

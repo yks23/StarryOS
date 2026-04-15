@@ -1,0 +1,27 @@
+{
+  "id": "issue-411",
+  "title": "`fanotify_init(2)`：`FAN_ENABLE_AUDIT` 置位时未在 `CAP_AUDIT_WRITE` 缺失下返回 `EPERM`（Linux `fanotify_user.c`）",
+  "status": "resolved",
+  "created_at": "2026-04-12T18:05:00Z",
+  "severity": "low",
+  "description": "`kernel/src/syscall/fs/notify.rs` **`validate_fanotify_init_combined`** **`/`** **`sys_fanotify_init`**（**issue-409** **verified** **后** **）：** **已** **对齐** **多** **条** **`EINVAL`** **组合** **规则** **，** **但** **未** **实现** **Linux** **`fanotify_user.c`** **在** **`fd`****分配** **前** **对** **`FAN_ENABLE_AUDIT`** **的** **权限** **检查** **：**\n\n```c\nif (flags & FAN_ENABLE_AUDIT) {\n\tif (!capable(CAP_AUDIT_WRITE))\n\t\treturn -EPERM;\n}\n```\n\n**当前** **Starry** **只要** **`flags`** **掩码** **合法** **即可** **带** **`FAN_ENABLE_AUDIT`** **成功** **`add_file_like`** **，** **无** **凭证** **门控** **，** **与** **Linux** **`EPERM`** **分层** **不一致** **（** **先于** **`EMFILE`** **等** **资源** **错误** **的** **语义** **由** **Linux** **顺序** **保证** **）** **。**\n\n**与** **issue-409** **`EINVAL`** **规则** **正交** **：** **本** **issue** **仅** **`EPERM`** **`/`** **`CAP_AUDIT_WRITE`** **（** **或** **进程** **能力** **模型** **中等价** **检查** **）** **。**\n\n建议：**在** **`validate_fanotify_init_combined`** **末尾** **或** **`sys_fanotify_init`** **调用** **链** **中** **：** **`flags & FAN_ENABLE_AUDIT != 0`** **时** **校验** **当前** **任务** **是否** **具备** **`CAP_AUDIT_WRITE`** **（** **`linux/capability.h`** **`/`** **`capabilities(7)`** **）** **或** **Starry** **等价** **策略** **（** **如** **有效** **`cap`** **位** **）** **；** **否则** **`AxError::PermissionDenied`** **；** **注释** **引用** **issue-411** **及** **issue-409** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["fanotify_init"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/notify.rs"],
+    "related_files": ["kernel/src/task/mod.rs"],
+    "key_insight": "`require_cap_audit_write_if_fanotify_audit`：`cap_effective & (1<<30)`；置于 `validate_fanotify_init_combined` 之后、`FanotifyFd::new`/`add_file_like` 之前，与 Linux fd 分配前顺序一致"
+  },
+  "fix_summary": "新增 `require_cap_audit_write_if_fanotify_audit`：`flags & FAN_ENABLE_AUDIT` 时检查 `ProcessData::get_capabilities().0` 的 `CAP_AUDIT_WRITE`（位30），缺失则 `PermissionDenied`。在 `sys_fanotify_init` 中于 issue-409 校验之后、`add_file_like` 之前调用。",
+  "files_changed": ["kernel/src/syscall/fs/notify.rs"],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：无 `CAP_AUDIT_WRITE` 时 `fanotify_init(...|FAN_ENABLE_AUDIT,...)` 对照 Linux `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "无审计写能力时返回 EPERM（`PermissionDenied`）；有能力时行为不变。",
+    "last_result": "通过：`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`（exit 0）"
+  },
+  "suggested_fix": "在 `flags & FAN_ENABLE_AUDIT != 0` 时检查 `CAP_AUDIT_WRITE`（或映射到现有 `cap_effective` 位定义）；失败返回 `PermissionDenied`。",
+  "references": ["man 2 fanotify_init", "man 7 capabilities", "linux fs/notify/fanotify/fanotify_user.c", "kernel/src/syscall/fs/notify.rs", "issue-328", "issue-409"]
+}

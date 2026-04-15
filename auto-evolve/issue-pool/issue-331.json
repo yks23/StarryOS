@@ -1,0 +1,27 @@
+{
+  "id": "issue-331",
+  "title": "`utimensat(2)`：`sys_utimensat` 在 `path.is_null()` 时无条件 `flags |= AT_EMPTY_PATH`，与 Linux `do_utimensat` 要求 `pathname==NULL` 时调用方须在 `flags` 中显式置 `AT_EMPTY_PATH`（否则 `EINVAL`）的语义不完全一致",
+  "status": "resolved",
+  "created_at": "2026-04-13T22:05:00Z",
+  "severity": "low",
+  "fix_summary": "删除 `path.is_null()` 时自动 `flags |= AT_EMPTY_PATH`；先校验 `VALID_UTIMENSAT_FLAGS`，再若 `path.is_null()` 且未置 `AT_EMPTY_PATH` 则 `InvalidInput`。与 Linux `do_utimensat` 一致；注释 issue-331。更新 `executor-memory` utimensat 条、表格与最近更新；新增 `issue-331.json`。",
+  "files_changed": ["kernel/src/syscall/fs/ctl.rs", "auto-evolve/memory/executor-memory.md", "auto-evolve/issue-pool/issue-331.json"],
+  "description": "**`kernel/src/syscall/fs/ctl.rs`** **`sys_utimensat`** **（** **约** **604–617** **行** **）** **在** **校验** **`flags & !VALID_UTIMENSAT_FLAGS`** **之前** **执行** **`if path.is_null() { flags |= AT_EMPTY_PATH; }`** **。** **Linux** **`fs/utimes.c`** **`do_utimensat`** **路径** **：** **`filename == NULL`** **且** **`!(flags & AT_EMPTY_PATH)`** **→** **`EINVAL`** **。** **本** **实现** **通过** **自动** **合并** **`AT_EMPTY_PATH`** **使** **「** **NULL** **`path` 且未带 `AT_EMPTY_PATH`** **」** **不再** **命中** **该** **`EINVAL`** **，** **与** **直接** **`syscall`** **/`strace`** **可见** **的** **Linux** **行为** **可能** **不一致** **。**\n\n**建议** **：** **改为** **在** **`path.is_null()`** **时** **若** **`!(flags & AT_EMPTY_PATH)`** **则** **`InvalidInput`** **；** **或** **注释** **说明** **有意** **放宽** **以** **兼容** **某** **类** **调用** **约定** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["utimensat"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/ctl.rs:604-643"],
+    "related_files": [],
+    "key_insight": "utimensat NULL path auto AT_EMPTY_PATH vs Linux EINVAL"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：`utimensat(dirfd, NULL, times, 0)` 对照 Linux 是否 `EINVAL`。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游 `utimensat` 对 `AT_EMPTY_PATH` 的要求一致，或注释说明差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "删除无条件 `flags |= AT_EMPTY_PATH`；在 `path.is_null()` 时要求 `flags` 已含 `AT_EMPTY_PATH`，否则 `EINVAL`。",
+  "references": ["man 2 utimensat", "kernel/src/syscall/fs/ctl.rs", "Linux fs/utimes.c do_utimensat"]
+}

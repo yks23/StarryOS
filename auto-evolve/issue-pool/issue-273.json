@@ -1,0 +1,27 @@
+{
+  "id": "issue-273",
+  "title": "prlimit64：跨进程 pid 未做 Linux 式权限校验，可读写他进程 rlimit",
+  "status": "resolved",
+  "created_at": "2026-04-12T14:00:00Z",
+  "severity": "medium",
+  "fix_summary": "在 `get_process_data` 之后增加 `may_prlimit_peer`：同一 `Arc<ProcessData>`、调用者 `euid==0`、有效 `CAP_SYS_RESOURCE`（位 24）、或与目标 `ruid` 相同则允许；否则 `OperationNotPermitted`（EPERM）。",
+  "files_changed": ["kernel/src/syscall/resources.rs"],
+  "description": "**`kernel/src/syscall/resources.rs`** **`sys_prlimit64`**（约 **19–65** 行）在 **`resource < RLIM_NLIMITS`** 后直接 **`get_process_data(pid)?`**，对 **`new_limit`/`old_limit`** 的 **copy/apply** **未** 校验 **调用进程** 是否 **有权** 针对 **目标** **`pid`** 执行 **读/写** **rlimit**。\n\n**Linux `prlimit(2)` / `do_prlimit`**：当 **目标** **不是** **调用者自身**（**`pid`≠0** 且 **非** **同** **线程组/同** **凭证** **语义** 依 **内核** **版本**）时，**未授权** 访问 **通常** **`EPERM`**（**例如** **需** **`CAP_SYS_RESOURCE`** **或** **与** **目标** **同** **真实** **uid** **等**，**具体** **以** **`security_task_getrlimit`/`task_setrlimit`** **路径** **为准**）。\n\n**当前**：**任意** **能** **猜中** **`pid`** **的** **进程** **可** **读取** **他进程** **`old_limit`**，**并** **在** **`new_limit` 非空** 时 **修改** **他进程** **软/硬** **上限**（**仅** **受** **`rlim_max` 与** **当前** **`limit.max`** **的** **关系** **约束**），**与** **Linux** **隔离** **语义** **分叉**，**属** **安全/兼容性** **问题**。\n\n**建议**：在 **`proc_data`** **解析** **后**、**触碰** **用户** **缓冲** **前**，增加 **与** **Linux** **一致** **的** **may-access** **检查**（**同** **uid** **/** **cap** **/** **ptrace** **策略** **择一** **或** **组合**）；**`pid==0`** **仍** **表示** **调用** **进程** **自身**。\n\n**注意**：**issue-141** **已** **保证** **`new`** **校验** **失败** **不写** **`old`**；**本** **issue** **针对** **跨** **`pid`** **授权**，**与** **顺序** **无关**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["prlimit64"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/resources.rs:19-65"],
+    "related_files": ["kernel/src/task/ops.rs:97-109"],
+    "key_insight": "get_process_data 无 uid/cap 门禁，跨进程 rlimit 可读写"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 Linux `prlimit` 对他进程的 EPERM 语义。",
+    "expected_output_contains": "",
+    "pass_criteria": "非授权跨 pid 读/写 rlimit → EPERM（或等价），与 Linux 一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `sys_prlimit64` 中当目标非本进程时，校验 `current` 与 `proc_data` 的 uid/capability（对齐 `security_task_getrlimit` / `task_setrlimit` 策略）。",
+  "references": ["man 2 prlimit", "kernel/src/syscall/resources.rs", "Linux kernel do_prlimit"]
+}

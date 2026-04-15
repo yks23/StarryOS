@@ -4,6 +4,7 @@ use linux_raw_sys::general::{
     __kernel_old_timespec, __kernel_old_timeval, __kernel_sock_timeval, __kernel_timespec,
     timespec, timeval,
 };
+use starry_vm::{VmMutPtr, VmPtr};
 
 /// A helper trait for converting from and to `TimeValue`.
 pub trait TimeValueLike {
@@ -127,4 +128,33 @@ impl TimeValueLike for __kernel_sock_timeval {
             self.tv_usec as u32 * 1000,
         ))
     }
+}
+
+/// Read one user `timespec` field-by-field (issue-201/207; avoids bulk `assume_init`).
+pub(crate) fn read_timespec_user(p: *const timespec) -> AxResult<timespec> {
+    unsafe {
+        Ok(timespec {
+            tv_sec: core::ptr::addr_of!((*p).tv_sec).vm_read()?,
+            tv_nsec: core::ptr::addr_of!((*p).tv_nsec).vm_read()?,
+        })
+    }
+}
+
+/// Read one user `timeval` field-by-field (issue-204/215; avoids bulk load via `get_as_ref`).
+pub(crate) fn read_timeval_user(p: *const timeval) -> AxResult<timeval> {
+    unsafe {
+        Ok(timeval {
+            tv_sec: core::ptr::addr_of!((*p).tv_sec).vm_read()?,
+            tv_usec: core::ptr::addr_of!((*p).tv_usec).vm_read()?,
+        })
+    }
+}
+
+/// Write one user `timeval` field-by-field (issue-223; symmetric with [`read_timeval_user`]).
+pub(crate) fn write_timeval_user(p: *mut timeval, tv: timeval) -> AxResult<()> {
+    unsafe {
+        core::ptr::addr_of_mut!((*p).tv_sec).vm_write(tv.tv_sec)?;
+        core::ptr::addr_of_mut!((*p).tv_usec).vm_write(tv.tv_usec)?;
+    }
+    Ok(())
 }

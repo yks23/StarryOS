@@ -1,10 +1,16 @@
 pub mod epoll;
 pub mod event;
+pub(crate) mod flock;
 mod fs;
+pub(crate) mod memfd;
+mod inotify;
+pub mod io_uring;
 mod net;
 mod pidfd;
 mod pipe;
+pub(crate) mod record_lock;
 pub mod signalfd;
+pub mod timerfd;
 
 use alloc::{borrow::Cow, sync::Arc};
 use core::{ffi::c_int, time::Duration};
@@ -17,14 +23,22 @@ use axpoll::Pollable;
 use axtask::current;
 use downcast_rs::{DowncastSync, impl_downcast};
 use flatten_objects::FlattenObjects;
-use linux_raw_sys::general::{RLIMIT_NOFILE, stat, statx, statx_timestamp};
+use linux_raw_sys::general::{
+    RLIMIT_NOFILE, stat, statx, statx_timestamp, STATX_ATIME, STATX_BLOCKS, STATX_BASIC_STATS,
+    STATX_CTIME, STATX_GID, STATX_INO, STATX_MODE, STATX_MTIME, STATX_NLINK, STATX_SIZE,
+    STATX_TYPE, STATX_UID, STATX__RESERVED,
+};
 use spin::RwLock;
 
 pub use self::{
-    fs::{Directory, File, resolve_at, with_fs},
+    fs::{Directory, File, dirfd_for_path_resolution, location_from_fd, resolve_at, with_fs},
+    memfd::MemfdCreatedFile,
+    inotify::{FanotifyFd, InotifyFd},
+    io_uring::IoUringFd,
     net::Socket,
     pidfd::PidFd,
     pipe::Pipe,
+    timerfd::TimerFd,
 };
 use crate::task::{AX_FILE_LIMIT, AsThread};
 
@@ -91,22 +105,11 @@ impl From<Kstat> for stat {
     }
 }
 
-impl From<Kstat> for statx {
-    fn from(value: Kstat) -> Self {
-        // SAFETY: valid for statx
-        let mut statx: statx = unsafe { core::mem::zeroed() };
-        statx.stx_blksize = value.blksize as _;
-        statx.stx_attributes = value.mode as _;
-        statx.stx_nlink = value.nlink as _;
-        statx.stx_uid = value.uid as _;
-        statx.stx_gid = value.gid as _;
-        statx.stx_mode = value.mode as _;
-        statx.stx_ino = value.ino as _;
-        statx.stx_size = value.size as _;
-        statx.stx_blocks = value.blocks as _;
-        statx.stx_rdev_major = value.rdev.major();
-        statx.stx_rdev_minor = value.rdev.minor();
-
+impl Kstat {
+    /// Builds a `statx` honoring Linux `mask` (`STATX_*`): only requested fields are written and
+    /// `stx_mask` reports what was filled. Unsupported request bits (e.g. `STATX_BTIME`) are
+    /// ignored and omitted from `stx_mask`.
+    pub fn into_statx_with_mask(self, mask: u32) -> statx {
         fn time_to_statx(time: &Duration) -> statx_timestamp {
             statx_timestamp {
                 tv_sec: time.as_secs() as _,
@@ -114,14 +117,72 @@ impl From<Kstat> for statx {
                 __reserved: 0,
             }
         }
-        statx.stx_atime = time_to_statx(&value.atime);
-        statx.stx_ctime = time_to_statx(&value.ctime);
-        statx.stx_mtime = time_to_statx(&value.mtime);
 
-        statx.stx_dev_major = (value.dev >> 32) as _;
-        statx.stx_dev_minor = value.dev as _;
+        let mut stx: statx = unsafe { core::mem::zeroed() };
+        let want = mask & !STATX__RESERVED;
+        let mut filled = 0u32;
 
-        statx
+        if want & (STATX_TYPE | STATX_MODE) != 0 {
+            stx.stx_mode = self.mode as u16;
+            stx.stx_attributes = self.mode as u64;
+            filled |= want & (STATX_TYPE | STATX_MODE);
+        }
+        if want & STATX_NLINK != 0 {
+            stx.stx_nlink = self.nlink;
+            filled |= STATX_NLINK;
+        }
+        if want & STATX_UID != 0 {
+            stx.stx_uid = self.uid;
+            filled |= STATX_UID;
+        }
+        if want & STATX_GID != 0 {
+            stx.stx_gid = self.gid;
+            filled |= STATX_GID;
+        }
+        if want & STATX_ATIME != 0 {
+            stx.stx_atime = time_to_statx(&self.atime);
+            filled |= STATX_ATIME;
+        }
+        if want & STATX_MTIME != 0 {
+            stx.stx_mtime = time_to_statx(&self.mtime);
+            filled |= STATX_MTIME;
+        }
+        if want & STATX_CTIME != 0 {
+            stx.stx_ctime = time_to_statx(&self.ctime);
+            filled |= STATX_CTIME;
+        }
+        if want & STATX_INO != 0 {
+            stx.stx_ino = self.ino;
+            filled |= STATX_INO;
+        }
+        if want & STATX_SIZE != 0 {
+            stx.stx_size = self.size;
+            filled |= STATX_SIZE;
+        }
+        if want & STATX_BLOCKS != 0 {
+            stx.stx_blocks = self.blocks;
+            filled |= STATX_BLOCKS;
+        }
+        if want & (STATX_SIZE | STATX_BLOCKS) != 0 {
+            stx.stx_blksize = self.blksize;
+        }
+        if want & STATX_INO != 0 {
+            stx.stx_dev_major = (self.dev >> 32) as u32;
+            stx.stx_dev_minor = self.dev as u32;
+        }
+        if want & (STATX_TYPE | STATX_MODE) != 0 {
+            stx.stx_rdev_major = self.rdev.major();
+            stx.stx_rdev_minor = self.rdev.minor();
+        }
+
+        stx.stx_mask = filled;
+        stx
+    }
+}
+
+impl From<Kstat> for statx {
+    fn from(value: Kstat) -> Self {
+        value.into_statx_with_mask(STATX_BASIC_STATS)
     }
 }
 
@@ -210,8 +271,33 @@ pub fn add_file_like(f: Arc<dyn FileLike>, cloexec: bool) -> AxResult<c_int> {
     Ok(table.add(fd).map_err(|_| AxError::TooManyOpenFiles)? as c_int)
 }
 
+/// Like [`add_file_like`], but the new fd is the smallest free number **`>= min_fd`**
+/// (`F_DUPFD` / `F_DUPFD_CLOEXEC`, Linux `__get_unused_fd_flags`).
+pub fn add_file_like_at_least(f: Arc<dyn FileLike>, cloexec: bool, min_fd: usize) -> AxResult<c_int> {
+    if min_fd >= AX_FILE_LIMIT {
+        return Err(AxError::InvalidInput);
+    }
+    let max_nofile = current().as_thread().proc_data.rlim.read()[RLIMIT_NOFILE].current;
+    let mut table = FD_TABLE.write();
+    if table.count() as u64 >= max_nofile {
+        return Err(AxError::TooManyOpenFiles);
+    }
+    let fd = FileDescriptor { inner: f, cloexec };
+    for id in min_fd..AX_FILE_LIMIT {
+        if !table.is_assigned(id) {
+            return table
+                .add_at(id, fd)
+                .map_err(|_| AxError::TooManyOpenFiles)
+                .map(|i| i as c_int);
+        }
+    }
+    Err(AxError::TooManyOpenFiles)
+}
+
 /// Close a file by `fd`.
 pub fn close_file_like(fd: c_int) -> AxResult {
+    flock::release_fd(fd);
+    record_lock::release_fd(fd);
     let f = FD_TABLE
         .write()
         .remove(fd as usize)

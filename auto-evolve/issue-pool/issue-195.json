@@ -1,0 +1,32 @@
+{
+  "id": "issue-195",
+  "title": "sendmsg：控制消息 `cmsghdr` 指向用户内存，`cmsg_len` 二次读取与 `step` 校验存在 TOCTOU",
+  "status": "resolved",
+  "created_at": "2026-04-14T20:00:00Z",
+  "severity": "medium",
+  "fix_summary": "**`sys_sendmsg`** 将每个 **`cmsghdr`** **`*` 拷贝到内核栈**（**`let hdr = *UserConstPtr::...get_as_ref()?`**），**`cmsg_align`/`ptr_end`** 与 **`CMsg::parse`** 共用该快照的 **`cmsg_len`**。**`CMsg::parse(hdr, cmsg_user_ptr)`** 增加用户侧头指针：payload 从 **`cmsg_user_ptr + sizeof(cmsghdr)`** 按快照 **`hdr.cmsg_len`** 取片，避免用栈上 **`hdr` 地址**误算用户 VA，也消除对用户 **`cmsg_len` 的二次读取**。**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过。",
+  "files_changed": [
+    "kernel/src/syscall/net/io.rs",
+    "kernel/src/syscall/net/cmsg.rs",
+    "auto-evolve/issue-pool/issue-195.json",
+    "auto-evolve/memory/executor-memory.md"
+  ],
+  "description": "**`kernel/src/syscall/net/io.rs`** **`sys_sendmsg`** 遍历 **`msg_control`** 时 **`let hdr = UserConstPtr::<cmsghdr>::from(ptr).get_as_ref()?`**得到 **`&cmsghdr`**，其指向**用户态**缓冲（**`get_as_ref`** 仅做区域校验后直接解引用）。先用 **`hdr.cmsg_len`** 计算 **`step = cmsg_align(...)?`** 并断言 **`ptr + step <= ptr_end`**，再调用 **`CMsg::parse(hdr)?`**。**`CMsg::parse`**（**`cmsg.rs`**）再次读取 **`hdr.cmsg_len`** 并 **`get_as_slice(hdr.cmsg_len - sizeof(cmsghdr))`**。若另一线程在用户态并发改写 **`cmsg_len`**（或映射变更等），第二次读到的长度可与用于 **`step`** 的值不一致：**`parse`** 可能按更大的 **`cmsg_len`** 做 **`check_region`/拷贝**，超出原先与 **`ptr_end`** 对齐的边界论证；或与 **`step`** 内 padding 语义脱钩。**Linux** 路径通常 **`copy_msghdr_from_user`** / **`copy_from_user`** 将头或长度**快照**到内核后再解析。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["sendmsg"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/io.rs:125-141", "kernel/src/syscall/net/cmsg.rs:30-37"],
+    "related_files": [],
+    "key_insight": "`step` 用第一次 `cmsg_len`；`parse` 再读用户侧 `cmsg_len`"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "构造 **`sendmsg`**：线程 A 循环 **`sendmsg`**，线程 B 在 **`cmsghdr`** 与 **`parse`** 之间改写 **`cmsg_len`**；或单测内核侧对 **`cmsghdr`** 先做 **`vm_read`/栈拷贝** 再解析时行为差异。",
+    "expected_output_contains": "",
+    "pass_criteria": "**`cmsg_len` 用于边界与 payload 的长度**来自同一次快照（或整段 control 缓冲 **`copy_from_user`**），与 **`Linux`** 抗 TOCTOU 策略一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（2026-04-12）"
+  },
+  "suggested_fix": "将 **`cmsghdr`**（至少 **`cmsg_len`**）**读入内核栈**再计算 **`step` 与 `CMsg::parse`**；或令 **`parse`** 接受 **`cmsg_len: usize`/`&cmsghdr` 内核副本** 并禁止对用户指针二次取长度。",
+  "references": ["man 2 sendmsg", "Linux __sys_sendmsg ancillary parsing"]
+}

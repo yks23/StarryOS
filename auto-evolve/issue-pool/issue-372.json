@@ -1,0 +1,32 @@
+{
+  "id": "issue-372",
+  "title": "`sendto(2)`/`sendmsg(2)`：`SENDMSG_FLAGS_MASK` 允许 `MSG_CMSG_CLOEXEC`，与 `recvmsg` 显式 `ENOTSUP` 不对称；对仅适用于接收的位在发送路径可能静默忽略而非 `EINVAL`/`EOPNOTSUPP`",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "resolved_at": "2026-04-13T02:00:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/net/io.rs`**：**`RECVMSG_FLAGS_UNSUPPORTED`** **包含** **`MSG_CMSG_CLOEXEC`** **，** **`validate_recvmsg_flags`** **在** **`recv`** **路径** **上** **返回** **`OperationNotSupported`** **（** **约** **27–28** **、** **174–181** **行** **）** **。** **相对地** **，** **`SENDMSG_FLAGS_MASK`** **同样** **包含** **`MSG_CMSG_CLOEXEC`** **（** **约** **33–44** **行** **）** **，** **`send_impl`/`sys_sendmsg`** **仅** **拒绝** **掩码** **外** **未知** **位** **，** **掩码** **内** **位** **经** **`SendFlags::from_bits_truncate`** **传入** **`Socket::send`** **。** **`axnet`** **中** **`SendFlags::CMSG_CLOEXEC`** **在** **TCP/UDP** **`send`** **实现** **里** **未** **单独** **拒绝** **（** **仅** **`send_poller`** **将** **`DONTWAIT`** **等** **纳入** **非阻塞** **语义** **）** **，** **效果** **上** **可能** **与** **Linux** **对** **`send`** **携带** **仅** **`recvmsg`** **语义** **的** **`MSG_*`** **常** **返回** **`EINVAL`** **的** **行为** **不一致** **，** **且** **与** **同** **文件** **内** **`recvmsg`** **对** **`MSG_CMSG_CLOEXEC`** **的** **显式** **拒绝** **不对称** **。**\n\n**建议** **：** **在** **`send_impl`** **/`send_on_socket`** **前** **增加** **与** **`RECVMSG_FLAGS_UNSUPPORTED`** **对称** **的** **`SENDMSG_FLAGS_UNSUPPORTED`** **（** **至少** **`MSG_CMSG_CLOEXEC`** **）** **，** **或** **从** **`SENDMSG_FLAGS_MASK`** **剔除** **仅** **接收** **语义** **位** **并在** **校验** **中** **返回** **`InvalidInput`** **/** **`OperationNotSupported`** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["sendto", "sendmsg"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/io.rs:15-44", "kernel/src/syscall/net/io.rs:96-111", "kernel/src/syscall/net/io.rs:173-181"],
+    "related_files": ["vendor/axnet-ng/src/socket.rs:70-94", "vendor/axnet-ng/src/general.rs:89-100", "vendor/axnet-ng/src/tcp.rs:369-372"],
+    "key_insight": "recvmsg rejects MSG_CMSG_CLOEXEC at syscall; send allows it in mask and axnet send ignores"
+  },
+  "fix_summary": "**`SENDMSG_FLAGS_UNSUPPORTED`**：**`MSG_CMSG_CLOEXEC`**；**`validate_sendmsg_flags`**（**掩码** **外** **`EINVAL`**；**不支持** **位** **`OperationNotSupported`** **对齐** **`validate_recvmsg_flags`**）；**`send_impl`/`sys_sendmsg`** **调用**。**issue-372**。**",
+  "files_changed": [
+    "kernel/src/syscall/net/io.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-372.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：用户态对同一套接字 `recvmsg(MSG_CMSG_CLOEXEC)` 与 `sendmsg(MSG_CMSG_CLOEXEC)` 对照 Linux 返回码。",
+    "expected_output_contains": "",
+    "pass_criteria": "发送路径对 recv-only MSG_* 与 Linux 分层一致，或与 recvmsg 显式拒绝策略对称。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 syscall 层对 `MSG_CMSG_CLOEXEC`（及与 recv 侧 `RECVMSG_FLAGS_UNSUPPORTED` 对齐的其他仅接收位）在 send 路径显式拒绝或从 SENDMSG 合法集合中剔除。",
+  "references": ["man 2 sendmsg", "man 2 recvmsg", "kernel/src/syscall/net/io.rs"]
+}

@@ -1,0 +1,31 @@
+{
+  "id": "issue-185",
+  "title": "setsockopt：`IP_TTL`按 `Int<u8>` 仅要求 `optlen >= 1`，与 Linux `sizeof(int)` 不一致",
+  "status": "resolved",
+  "created_at": "2026-04-13T16:00:00Z",
+  "severity": "low",
+  "fix_summary": "在 `kernel/src/syscall/net/opt.rs` 增加 `conv::IpTtl`：`setsockopt`/`getsockopt` 对 `IPPROTO_IP`/`IP_TTL` 走显式分支，要求 `optlen >= sizeof(i32)`，从用户区读 `i32` 后以 `u8::try_from` 校验0–255（否则 `InvalidInput`/`EINVAL`），再交给 `SetSocketOption::Ttl`/`GetSocketOption::Ttl`；避免经 `call_dispatch` 的 `$conv:ty` 传递导致专用匹配失效。`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` 通过。",
+  "files_changed": [
+    "kernel/src/syscall/net/opt.rs",
+    "auto-evolve/issue-pool/issue-185.json",
+    "auto-evolve/memory/executor-memory.md"
+  ],
+  "description": "**`kernel/src/syscall/net/opt.rs`** 中 **`sys_setsockopt`** 的内联 **`get::<T>`** 以 **`size_of::<T>()`** 校验用户 **`optlen`**。**`IP_TTL`** 经宏展开为 **`Ttl as Int<u8>`**，故仅要求 **`optlen >= 1`**，并从用户缓冲读 **`u8`**。**Linux `IP_TTL`（`man 7 ip`）** 的 **`optval` 为 `int`**，**`getsockopt`/`setsockopt` 均要求 `optlen >= sizeof(int)`**；**`optlen` 过小返回 `EINVAL`**。**Starry** 在 **`optlen == 1`** 等被 **Linux 拒绝** 的输入上仍可能 **接受**，与 **glibc/内核** 行为不一致；极端情况下若仅校验「首字节」而调用方按 **Linux** 约定写入 **4 字节 int**，当前实现虽常仍能读到低字节，但 **边界与 errno 策略** 已偏离。**`getsockopt`** 侧对 **`Ttl`** 写出时使用 **`rust_to_sys` → `i32`**，**`*optlen = 4`**，与 **Linux** 宽度更一致，**不对称**加剧可移植性风险。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["setsockopt", "getsockopt"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/opt.rs:163-200"],
+    "related_files": ["vendor/axnet-ng/src/options.rs"],
+    "key_insight": "`IP_TTL` 映射为 `Int<u8>` → `optlen` 下限为 1，而非 Linux的 `sizeof(int)`"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "对 **TCP/UDP** socket **`setsockopt(IPPROTO_IP, IP_TTL, &v, 1)`**：对比 **Linux**（**`EINVAL`**）与 **Starry**；再用 **`optlen == sizeof(int)`** 对照成功路径。",
+    "expected_output_contains": "",
+    "pass_criteria": "**`optlen < sizeof(int)`** 时 **`EINVAL`**（或与文档一致的错误），与 **Linux** 对齐；或明确文档化差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（2026-04-12）"
+  },
+  "suggested_fix": "将 **`IP_TTL`** 从 **`Int<u8>`** 改为 **`Int<i32>`**（或专用分支）：**`setsockopt`**/**`getsockopt`** 均以 **`sizeof(i32)`** 校验 **`optlen`**，并在写入 **`axnet` 前将值钳制到 **0–255**（或按 **Linux** 错误码处理非法值）。",
+  "references": ["man 7 ip", "man 2 setsockopt"]
+}

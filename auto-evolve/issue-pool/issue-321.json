@@ -1,0 +1,27 @@
+{
+  "id": "issue-321",
+  "title": "`signalfd4(2)`：`sys_signalfd4` 在 `mask.is_null()` 之前执行 `check_sigset_size`、`SignalfdFlags::from_bits`、以及 `fd != -1` 且 `SFD_CLOEXEC` 的 `EINVAL`，与 Linux 先访问/拷贝用户 `mask` 时，「NULL `mask`」与「非法 `sigsetsize`/`flags`」组合的 `EFAULT`/`EINVAL` 优先级可能不完全一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T14:05:00Z",
+  "severity": "low",
+  "fix_summary": "将 `mask.is_null()` → `BadAddress` 提前到 `check_sigset_size`、`SignalfdFlags::from_bits` 与 `fd != -1 && CLOEXEC` 校验之前；注释 issue-321 及与 issue-319 正交。更新 `executor-memory` signalfd4 条、表格与最近更新；新增 `issue-321.json`。",
+  "files_changed": ["kernel/src/syscall/fs/signalfd.rs", "auto-evolve/memory/executor-memory.md", "auto-evolve/issue-pool/issue-321.json"],
+  "description": "**`kernel/src/syscall/fs/signalfd.rs`** **`sys_signalfd4`** **（** **约** **45–56** **行** **）** **顺序** **：** **`check_sigset_size(sigsetsize)?`** **→** **`SignalfdFlags::from_bits(flags)`** **→** **`fd != -1 && CLOEXEC`** **→** **`mask.is_null()`** **→** **`read_signal_set_user`** **/** **`from_fd`** **。** **当** **调用** **同时** **存在** **NULL** **`mask`** **与** **非法** **`sigsetsize`** **或** **未知** **`flags`** **位** **（** **或** **修改** **`fd`** **路径** **上** **非法** **`CLOEXEC`** **组合** **）** **时** **，** **本** **实现** **固定** **先** **返回** **`EINVAL`** **类** **错误** **；** **Linux** **`__do_signalfd4`** **对** **用户** **`mask`** **的** **访问** **通常** **较早** **，** **可能** **先** **`EFAULT`** **。** **与** **issue-319** **（** **`fd`** **与** **`mask`** **读** **顺序** **）** **正交** **；** **issue-305**/**issue-318** **类** **「** **路径** **/** **标量** **校验** **与** **用户** **指针** **」** **主题** **可** **对照** **。**\n\n**建议** **：** **对照** **Linux** **`signalfd.c`** **入口** **，** **将** **`mask.is_null()`** **（** **或** **等价** **用户** **`mask`** **探测** **）** **提前** **到** **部分** **标量** **校验** **之前** **，** **或** **注释** **说明** **有意** **先** **拒绝** **非法** **`sigsetsize`/`flags`** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["signalfd4"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/signalfd.rs:39-56"],
+    "related_files": [],
+    "key_insight": "signalfd4 mask NULL vs sigsetsize/flags EINVAL order"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：NULL mask + 非法 flags/sigsetsize 对照 Linux 返回顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游 `signalfd4` 错误优先级一致，或注释说明差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "按 Linux 入口顺序调整 `check_sigset_size`/`flags`/`mask` 空指针检查的相对位置，或补充注释说明与上游差异。",
+  "references": ["man 2 signalfd", "kernel/src/syscall/fs/signalfd.rs", "issue-319", "issue-305", "issue-318"]
+}

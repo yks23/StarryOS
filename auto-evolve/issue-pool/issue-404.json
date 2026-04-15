@@ -1,0 +1,27 @@
+{
+  "id": "issue-404",
+  "title": "`mount(2)`：空路径 `target==\"\"` 未在 `resolve` 前拒绝为 `EINVAL`",
+  "status": "resolved",
+  "created_at": "2026-04-13T03:05:00Z",
+  "severity": "low",
+  "description": "`kernel/src/syscall/fs/mount.rs` **`sys_mount`**（约 65–94 行）：按 **issue-303** **顺序** **先** **`vm_load_string(source/target/fs_type)`** **再** **`validate_mount_flags`**；**`target`** **在** **`validate_fs_type`/`validate_mount_source`** **之后** **才** **`FS_CONTEXT.resolve(target)`**，**全程** **无** **`target.is_empty()`** **`→`** **`InvalidInput`** 早退。\n\nLinux **`mount(2)`** 对 **空挂载点** **通常** **`EINVAL`**（与 **issue-402** **`statfs`** **verified**、**issue-403** **`umount2`** **open** **空** **路径** **主题** **一致**）。**`source`** **对** **`tmpfs`** **允许** **空** **/别名** **（** **`validate_mount_source`** **）** **，** **勿** **与** **`target`** **混淆**。\n\n建议：**`vm_load_string(target)`** **之后**、**`debug!`** **或** **`validate_fs_type`** **之前** **`target.is_empty()`** **`→`** **`InvalidInput`**，注释引用 issue-404 及 **issue-303**/**issue-393**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["mount"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/mount.rs:65-94"],
+    "related_files": [],
+    "key_insight": "`validate_mount_flags` 后、`debug!`/`validate_fs_type`/`resolve(target)` 前 `target.is_empty()` → `InvalidInput`；与 `source` 校验正交"
+  },
+  "fix_summary": "`sys_mount`：在 `validate_mount_flags` 之后、`debug!` 与 `validate_fs_type` 之前对空 `target` 返回 `InvalidInput`，保留 issue-303 先拷贝字符串再校验 flags 的顺序。",
+  "files_changed": ["kernel/src/syscall/fs/mount.rs"],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：`mount(\"\", \"\", \"tmpfs\", 0, NULL)` 或仅 `target==\"\"` 对照 Linux `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "空 `target` 返回 EINVAL（`InvalidInput`）。",
+    "last_result": "通过：`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`（exit 0）"
+  },
+  "suggested_fix": "在 `sys_mount` 中于 `debug!` 前增加 `if target.is_empty() { return Err(InvalidInput); }`，对齐 `sys_statfs`（issue-402）。",
+  "references": ["man 2 mount", "kernel/src/syscall/fs/mount.rs", "issue-403", "issue-402", "issue-303", "issue-393"]
+}

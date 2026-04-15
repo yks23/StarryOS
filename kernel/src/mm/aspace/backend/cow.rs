@@ -7,9 +7,9 @@ use axhal::{
     mem::phys_to_virt,
     paging::{MappingFlags, PageSize, PageTableCursor, PagingError},
 };
-use axsync::Mutex;
 use kspin::SpinNoIrq;
 use memory_addr::{PhysAddr, VirtAddr, VirtAddrRange};
+use spin::RwLock;
 
 use super::{
     AddrSpace, Backend, BackendOps, PopulateCallback, alloc_frame, dealloc_frame, pages_in,
@@ -84,6 +84,15 @@ pub struct CowBackend {
 }
 
 impl CowBackend {
+    /// Same COW mapping with an updated VMA start (for `mremap`).
+    pub(crate) fn with_virt_start(&self, new_start: VirtAddr) -> Self {
+        Self {
+            start: new_start,
+            size: self.size,
+            file: self.file.clone(),
+        }
+    }
+
     fn alloc_new_frame(&self, zeroed: bool) -> AxResult<PhysAddr> {
         let frame = alloc_frame(zeroed, self.size)?;
         FRAME_TABLE.lock().init_frame(frame);
@@ -229,7 +238,7 @@ impl BackendOps for CowBackend {
         flags: MappingFlags,
         old_pt: &mut PageTableCursor,
         new_pt: &mut PageTableCursor,
-        _new_aspace: &Arc<Mutex<AddrSpace>>,
+        _new_aspace: &Arc<RwLock<AddrSpace>>,
     ) -> AxResult<Backend> {
         let cow_flags = flags - MappingFlags::WRITE;
 

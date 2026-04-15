@@ -1,0 +1,33 @@
+{
+  "id": "issue-207",
+  "title": "futex：`FUTEX_WAIT`/`FUTEX_WAIT_BITSET` 可选超时读用户 `timespec` 使用 `assume_init`，`FIXME AnyBitPattern` 与 issue-205 同类",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "在 `kernel/src/time.rs` 增加 `read_timespec_user`：对用户 `timespec` 分别 `vm_read` `tv_sec`/`tv_nsec`，避免整结构 `assume_init` 与 `AnyBitPattern` 假设。`sys_futex` 的 `FUTEX_WAIT`/`FUTEX_WAIT_BITSET` 超时路径改用该函数后 `try_into_time_value`。原 `ctl.rs`/`schedule.rs`/`signal.rs` 中的重复实现已删除并统一从 `crate::time` 引用。",
+  "files_changed": [
+    "kernel/src/time.rs",
+    "kernel/src/syscall/sync/futex.rs",
+    "kernel/src/syscall/fs/ctl.rs",
+    "kernel/src/syscall/task/schedule.rs",
+    "kernel/src/syscall/signal.rs"
+  ],
+  "description": "**`kernel/src/syscall/sync/futex.rs`** **`sys_futex`** 在 **`FUTEX_WAIT`/`FUTEX_WAIT_BITSET`** 分支中，当 **`timeout` 非空时使用 **`// FIXME: AnyBitPattern`** 与 **`unsafe { ts.vm_read_uninit()?.assume_init() }`**，再 **`try_into_time_value`**（约 **49–51** 行）。与 **issue-205**（**`nanosleep`/`clock_nanosleep`**）、**issue-201**（**`utimensat` 已改为字段读**）同类：**`timespec`** 布局/**Pod** 假设与 **`linux_raw_sys`** 升级风险。**更稳妥**：复用 **`fs/ctl.rs`** 的 **`read_timespec_user`**（或抽到公共模块），或 **`tv_sec`/`tv_nsec` 标量读**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["futex"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/sync/futex.rs:24-77"],
+    "related_files": ["kernel/src/syscall/fs/ctl.rs:514-523"],
+    "key_insight": "`FUTEX_REQUEUE` 复用 `timeout` 槽位为 `nr_requeue`，与等待超时路径无关"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查 + **`linux_raw_sys` 升级**试编译；对照 **issue-201** **`read_timespec_user`**。",
+    "expected_output_contains": "",
+    "pass_criteria": "消除 **`assume_init`** 或证明 **`timespec`** 读路径与 **uapi** 逐字段一致。",
+    "last_result": "通过：`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`（exit 0，仅有既有 dead_code/clippy 类 warning）。"
+  },
+  "suggested_fix": "抽取或与 **`read_timespec_user`** 共享字段级读；删除 **`FIXME`**。",
+  "references": ["man 2 futex", "issue-201", "issue-205"]
+}

@@ -1,4 +1,5 @@
 use alloc::{
+    collections::BTreeMap,
     sync::{Arc, Weak},
     vec::Vec,
 };
@@ -15,13 +16,17 @@ use starry_vm::{VmMutPtr, VmPtr};
 use weak_map::WeakMap;
 
 use super::{
-    AsThread, FutexKey, ProcessData, TimerState, futex_table_for, send_signal_thread_inner,
+    AsThread, FutexKey, JobCtl, ProcessData, TimerState, futex_table_for, send_signal_thread_inner,
     send_signal_to_process, send_signal_to_thread,
 };
 
 static TASK_TABLE: RwLock<WeakMap<Pid, WeakAxTaskRef>> = RwLock::new(WeakMap::new());
 
 static PROCESS_TABLE: RwLock<WeakMap<Pid, Weak<ProcessData>>> = RwLock::new(WeakMap::new());
+
+/// Strong refs for zombie processes so `wait`/`get_process_data` can read CPU accounting after
+/// the last thread exited (`PROCESS_TABLE` only holds [`Weak`]).
+static ZOMBIE_PROCESS_DATA: RwLock<BTreeMap<Pid, Arc<ProcessData>>> = RwLock::new(BTreeMap::new());
 
 static PROCESS_GROUP_TABLE: RwLock<WeakMap<Pid, Weak<ProcessGroup>>> = RwLock::new(WeakMap::new());
 
@@ -93,7 +98,46 @@ pub fn get_process_data(pid: Pid) -> AxResult<Arc<ProcessData>> {
     if pid == 0 {
         return Ok(current().as_thread().proc_data.clone());
     }
-    PROCESS_TABLE.read().get(&pid).ok_or(AxError::NoSuchProcess)
+    if let Some(pd) = PROCESS_TABLE.read().get(&pid) {
+        return Ok(pd);
+    }
+    ZOMBIE_PROCESS_DATA
+        .read()
+        .get(&pid)
+        .cloned()
+        .ok_or(AxError::NoSuchProcess)
+}
+
+/// Linux-aligned peer access for `prlimit(2)`, `pidfd_open(2)`, `get_robust_list(2)`, and similar paths that mirror
+/// `ptrace_may_access` / `PTRACE_MODE_ATTACH_REALCREDS`-style checks: same process,
+/// root effective uid, `CAP_SYS_RESOURCE`, or matching real uid (`man 2 prlimit`,
+/// `man 2 pidfd_open`; kernel `do_prlimit` / `pidfd_open`).
+#[inline]
+pub(crate) fn may_peer_process_by_cred(
+    caller: &Arc<ProcessData>,
+    target: &Arc<ProcessData>,
+) -> bool {
+    if Arc::ptr_eq(caller, target) {
+        return true;
+    }
+    const CAP_SYS_RESOURCE: u32 = 24;
+    if caller.geteuid() == 0 {
+        return true;
+    }
+    let (eff, _, _) = caller.get_capabilities();
+    if eff & (1 << CAP_SYS_RESOURCE) != 0 {
+        return true;
+    }
+    caller.getuid() == target.getuid()
+}
+
+/// Keep [`ProcessData`] alive after the last thread exits until the parent `wait`s.
+pub fn register_zombie_process_data(pd: Arc<ProcessData>) {
+    ZOMBIE_PROCESS_DATA.write().insert(pd.proc.pid(), pd);
+}
+
+pub fn remove_zombie_process_data(pid: Pid) {
+    ZOMBIE_PROCESS_DATA.write().remove(&pid);
 }
 
 /// Finds the process group with the given PGID.
@@ -221,7 +265,17 @@ pub fn do_exit(exit_code: i32, group_exit: bool) {
     }
 
     let process = &thr.proc_data.proc;
-    if process.exit_thread(curr.id().as_u64() as Pid, exit_code) {
+    {
+        let mut tm = thr.time.borrow_mut();
+        tm.poll(|_| {});
+        let (u, s) = tm.cpu_nanos();
+        thr.proc_data.accumulate_exited_thread_cpu_ns(u, s);
+    }
+    let last_thread = process.exit_thread(curr.id().as_u64() as Pid, exit_code);
+    thr.proc_data.thread_group_exit_event.wake();
+    if last_thread {
+        register_zombie_process_data(thr.proc_data.clone());
+        *thr.proc_data.jobctl.lock() = JobCtl::default();
         process.exit();
         if let Some(parent) = process.parent() {
             if let Some(signo) = thr.proc_data.exit_signal {

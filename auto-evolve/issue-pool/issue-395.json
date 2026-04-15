@@ -1,0 +1,27 @@
+{
+  "id": "issue-395",
+  "title": "`readlink(2)`/`readlinkat(2)`：空路径 `path==\"\"` 未在 `resolve` 前拒绝为 `EINVAL`",
+  "status": "resolved",
+  "created_at": "2026-04-12T12:00:00Z",
+  "severity": "low",
+  "description": "`kernel/src/syscall/fs/ctl.rs` **`sys_readlinkat`**（约 416–446 行）：在 **`size`/`buf`** 校验与 **`vm_load_string(path)?`** 之后直接进入 **`dirfd_for_path_resolution`** / **`with_fs`** / **`resolve_no_follow`**，**无** **`path.is_empty()`** **`→`** **`InvalidInput`** 早退。\n\nLinux **`readlinkat(2)`** 对 **空路径名** 通常 **`EINVAL`**（与同文件 **`mkdirat`**/**`unlinkat`** 等 **issue-391–394** 一致），避免依赖 VFS 对 **`\"\"`** 的偶然行为；**`readlink`**（**`cfg(x86_64)`**）经 **`sys_readlinkat`**，修复一处可覆盖 legacy 入口。\n\n**`issue-282`** 已覆盖 **`buf.is_null()`** 与 **`bufsiz==0`**，与 **空 `path`** 正交。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["readlink", "readlinkat"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/ctl.rs:416-446"],
+    "related_files": ["kernel/src/syscall/fs/ctl.rs:412-414"],
+    "key_insight": "`resolve_no_follow` 前 `path.is_empty()` → `InvalidInput`"
+  },
+  "fix_summary": "`sys_readlinkat`：`vm_load_string` 后、`debug!`/`from_fd` 前对 `path.is_empty()` 返回 `InvalidInput`（`readlink` 经 `readlinkat`，issue-395；与 issue-282 buf/size 正交）。",
+  "files_changed": ["kernel/src/syscall/fs/ctl.rs"],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：`readlinkat(AT_FDCWD, \"\", buf, bufsiz)` 对照 Linux `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "空路径返回 EINVAL（`InvalidInput`）。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（仓库既有警告）"
+  },
+  "suggested_fix": "在 `vm_load_string` 之后、`debug!` 之前增加与 `sys_mkdirat`（issue-393）相同的 `path.is_empty()` 检查。",
+  "references": ["man 2 readlinkat", "kernel/src/syscall/fs/ctl.rs", "issue-282", "issue-394", "issue-393"]
+}

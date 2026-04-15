@@ -1,0 +1,32 @@
+{
+  "id": "issue-379",
+  "title": "`splice(2)`：`off_in`/`off_out` 非空且对应 `fd` 为 pipe 时 `File::from_fd` 失败映射为 `BrokenPipe`，与 Linux 对「管道上不得带 offset」的 `EINVAL` 可能不一致",
+  "status": "resolved",
+  "created_at": "2026-04-14T00:00:00Z",
+  "resolved_at": "2026-04-14T01:00:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/fs/io.rs`** **`sys_splice`** **构造** **`SendFile::Offset`** **时** **（** **约** **588–614** **行** **）** **若** **`off_in`/`off_out` 非** **NULL** **，** **分别** **调用** **`File::from_fd(fd_in)`** **`/`** **`File::from_fd(fd_out)`** **。** **`File::from_fd`** **在** **`kernel/src/file/fs.rs`** **中对** **非** **`File`** **（** **含** **`Pipe`** **）** **的** **向下转型** **失败** **映射** **为** **`BrokenPipe`** **（** **非** **`Directory`** **时** **，** **约** **242–247** **行** **）** **。**\n\n**Linux** **`do_splice`** **对** **pipe** **端** **点** **不允许** **与** **普通** **文件** **一样** **使用** **`ppipe`/`spipe` 上的** **`*_off`** **指针** **语义** **；** **典型** **返回** **`EINVAL`** **（** **非法** **参数** **组合** **）** **，** **而非** **「** **损坏** **管道** **」** **类** **`EPIPE`** **。** **因此** **在** **`off_in`/`off_out` 非空** **且** **`fd`** **实为** **pipe** **时** **，** **Starry** **可能** **表面** **`BrokenPipe`** **，** **与** **上游** **`EINVAL`** **分层** **不一致** **。** **与** **issue-317** **`fd`/`flags`** **顺序** **、** **issue-377** **`len==0`** **早** **退** **正交** **。**\n\n**建议** **：** **在** **`File::from_fd`** **之前** **或** **失败** **后** **分支** **：** **若** **`Pipe::from_fd` 成功** **且** **对应** **`off_*` 非** **NULL** **，** **显式** **`InvalidInput`** **（** **EINVAL** **）** **；** **或** **将** **此类** **转型** **失败** **从** **`BrokenPipe`** **改为** **`InvalidInput`** **并** **注释** **对齐** **`do_splice`** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["splice"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/io.rs:586-614", "kernel/src/file/fs.rs:238-248"],
+    "related_files": [],
+    "key_insight": "Offset branch uses File::from_fd; pipe fd -> BrokenPipe vs Linux EINVAL for offset on pipe"
+  },
+  "fix_summary": "**`sys_splice`** **`SendFile::Offset`** **分支**：**`Pipe::from_fd` 成功** **且** **`off_in`/`off_out` 非空** **→** **`InvalidInput`** **先于** **`File::from_fd`** **（** **对齐** **`do_splice` EINVAL** **）**。**issue-379**。**",
+  "files_changed": [
+    "kernel/src/syscall/fs/io.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-379.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：用户态 pipe fd + 非空 off 指针对照 Linux `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "pipe + 非空 offset 指针路径返回与 Linux 一致的 EINVAL（或文档化映射）。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `sys_splice` 的 Offset 分支检测 pipe + `off_*` 组合并返回 `InvalidInput`，或收窄 `File::from_fd` 失败时的错误映射。",
+  "references": ["man 2 splice", "kernel/src/syscall/fs/io.rs", "kernel/src/file/fs.rs"]
+}

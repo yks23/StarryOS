@@ -1,0 +1,27 @@
+{
+  "id": "issue-217",
+  "title": "setsockopt：`get(optval)` 经 `UserConstPtr::get_as_ref` + `*get` 整颗拷贝 `timeval` 等，与 `read_timeval_user` 字段读不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_setsockopt` 对 `SOL_SOCKET` + `SO_RCVTIMEO`/`SO_SNDTIMEO` 走显式分支：`optlen >= sizeof(timeval)`，`read_timeval_user(optval)` + `conv::Duration::sys_to_rust`，再 `SetSocketOption::ReceiveTimeout`/`SendTimeout`；不再经 `get_as_ref` + `*get` 整颗拷贝用户 `timeval`。",
+  "files_changed": ["kernel/src/syscall/net/opt.rs"],
+  "description": "**`kernel/src/syscall/net/opt.rs`** **`sys_setsockopt`** 内部 **`get<'a, T>(val: UserConstPtr<u8>, len: socklen_t) -> AxResult<&'a T>`**（约 **213–218** 行）在长度校验后执行 **`val.cast::<T>().get_as_ref()`**，得到指向用户缓冲的 **`&T`**。**`call_dispatch!`** 展开中 **`ReceiveTimeout`/`SendTimeout` as `conv::Duration`** 等分支使用 **`let mut val = <$conv>::sys_to_rust(*get(optval, optlen)?)?`**（约 **230–232** 行）：对 **`timeval`** 的 **`sys_to_rust`** 接收 **`timeval` 按值**，**`*get`** 触发从用户地址 **整结构装入**（**`Copy`**），**非** **`read_timeval_user`**（**`syscall/time.rs`**/**`fs/ctl.rs`**）式的 **`tv_sec`/`tv_usec` 标量读**。\n\n与 **issue-215**/**issue-216**（**`timespec` 超时**）、**issue-204**/**issue-201**（**`timeval`/`timespec` 字段读**）同类；**`setsockopt`** 中 **`Int`/`IntBool`** 等标量类型经 **`get`** 读 **`i32`** 影响面较小。\n\n**建议**：对 **`SO_RCVTIMEO`/`SO_SNDTIMEO`** 分支单独 **`read_timeval_user`**（由 **`optval` 指针** + **`optlen`** 定位），再 **`try_into_time_value`**；或 **`get_as_ref`** 仅用于 **`addr_of!` 字段读**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["setsockopt"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/opt.rs:196-238"],
+    "related_files": ["kernel/src/syscall/net/opt.rs:50-60"],
+    "key_insight": "`conv::Duration::sys_to_rust(timeval)` 与 `*get` 组合成整颗用户 `timeval` 拷贝"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 **`read_timeval_user`**、**issue-215**。",
+    "expected_output_contains": "",
+    "pass_criteria": "套接字超时选项读路径与 **`issue-204`**/**`read_timeval_user`** 一致，或可证明 **`sockaddr`/`timeval` uapi 无 padding 风险。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos：通过（exit 0；仓库内既有 dead_code/clippy 告警未改）"
+  },
+  "suggested_fix": "为 **`SO_RCVTIMEO`/`SO_SNDTIMEO`** 特判：`optval.cast::<timeval>()` + **`read_timeval_user`**（或抽到 **`crate::time`**）。",
+  "references": ["man 7 socket", "issue-204", "issue-215", "issue-201"]
+}

@@ -146,7 +146,7 @@ impl FutexKey {
 
     /// Shortcut to create a `FutexKey` for the current task's address space.
     pub fn new_current(address: usize) -> Self {
-        Self::new(&current().as_thread().proc_data.aspace.lock(), address)
+        Self::new(&current().as_thread().proc_data.aspace.read(), address)
     }
 
     fn as_usize(&self) -> usize {
@@ -266,7 +266,33 @@ impl FutexTables {
     }
 }
 
-static SHARED_FUTEX_TABLES: Mutex<FutexTables> = Mutex::new(FutexTables::new());
+/// Sharded locks: different shared-memory regions contend on different mutexes.
+const SHARED_FUTEX_SHARDS: usize = 16;
+
+#[inline]
+fn shared_futex_shard(ptr: usize) -> usize {
+    let x = ptr ^ (ptr >> 12) ^ (ptr >> 24);
+    x % SHARED_FUTEX_SHARDS
+}
+
+static SHARED_FUTEX_TABLES: [Mutex<FutexTables>; SHARED_FUTEX_SHARDS] = [
+    Mutex::new(FutexTables::new()),
+    Mutex::new(FutexTables::new()),
+    Mutex::new(FutexTables::new()),
+    Mutex::new(FutexTables::new()),
+    Mutex::new(FutexTables::new()),
+    Mutex::new(FutexTables::new()),
+    Mutex::new(FutexTables::new()),
+    Mutex::new(FutexTables::new()),
+    Mutex::new(FutexTables::new()),
+    Mutex::new(FutexTables::new()),
+    Mutex::new(FutexTables::new()),
+    Mutex::new(FutexTables::new()),
+    Mutex::new(FutexTables::new()),
+    Mutex::new(FutexTables::new()),
+    Mutex::new(FutexTables::new()),
+    Mutex::new(FutexTables::new()),
+];
 
 /// Returns the futex table for the given key.
 pub fn futex_table_for(key: &FutexKey) -> Arc<FutexTable> {
@@ -277,7 +303,8 @@ pub fn futex_table_for(key: &FutexKey) -> Arc<FutexTable> {
                 Ok(pages) => Weak::as_ptr(pages) as usize,
                 Err(key) => Weak::as_ptr(key) as usize,
             };
-            SHARED_FUTEX_TABLES.lock().get_or_insert(ptr)
+            let shard = shared_futex_shard(ptr);
+            SHARED_FUTEX_TABLES[shard].lock().get_or_insert(ptr)
         }
     }
 }

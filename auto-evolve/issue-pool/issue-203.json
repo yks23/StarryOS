@@ -1,0 +1,33 @@
+{
+  "id": "issue-203",
+  "title": "membarrier：`MEMBARRIER_CMD_QUERY` 掩码声明支持 `GLOBAL*`/`PRIVATE*`，但 `GLOBAL` 类仅本 CPU `fence`，与 Linux 跨核屏障不等价",
+  "status": "resolved",
+  "created_at": "2026-04-16T16:00:00Z",
+  "severity": "medium",
+  "fix_summary": "**`SUPPORTED_COMMANDS`** 不再包含 **`GLOBAL`/`GLOBAL_EXPEDITED`/`REGISTER_GLOBAL_EXPEDITED`**；**`QUERY`** 仅宣称 **`PRIVATE_EXPEDITED`**、**`REGISTER_PRIVATE_EXPEDITED`**、**`PRIVATE_EXPEDITED_SYNC_CORE`**、**`REGISTER_PRIVATE_EXPEDITED_SYNC_CORE`**（与当前本 hart **`SeqCst` fence** / RISC-V **`fence.i`** 一致）。**`GLOBAL*`** 与 **`REGISTER_GLOBAL_EXPEDITED`** 调用落入 **`EINVAL`**。删除 **`ProcessData::membarrier_reg_global_expedited`**。模块注释说明 **issue-203** 与 SMP 前 **QUERY** 语义。**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过。",
+  "files_changed": [
+    "kernel/src/syscall/sync/membarrier.rs",
+    "kernel/src/task/mod.rs",
+    "auto-evolve/issue-pool/issue-203.json",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/tests/test_membarrier.c"
+  ],
+  "description": "**`kernel/src/syscall/sync/membarrier.rs`** **`MEMBARRIER_CMD_QUERY`** 返回 **`SUPPORTED_COMMANDS`**，其中包含 **`MEMBARRIER_CMD_GLOBAL`**、**`MEMBARRIER_CMD_GLOBAL_EXPEDITED`**、**`PRIVATE_EXPEDITED`** 等位，表示「本内核实现这些命令号」。**`MEMBARRIER_CMD_GLOBAL`/`_GLOBAL_EXPEDITED`/`_PRIVATE_*`** 的执行路径仅调用 **`atomic::fence(Ordering::SeqCst)`**（及 RISC-V 上 **`PRIVATE_EXPEDITED_SYNC_CORE` 的 `fence.i`**），**不**向其它 CPU 发 **IPI**、也 **不** 保证与 **Linux `membarrier.c`** 相同的 **全系统/进程内远程 hart 序**。模块注释已写明 **SMP** 缺口，但 **`QUERY` 位图仍与 Linux 可报告能力同形**，易使 **JIT（如 JVM）/用户态 RCU替代** 误判「可依赖全局 membarrier」而在 **多核 Starry** 上获得 **弱于 Linux** 的序。**`issue-024`**（旧「仅 `compiler_fence`」）与当前 **`SeqCst` fence** 已不完全一致；本条聚焦 **QUERY 语义与实现匹配度**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["membarrier"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/sync/membarrier.rs:37-75", "kernel/src/syscall/sync/membarrier.rs:100-137"],
+    "related_files": [],
+    "key_insight": "`SUPPORTED_COMMANDS` 含 GLOBAL；实现仅本地 fence"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "多核 **QEMU** 上：线程 A **`MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED`**，线程 B **`GLOBAL_EXPEDITED`**，配合内存序压力测试；与 **Linux** 对照是否出现 **可见性** 差异。",
+    "expected_output_contains": "",
+    "pass_criteria": "`QUERY` 位图不宣称尚未实现的跨核语义；或实现 Linux 级全局屏障；或文档/API 明确仅本地 hart 序。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（2026-04-12）"
+  },
+  "suggested_fix": "在具备 **SMP** 前，**`SUPPORTED_COMMANDS`** 去掉 **`GLOBAL`/`GLOBAL_EXPEDITED`**（及依赖全局语义的位），仅保留 **`QUERY` + `REGISTER_*` + 已与本地 fence 一致的 `PRIVATE_*`**；或在 **`QUERY` 文档/发行说明** 中声明与 **Linux** 差异。",
+  "references": ["man 2 membarrier", "Linux kernel/membarrier.c", "issue-024"]
+}

@@ -1,0 +1,27 @@
+{
+  "id": "issue-212",
+  "title": "rt_sigqueueinfo/rt_tgsigqueueinfo：`make_queue_signal_info` 对用户 `SignalInfo`/`siginfo_t` 整结构 `assume_init`（issue-206 残余）",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "新增 **`read_signal_info_user`**：`si_signo`/`si_errno`/`si_code` 分别 **`addr_of!` + `vm_read`**；**`_sifields`** 用 **`vm_read_slice`** 填入 **`MaybeUninit<__sifields>`** 后组装 **`siginfo`**（**`linux_raw_sys`** 布局）。**`make_queue_signal_info`** 改为 **`read_signal_info_user(sig)?`**，去掉整颗 **`vm_read_uninit`/`assume_init`**。",
+  "files_changed": ["kernel/src/syscall/signal.rs"],
+  "description": "**`kernel/src/syscall/signal.rs`** **`make_queue_signal_info`**（约 **290–311** 行）在非零 **`signo`** 且 **`sig` 非空时，通过 **`unsafe { sig.vm_read_uninit()?.assume_init() }`** 读入整颗 **`SignalInfo`**，再 **`set_signo`** 与权限校验。**`issue-206` fix_summary** 已声明此路径保留、与已改字段读的 **`rt_sigprocmask`/sigaction/sigtimedwait/sigsuspend/sigaltstack** 正交。**`siginfo_t`/`SignalInfo`** 多字段、对齐与 **`linux_raw_sys`** 演进风险高于单字 **`sigset_t`**。**更稳妥**：对齐 Linux **`copy_siginfo_from_user`** 思路——按 **`si_signo`/`si_code`/`si_pid`** 等分阶段 **`vm_read`**，或 **`zerocopy::FromBytes`**；至少对 **`_sifields`** 联合体内存按 **`uapi` 文档**白名单解析。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["rt_sigqueueinfo", "rt_tgsigqueueinfo"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/signal.rs:290-335"],
+    "related_files": [],
+    "key_insight": "`assume_init` 仅此一处（signal.rs）；由两 syscall 共用"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查 + **`linux_raw_sys` 升级**试编译；畸形用户 **`siginfo`** 模糊思路。",
+    "expected_output_contains": "",
+    "pass_criteria": "消除 **`SignalInfo`** 整颗 **`assume_init`** 或证明布局锁定且与 kernel **copy_siginfo** 等价。",
+    "last_result": "通过：`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`（exit 0，仅有既有 warning）。"
+  },
+  "suggested_fix": "分字段读或引入与 **`starry-signal` `SignalInfo`** 匹配的 **`FromBytes`**；权限校验在读之后保持。",
+  "references": ["man 2 rt_sigqueueinfo", "Linux copy_siginfo_from_user", "issue-206"]
+}

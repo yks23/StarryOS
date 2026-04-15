@@ -1,0 +1,32 @@
+{
+  "id": "issue-346",
+  "title": "`setpgid(2)`：`sys_setpgid` 在 `pgid != 0` 时用 `get_process_group(pgid)` 查表失败映射为 `NoSuchProcess`（ESRCH）；POSIX `setpgid` 对非法 `pgid` 常规定为 `EINVAL`，且 `ESRCH` 更典型地用于 `pid` 参数无效",
+  "status": "resolved",
+  "created_at": "2026-04-12T12:30:00Z",
+  "resolved_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/task/job.rs`** **`sys_setpgid`** **（** **约** **31–59** **行** **）** **：** **`pgid != 0`** **时** **`target.move_to_group(&get_process_group(pgid)?)`** **，** **`get_process_group`** **（** **`kernel/src/task/ops.rs`** **约** **144–148** **行** **）** **在** **`PROCESS_GROUP_TABLE`** **无** **条目** **时** **返回** **`AxError::NoSuchProcess`** **。** **Linux** **`setpgid`** **对** **不存在** **的** **进程** **组** **或** **本会话** **不可用** **`pgid`** **常** **返回** **`EINVAL`** **或** **`EPERM`** **，** **而** **`ESRCH`** **通常** **保留** **给** **`pid`** **找不到** **进程** **。** **与** **`issue-324`** **等** **「** **标志** **/** **校验** **顺序** **」** **类** **条目** **正交** **：** **此处** **为** **`pgid`** **查** **表** **失败** **的** **`errno`** **映射** **。**\n\n**建议** **：** **对照** **`kernel/sys.c` `setpgid`** **，** **将** **未知** **`pgid`** **映射** **为** **`EINVAL`** **（** **或** **在** **确认** **会话** **后** **`EPERM`** **）** **，** **并** **与** **`pid`** **的** **`ESRCH`** **区分** **；** **或** **注释** **说明** **与** **上游** **差异** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["setpgid"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/job.rs:31-59", "kernel/src/task/ops.rs:144-148"],
+    "related_files": [],
+    "key_insight": "setpgid unknown pgid ESRCH vs EINVAL"
+  },
+  "fix_summary": "`sys_setpgid`：`pgid != 0` 时 `get_process_group(pgid)` 无表项将 `NoSuchProcess` 映射为 `InvalidInput`（EINVAL），与 Linux/POSIX 对非法 `pgid` 的常见语义一致；`pid` 无效/僵尸仍 `ESRCH`（issue-093）。`get_process_group` 本身未改。",
+  "files_changed": [
+    "kernel/src/syscall/task/job.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-346.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：用户态 `setpgid(0, bogus_pgid)` 对照 Linux `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "`pgid` 无效时 errno 与 Linux/POSIX 一致或文档化。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "对「无此进程组」返回 `InvalidInput`（EINVAL）或按 Linux 分支返回 `EPERM`，保留 `NoSuchProcess` 仅用于 `get_process_data(pid)` 失败路径。",
+  "references": ["man 2 setpgid", "kernel/src/syscall/task/job.rs", "kernel/src/task/ops.rs"]
+}

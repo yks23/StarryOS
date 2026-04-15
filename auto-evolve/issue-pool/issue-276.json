@@ -1,0 +1,27 @@
+{
+  "id": "issue-276",
+  "title": "sendmsg/recvmsg：`msghdr` 中指针与长度自洽性未校验，与 Linux `EINVAL` 分叉",
+  "status": "resolved",
+  "created_at": "2026-04-12T20:00:00Z",
+  "severity": "low",
+  "fix_summary": "新增 `validate_msghdr_ptr_len_consistency`：`msg_control.is_null() && msg_controllen != 0` 或 `msg_name.is_null() && msg_namelen != 0` → `InvalidInput`（EINVAL）。`sys_sendmsg`/`sys_recvmsg` 在快照 `msghdr` 后、解析 cmsg / `IoVectorBuf` / `recv_on_socket` 前调用。",
+  "files_changed": ["kernel/src/syscall/net/io.rs"],
+  "description": "**`kernel/src/syscall/net/io.rs`** **`sys_sendmsg`**（约 **113–158** 行）与 **`sys_recvmsg`**（约 **320–344** 行）从用户快照 **`msghdr`** 后，仅在 **`msg.msg_control` 非空** 时解析 **`msg_controllen`** 指向的 **cmsg**；**未** 在入口拒绝 **`msg_control == NULL` 且 `msg_controllen != 0`** 的 **自相矛盾** 组合。\n\n**Linux** **`sendmsg`/`recvmsg`**（**`verify_iovec`/`__sys_sendmsg` 等路径**）：**`msg_controllen` 非零** 时通常要求 **`msg_control` 为合法用户指针**，否则 **`errno=EINVAL`**（**与** **「长度为 0」** **可** **配** **NULL** **的** **情况** **区分**）。**当前**：**`msg_control == NULL` 且 `msg_controllen > 0`** 时 **Starry** **按** **无** **cmsg** **继续** **收/发**，**不** **报错**。\n\n**同类**：**`msg_name == NULL` 且 `msg_namelen != 0`** 时，**`send_on_socket`**（**`sendmsg`**）在 **`addr.is_null()`** 分支 **直接** **`None`**（约 **64–70** 行 **`io.rs`**），**未** **对** **非零** **`msg_namelen`** **显式** **`EINVAL`**；**Linux** **常** **对** **不一致** **`msghdr`** **返回** **`EINVAL`**（**具体** **以** **内核** **`move_addr_to_user`/`copy_msghdr_from_user`** **校验** **为准**）。\n\n**建议**：在 **`sys_sendmsg`/`sys_recvmsg`** 取得 **`m`** **后**、**进入** **socket** **收/发** **前** **增加** **与** **Linux** **一致** **的** **自洽** **检查**（**至少** **control** **与** **name** **两** **组** **指针/长度**）。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["sendmsg", "recvmsg"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/io.rs:113-158", "kernel/src/syscall/net/io.rs:320-344", "kernel/src/syscall/net/io.rs:54-70"],
+    "related_files": [],
+    "key_insight": "NULL 指针与非零 len 组合未 EINVAL"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 Linux `sendmsg`/`recvmsg` 对 `msghdr` 的 EINVAL。",
+    "expected_output_contains": "",
+    "pass_criteria": "不一致 msghdr → EINVAL（InvalidInput），或与 Linux 一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `sys_sendmsg`/`sys_recvmsg` 开头校验：`(msg_control.is_null() && msg_controllen != 0)` 与 `(msg_name.is_null() && msg_namelen != 0)` → `InvalidInput`。",
+  "references": ["man 2 sendmsg", "man 2 recvmsg", "kernel/src/syscall/net/io.rs"]
+}

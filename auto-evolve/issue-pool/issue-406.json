@@ -1,0 +1,27 @@
+{
+  "id": "issue-406",
+  "title": "`truncate(2)`：空路径 `path==\"\"` 未在 `open` 前拒绝为 `EINVAL`",
+  "status": "resolved",
+  "created_at": "2026-04-13T05:05:00Z",
+  "severity": "low",
+  "description": "`kernel/src/syscall/fs/io.rs` **`sys_truncate`**（约 151–166 行）：**`path.get_as_str()`** **先于** **`length < 0`** **（** **issue-318** **verified** **）** **，** **继而** **`OpenOptions::open`**，**无** **`path.is_empty()`** **`→`** **`InvalidInput`** 早退。\n\nLinux **`truncate(2)`** 对 **空路径名** 通常 **`EINVAL`**（与 **issue-405** **`openat`** **open**、**issue-393** **`mkdirat`** **等** **空** **组件** **主题** **一致**）。**`ftruncate`** **经** **`fd`** **无** **此** **问题**（**issue-316** **旁** **）。\n\n建议：**`get_as_str`** **之后**、**`length`** **校验** **或** **`debug!`** **之前** **`path.is_empty()`** **`→`** **`InvalidInput`**，注释引用 issue-406 及 **issue-318**/**issue-393**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["truncate"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/io.rs:151-166"],
+    "related_files": [],
+    "key_insight": "`get_as_str` 后、`length < 0` 与 `OpenOptions::open` 前 `path.is_empty()` → `InvalidInput`；仍满足 path 先于 length 的 issue-318 意图（先读用户 path）"
+  },
+  "fix_summary": "`sys_truncate`：在 `path.get_as_str()` 之后、`length < 0` 与 `OpenOptions::open` 之前对空路径返回 `InvalidInput`，与 Linux及 issue-405/issue-393 空路径主题一致。",
+  "files_changed": ["kernel/src/syscall/fs/io.rs"],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：`truncate(\"\", 0)` 对照 Linux `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "空路径返回 EINVAL（`InvalidInput`）。",
+    "last_result": "通过：`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`（exit 0）"
+  },
+  "suggested_fix": "在 `sys_truncate` 中于 `open` 前增加 `if path.is_empty() { return Err(InvalidInput); }`，对齐 `sys_openat`（issue-405）/`sys_mkdirat`（issue-393）。",
+  "references": ["man 2 truncate", "kernel/src/syscall/fs/io.rs", "issue-318", "issue-316", "issue-393", "issue-405"]
+}

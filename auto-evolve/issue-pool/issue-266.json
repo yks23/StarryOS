@@ -1,0 +1,27 @@
+{
+  "id": "issue-266",
+  "title": "sendto/sendmsg：`SENDMSG_FLAGS_MASK` 含 `MSG_WAITALL`/`MSG_TRUNC` 等 recv 语义位，Linux `send(2)` 通常 EINVAL",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "从 `SENDMSG_FLAGS_MASK` 移除 `MSG_WAITALL` 与 `MSG_TRUNC`（仅 recv 语义）；`send_impl`/`sys_sendmsg` 的 `flags & !MASK` 校验因此对二者返回 `InvalidInput`（EINVAL），与 Linux send 一致。",
+  "files_changed": ["kernel/src/syscall/net/io.rs"],
+  "description": "**`kernel/src/syscall/net/io.rs`** **`SENDMSG_FLAGS_MASK`**（约 **31–45** 行）将 **`MSG_WAITALL`**、**`MSG_TRUNC`** 等与 **`MSG_DONTWAIT`/`MSG_MORE`** 一并列入 **send** 合法 **`flags`**；**`send_impl`** 仅检查 **未知高位** → **`EINVAL`**，**掩码内** 位一律交给 **`SendFlags::from_bits_truncate`** 与 **`Socket::send`**。\n\n**Linux `send(2)`/`sendto(2)`** 手册列出的 **`flags`** 主要为 **`MSG_CONFIRM`**、**`MSG_DONTWAIT`**、**`MSG_EOR`**、**`MSG_MORE`**、**`MSG_NOSIGNAL`**、**`MSG_OOB`** 等；**`MSG_WAITALL`**、**`MSG_TRUNC`** 属于 **`recv(2)`** 语义，**`send`** 路径内核通常 **`sock_sendmsg`/`sendmsg`** 校验后返回 **`-EINVAL`**（**非**「静默忽略」）。\n\n**当前**：**`send(fd, buf, len, MSG_WAITALL)`** 在 **Starry** 可 **成功** 部分发送（**`WAITALL` 在 `axnet` `send_poller` 中不参与分支**，等效 **忽略**），在 **Linux** 多为 **`errno=EINVAL`**，**可移植程序** 行为分叉。\n\n**建议**：将 **`SENDMSG_FLAGS_MASK`** 收窄为 **Linux send 接受集合**（或与 **`axnet` `SendFlags` 实际解释一致** 的 **子集**），对 **`MSG_WAITALL`/`MSG_TRUNC`** 等 **显式** **`InvalidInput`**；或在 **`send_impl`** 内 **`flags & (MSG_WAITALL|MSG_TRUNC|…)`** → **拒绝**。\n\n**注意**：**`MSG_OOB`** 等 **Starry** 仍可能 **`Unsupported`**，与 **掩码允许后再失败** 的策略可并存。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["sendto", "sendmsg"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/io.rs:31-101"],
+    "related_files": ["vendor/axnet-ng/src/socket.rs", "vendor/axnet-ng/src/general.rs"],
+    "key_insight": "send 掩码含 recv-only MSG_*，Linux EINVAL"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；`send(sock, buf, n, MSG_WAITALL)` 与 Linux 对照。",
+    "expected_output_contains": "",
+    "pass_criteria": "send 拒绝 recv-only MSG_* 或与 Linux 一致；否则文档化。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "收窄 SENDMSG_FLAGS_MASK 或对 MSG_WAITALL|MSG_TRUNC 单独 EINVAL。",
+  "references": ["man 2 send", "man 2 recv", "kernel/src/syscall/net/io.rs"]
+}

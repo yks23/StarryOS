@@ -1,0 +1,27 @@
+{
+  "id": "issue-289",
+  "title": "pipe2：用户 `fds` 在 `Pipe::new` 与 `add_to_fd_table` 之后才 `vm_write`，非法 `fds` 时错误顺序可与 Linux 分叉",
+  "status": "resolved",
+  "created_at": "2026-04-13T04:00:00Z",
+  "severity": "low",
+  "fix_summary": "在解析 `PipeFlags` 之后、`Pipe::new` 之前调用 `UserPtr::from(fds).get_as_mut()?`，对用户输出缓冲区做可写区域校验（与 issue-286 `socketpair` 策略一致），使非法/不可写 `fds` 时先于管道与 fd 分配返回 `BadAddress`（EFAULT），与 Linux `access_ok`/拷贝顺序更一致。",
+  "files_changed": ["kernel/src/syscall/fs/pipe.rs"],
+  "description": "**`kernel/src/syscall/fs/pipe.rs`** **`sys_pipe2`**（**约** **21–49** **行** **）** **在** **解析** **`PipeFlags`** **后** **立即** **`Pipe::new()`** **，** **再** **`add_to_fd_table`** **两次** **，** **最后** **`fds.vm_write([read_fd, write_fd])`** **。** **未** **在** **创建** **管道** **或** **分配** **fd** **之前** **对** **用户** **`fds`** **做** **`get_as_mut()`** **/** **`is_null()`** **等** **探测** **。**\n\n**当** **`fds`** **为** **NULL** **或** **不可写** **时** **，** **失败** **发生** **在** **已** **创建** **内核** **管道** **对象** **并** **占用** **两个** **fd** **槽** **之后** **（** **虽** **在** **`vm_write`** **失败** **路径** **上** **会** **`close_file_like`** **回收** **，** **见** **issue-148** **）** **。** **Linux** **`pipe2(2)`** **路径** **通常** **在** **向** **用户** **拷贝** **两个** **int** **前** **对** **`pipefd`** **做** **`access_ok`/`put_user`** **探测** **；** **`EFAULT`** **与** **仅** **由** **`flags`** **触发的** **`EINVAL`** **等** **的** **先后** **可能** **与** **「** **先** **建** **管** **再** **`EFAULT`****」** **不同** **（** **与** **issue-286** **`socketpair`** **已** **修复** **的** **输出** **指针** **早退** **、** **issue-281**/**284** **类** **同类** **）** **。**\n\n**建议**：在 **`Pipe::new()`** **之前** **`fds.get_as_mut()`** **或** **等价** **可写** **检查** **（** **仅** **校验** **指针** **，** **不** **提前** **占用** **fd** **）** **；** **或** **文档化** **与** **Linux** **在** **错误** **顺序** **上的** **差异** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["pipe2"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/pipe.rs:21-49"],
+    "related_files": [],
+    "key_insight": "pipe2 先建管与占 fd 再 vm_write fds，非法 fds 时错误顺序与 Linux 可能不同"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 Linux pipe2 对用户 `pipefd` 的校验顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "非法 `fds` 时错误码与顺序与目标 Linux 一致，或显式文档化差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `Pipe::new` 之前对 `fds` 做 `get_as_mut()` 或等价 access_ok，与 issue-286 策略一致。",
+  "references": ["man 2 pipe2", "kernel/src/syscall/fs/pipe.rs", "issue-148", "issue-286", "issue-281"]
+}

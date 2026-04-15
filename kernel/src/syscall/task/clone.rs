@@ -7,13 +7,14 @@ use axtask::{AxTaskExt, current, spawn_task};
 use bitflags::bitflags;
 use kspin::SpinNoIrq;
 use linux_raw_sys::general::*;
+use memory_addr::VirtAddr;
 use starry_process::Pid;
-use starry_signal::Signo;
 use starry_vm::VmMutPtr;
 
 use crate::{
     file::{FD_TABLE, FileLike, PidFd, close_file_like},
     mm::copy_from_kernel,
+    syscall::signal::parse_signo_u64,
     task::{AsThread, ProcessData, Thread, add_task_to_table, new_user_task},
 };
 
@@ -125,7 +126,7 @@ impl CloneArgs {
             | CloneFlags::NEWCGROUP;
 
         if flags.intersects(namespace_flags) {
-            warn!("sys_clone/sys_clone3: namespace flags detected, stub support only");
+            return Err(AxError::Unsupported);
         }
 
         Ok(())
@@ -154,10 +155,10 @@ impl CloneArgs {
             flags, exit_signal, stack, tls
         );
 
-        let exit_signal = if exit_signal > 0 {
-            Some(Signo::from_repr(exit_signal as u8).ok_or(AxError::InvalidInput)?)
-        } else {
+        let exit_signal = if exit_signal == 0 {
             None
+        } else {
+            Some(parse_signo_u64(exit_signal)?)
         };
 
         let mut new_uctx = *uctx;
@@ -169,26 +170,21 @@ impl CloneArgs {
         }
         new_uctx.set_retval(0);
 
-        let set_child_tid = if flags.contains(CloneFlags::CHILD_SETTID) {
-            child_tid
-        } else {
-            0
-        };
-
         let curr = current();
         let old_proc_data = &curr.as_thread().proc_data;
 
-        let mut new_task = new_user_task(&curr.name(), new_uctx, set_child_tid);
+        let mut new_task = new_user_task(&curr.name(), new_uctx);
 
         let tid = new_task.id().as_u64() as Pid;
         if flags.contains(CloneFlags::PARENT_SETTID) && parent_tid != 0 {
-            (parent_tid as *mut Pid).vm_write(tid).ok();
+            // Before fork/ProcessData/spawn: align with CLONE_PIDFD and Linux (EFAULT → syscall fails).
+            (parent_tid as *mut Pid).vm_write(tid)?;
         }
 
         let new_proc_data = if flags.contains(CloneFlags::THREAD) {
             new_task
                 .ctx_mut()
-                .set_page_table_root(old_proc_data.aspace.lock().page_table_root());
+                .set_page_table_root(old_proc_data.aspace.read().page_table_root());
             old_proc_data.clone()
         } else {
             let proc = if flags.contains(CloneFlags::PARENT) {
@@ -201,14 +197,18 @@ impl CloneArgs {
             let aspace = if flags.contains(CloneFlags::VM) {
                 old_proc_data.aspace.clone()
             } else {
-                let mut aspace = old_proc_data.aspace.lock();
-                let aspace = aspace.try_clone()?;
-                copy_from_kernel(&mut aspace.lock())?;
-                aspace
+                let mut old_guard = old_proc_data.aspace.write();
+                let new_aspace = old_guard.try_clone()?;
+                drop(old_guard);
+                {
+                    let mut g = new_aspace.write();
+                    copy_from_kernel(&mut g)?;
+                }
+                new_aspace
             };
             new_task
                 .ctx_mut()
-                .set_page_table_root(aspace.lock().page_table_root());
+                .set_page_table_root(aspace.read().page_table_root());
 
             let signal_actions = if flags.contains(CloneFlags::SIGHAND) {
                 old_proc_data.signal.actions.clone()
@@ -222,10 +222,12 @@ impl CloneArgs {
                 proc,
                 old_proc_data.exe_path.read().clone(),
                 old_proc_data.cmdline.read().clone(),
+                old_proc_data.environment.read().clone(),
                 aspace,
                 signal_actions,
                 exit_signal,
             );
+            proc_data.copy_credentials_from(old_proc_data.as_ref());
             proc_data.set_umask(old_proc_data.umask());
             proc_data.set_heap_top(old_proc_data.get_heap_top());
 
@@ -258,6 +260,19 @@ impl CloneArgs {
         let thr = Thread::new(tid, new_proc_data.clone());
         if flags.contains(CloneFlags::CHILD_CLEARTID) {
             thr.set_clear_child_tid(child_tid);
+        }
+        if flags.contains(CloneFlags::CHILD_SETTID) && child_tid != 0 {
+            // Linux: child's tid at `child_tidptr` before returning to parent (EFAULT fails clone).
+            // Use the child's `AddrSpace` so fork (non-`CLONE_VM`) updates the child's mapping, not
+            // the parent's COW view. issue-413.
+            let vaddr = VirtAddr::from(child_tid);
+            let tid_bytes = unsafe {
+                core::slice::from_raw_parts(
+                    (&tid as *const Pid).cast::<u8>(),
+                    core::mem::size_of::<Pid>(),
+                )
+            };
+            new_proc_data.aspace.read().write(vaddr, tid_bytes)?;
         }
         if flags.contains(CloneFlags::PIDFD) && pidfd != 0 {
             let pidfd_obj = if flags.contains(CloneFlags::THREAD) {

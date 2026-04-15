@@ -1,11 +1,11 @@
-use core::time::Duration;
-
 use axerrno::{AxError, AxResult};
+use axhal::time::TimeValue;
 use axpoll::IoEvents;
-use axtask::future::{self, block_on, poll_io};
+use axtask::future::{self, block_on, interruptible, poll_io};
 use bitflags::bitflags;
 use linux_raw_sys::general::{
-    EPOLL_CLOEXEC, EPOLL_CTL_ADD, EPOLL_CTL_DEL, EPOLL_CTL_MOD, epoll_event, timespec,
+    EPOLL_CLOEXEC, EPOLL_CTL_ADD, EPOLL_CTL_DEL, EPOLL_CTL_MOD, EPOLLEXCLUSIVE, EPOLLWAKEUP,
+    epoll_event, timespec,
 };
 use starry_signal::SignalSet;
 
@@ -13,11 +13,12 @@ use crate::{
     file::{
         FileLike,
         epoll::{Epoll, EpollEvent, EpollFlags},
+        get_file_like,
     },
     mm::{UserConstPtr, UserPtr, nullable},
     syscall::signal::check_sigset_size,
     task::with_blocked_signals,
-    time::TimeValueLike,
+    time::{TimeValueLike, read_timespec_user},
 };
 
 bitflags! {
@@ -27,6 +28,13 @@ bitflags! {
         const CLOEXEC = EPOLL_CLOEXEC;
     }
 }
+
+/// Linux `epoll_event.events` bits accepted by `epoll_ctl` (`IoEvents` ∪ `EpollFlags` ∪
+/// `EPOLLEXCLUSIVE`/`EPOLLWAKEUP`). The latter two are stripped before registration (not modeled).
+const KNOWN_EPOLL_EVENTS_MASK: u32 =
+    IoEvents::all().bits() | EpollFlags::all().bits() | EPOLLEXCLUSIVE | EPOLLWAKEUP;
+
+const STRIP_EPOLL_CTL_UNUSED: u32 = EPOLLEXCLUSIVE | EPOLLWAKEUP;
 
 pub fn sys_epoll_create1(flags: u32) -> AxResult<isize> {
     let flags = EpollCreateFlags::from_bits(flags).ok_or(AxError::InvalidInput)?;
@@ -45,11 +53,22 @@ pub fn sys_epoll_ctl(
     let epoll = Epoll::from_fd(epfd)?;
     debug!("sys_epoll_ctl <= epfd: {epfd}, op: {op}, fd: {fd}");
 
+    // Linux `epoll_ctl(2)` / `ep_insert`: `fd` must not be the epoll instance itself → EINVAL.
+    if fd == epfd {
+        return Err(AxError::InvalidInput);
+    }
+
     let parse_event = || -> AxResult<(EpollEvent, EpollFlags)> {
         let event = event.get_as_ref()?;
-        let events = IoEvents::from_bits_truncate(event.events);
+        let raw = event.events;
+        if raw & !KNOWN_EPOLL_EVENTS_MASK != 0 {
+            return Err(AxError::InvalidInput);
+        }
+        let masked = raw & !STRIP_EPOLL_CTL_UNUSED;
+        let events =
+            IoEvents::from_bits(masked & IoEvents::all().bits()).ok_or(AxError::InvalidInput)?;
         let flags =
-            EpollFlags::from_bits(event.events & !events.bits()).ok_or(AxError::InvalidInput)?;
+            EpollFlags::from_bits(masked & EpollFlags::all().bits()).ok_or(AxError::InvalidInput)?;
         Ok((
             EpollEvent {
                 events,
@@ -60,10 +79,13 @@ pub fn sys_epoll_ctl(
     };
     match op {
         EPOLL_CTL_ADD => {
+            // Linux epoll_ctl: validate target fd (EBADF) before copy_from_user(event) (EFAULT).
+            let _ = get_file_like(fd)?;
             let (event, flags) = parse_event()?;
             epoll.add(fd, event, flags)?;
         }
         EPOLL_CTL_MOD => {
+            let _ = get_file_like(fd)?;
             let (event, flags) = parse_event()?;
             epoll.modify(fd, event, flags)?;
         }
@@ -79,14 +101,17 @@ fn do_epoll_wait(
     epfd: i32,
     events: UserPtr<epoll_event>,
     maxevents: i32,
-    timeout: Option<Duration>,
+    timeout: Option<TimeValue>,
     sigmask: UserConstPtr<SignalSet>,
     sigsetsize: usize,
 ) -> AxResult<isize> {
-    check_sigset_size(sigsetsize)?;
     debug!("sys_epoll_wait <= epfd: {epfd}, maxevents: {maxevents}, timeout: {timeout:?}");
 
+    // Linux `do_epoll_pwait`: `fget(epfd)` (EBADF) before `copy_sigset_from_user` / `sigsetsize`
+    // validation (EINVAL); matches issue-334 `ppoll` / issue-338 `rt_sigtimedwait` ordering theme.
     let epoll = Epoll::from_fd(epfd)?;
+
+    check_sigset_size(sigsetsize)?;
 
     if maxevents <= 0 {
         return Err(AxError::InvalidInput);
@@ -95,14 +120,18 @@ fn do_epoll_wait(
 
     with_blocked_signals(
         nullable!(sigmask.get_as_ref())?.copied(),
-        || match block_on(future::timeout(
-            timeout,
-            poll_io(epoll.as_ref(), IoEvents::IN, false, || {
-                epoll.poll_events(events)
-            }),
-        )) {
-            Ok(r) => r.map(|n| n as _),
-            Err(_) => Ok(0),
+        || {
+            // Align with `do_poll` / `do_select` (issue-355 / issue-364): `interruptible`(`timeout_at`(`poll_io`));
+            // `Elapsed` → timeout (0 events); `Interrupted` → `EINTR` (issue-365).
+            match block_on(interruptible(future::timeout_at(
+                timeout,
+                poll_io(epoll.as_ref(), IoEvents::IN, false, || epoll.poll_events(events)),
+            ))) {
+                Ok(Ok(Ok(n))) => Ok(n as isize),
+                Ok(Ok(Err(e))) => Err(e),
+                Ok(Err(_elapsed)) => Ok(0),
+                Err(_) => Err(AxError::Interrupted),
+            }
         },
     )
 }
@@ -117,7 +146,7 @@ pub fn sys_epoll_pwait(
 ) -> AxResult<isize> {
     let timeout = match timeout {
         -1 => None,
-        t if t >= 0 => Some(Duration::from_millis(t as u64)),
+        t if t >= 0 => Some(TimeValue::from_millis(t as u64)),
         _ => return Err(AxError::InvalidInput),
     };
     do_epoll_wait(epfd, events, maxevents, timeout, sigmask, sigsetsize)
@@ -131,8 +160,13 @@ pub fn sys_epoll_pwait2(
     sigmask: UserConstPtr<SignalSet>,
     sigsetsize: usize,
 ) -> AxResult<isize> {
-    let timeout = nullable!(timeout.get_as_ref())?
-        .map(|ts| ts.try_into_time_value())
-        .transpose()?;
+    // issue-216: field-wise read (same as pselect6/ppoll / issue-215).
+    let timeout = if timeout.is_null() {
+        None
+    } else {
+        Some(
+            read_timespec_user(timeout.address().as_usize() as *const timespec)?.try_into_time_value()?,
+        )
+    };
     do_epoll_wait(epfd, events, maxevents, timeout, sigmask, sigsetsize)
 }

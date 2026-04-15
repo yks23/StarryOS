@@ -1,0 +1,27 @@
+{
+  "id": "issue-412",
+  "title": "`fcntl(2)` `F_SETFL`：`sys_fcntl` 在 `get_file_like` 之前拒绝非法 `arg` 位，违反 Linux `EBADF` 先于 `EINVAL` 分层",
+  "status": "resolved",
+  "created_at": "2026-04-12T20:00:00Z",
+  "severity": "low",
+  "description": "`kernel/src/syscall/fs/fd_ops.rs` **`sys_fcntl`** **`F_SETFL`** **分支**（约 **358–377** **行**）：**先** **`arg as u32`** **并** **`arg & !F_SETFL_MASK`** **`→`** **`InvalidInput`** **，** **再** **`get_file_like(fd)?`** **。**\n\n**Linux** **`__do_sys_fcntl`** **`/`** **`do_fcntl`** **路径** **通常** **先** **`fd_fget(fd)`** **`/`** **`fget`** **（** **无效** **`fd`** **`→`** **`EBADF`** **）** **，** **再** **对** **`F_SETFL`** **校验** **`arg`** **未知** **`O_*`** **位** **`→`** **`EINVAL`** **（** **见** **`fs/fcntl.c`** **）** **。**\n\n因此当 **调用方** **同时** **传入** **无效** **`fd`** **与** **含** **保留** **`F_SETFL`** **位** **的** **`arg`** **时** **，** **Starry** **返回** **`EINVAL`** **`(`** **`InvalidInput`** **)** **，** **Linux** **返回** **`EBADF`** **。** **`F_GETFL`** **等** **分支** **已** **先** **`get_file_like`** **（** **issue-252** **verified** **旁** **）** **；** **`F_SETFL`** **单独** **逆序** **。**\n\n建议：**`F_SETFL`** **先** **`get_file_like(fd)?`** **（** **或** **与** **`F_GETFL`** **对称** **的** **`f`** **解析** **）** **，** **再** **`arg & !F_SETFL_MASK`** **`→`** **`InvalidInput`** **，** **最后** **`set_nonblocking`** **`/`** **`f_setfl_rest_*`** **；** **注释** **引用** **issue-412** **及** **issue-252** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["fcntl"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/fd_ops.rs:335-377"],
+    "related_files": [],
+    "key_insight": "`F_SETFL` 非法位校验须在 `fget` 之后，与 Linux `do_fcntl`/`dup_fd`+`F_DUPFD` 的 EBADF 优先主题一致（issue-410 旁）"
+  },
+  "fix_summary": "`sys_fcntl` `F_SETFL`：先 `get_file_like(fd)`（EBADF），再 `arg & !F_SETFL_MASK`（EINVAL），与 Linux `do_fcntl` 一致；注释 issue-412/issue-252。",
+  "files_changed": ["kernel/src/syscall/fs/fd_ops.rs"],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：无效 `fd` + 非法 `F_SETFL` `arg` 对照 Linux `errno` 顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "无效 `fd` 先 `EBADF`；合法 `fd` 下非法 `arg` 位再 `EINVAL`。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过"
+  },
+  "suggested_fix": "将 `F_SETFL` 分支改为先 `let f = get_file_like(fd)?;`，再校验 `F_SETFL_MASK`，然后复用现有 `set_nonblocking`/`f_setfl_rest_for_axfs_file` 逻辑。",
+  "references": ["man 2 fcntl", "linux fs/fcntl.c", "kernel/src/syscall/fs/fd_ops.rs", "issue-252", "issue-410"]
+}

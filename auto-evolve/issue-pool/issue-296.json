@@ -1,0 +1,27 @@
+{
+  "id": "issue-296",
+  "title": "`access(2)` 仅 `x86_64` 分发；`fs stat` 段无与 `poll`/`renameat` 同级的 ABI 说明，`faccessat` 路径未在旁注",
+  "status": "resolved",
+  "created_at": "2026-04-13T10:05:00Z",
+  "severity": "low",
+  "fix_summary": "在 `mod.rs` 中 `Sysno::access` 的 `#[cfg(target_arch = \"x86_64\")]` 前增加与 poll/renameat 同风格的注释：riscv64/aarch64 通常无独立 `__NR_access` 与 `Sysno::access`，libc `access(2)` 经 `faccessat`/`faccessat2`（`AT_FDCWD`）→ `sys_faccessat2`。`executor-memory` 的 `faccessat2` 条目中补充 `access` 路由与 issue-296。",
+  "files_changed": ["kernel/src/syscall/mod.rs", "auto-evolve/memory/executor-memory.md"],
+  "description": "**`kernel/src/syscall/mod.rs`** **`fs` **stat** **段** **`Sysno::access`** **置于** **`#[cfg(target_arch = \"x86_64\")]`** **（** **约** **333–334** **行** **）** **；** **`Sysno::faccessat`/`faccessat2`** **无** **此** **限制** **。** **与** **`poll`/`renameat`** **同类** **：** **`syscalls`** **`riscv64`** **通常** **无** **独立** **`Sysno::access`** **（** **legacy** **单** **路径** **号** **）** **；** **glibc/musl** **`access(2)`** **经** **`faccessat`/`faccessat2`** **（** **AT_FDCWD** **）** **进入** **已** **接线** **的** **`sys_faccessat2`** **。**\n\n**`io_mpx`** **`poll`** **与** **`renameat`** **分支** **前** **已有** **多** **行** **ABI** **注释** **（** **issue-291** **/** **issue-292** **）** **；** **`access`** **前** **无** **对称** **说明** **，** **读者** **易** **误判** **为** **riscv** **遗漏** **`access`** **实现** **。**\n\n**建议**：在 **`Sysno::access`** **`#[cfg]`** **块** **前** **补充** **简短** **注释** **（** **或** **在** **`executor-memory`** **中** **单列** **`access`/`faccessat`** **）** **，** **明确** **非** **x86** **上** **`access(2)`** **用户态** **路由** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["access", "faccessat", "faccessat2"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/mod.rs:326-340"],
+    "related_files": ["auto-evolve/memory/executor-memory.md"],
+    "key_insight": "access 仅 x86_64 注册；riscv 无 Sysno::access，libc 走 faccessat；旁注缺失与 poll/renameat 不对称"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 `syscalls` riscv64 `Sysno` 与 libc `access` 实现。",
+    "expected_output_contains": "",
+    "pass_criteria": "`mod.rs` 或 executor 文档对 `access` 与 `faccessat*` 的关系有明确说明，或经评审认为无需补充。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `Sysno::access` 分支前增加与 `poll`/`renameat` 段风格一致的 ABI/路由说明注释。",
+  "references": ["man 2 access", "man 2 faccessat", "kernel/src/syscall/mod.rs", "issue-291", "issue-292", "issue-295"]
+}

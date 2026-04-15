@@ -1,0 +1,27 @@
+{
+  "id": "issue-310",
+  "title": "`msgget(2)`：`sys_msgget` 在解析 `key`/`msgflg`（`IPC_PRIVATE`、`IPC_CREAT`/`IPC_EXCL`、查找已有队列）之前先做 `MSGMNI` 队列数上限检查并可能返回 `ENOSPC`，与 Linux 在资源耗尽与非法参数组合时的错误优先级可能不完全一致",
+  "status": "resolved",
+  "created_at": "2026-04-19T12:05:00Z",
+  "severity": "low",
+  "fix_summary": "移除 `sys_msgget` 入口处的全局 `queue_count >= MSGMNI` 检查；在 `IPC_PRIVATE` 新建路径与「无既有 key 且 IPC_CREAT」新建路径中、分配前分别检查 `MSGMNI` → `ENOSPC`。打开已有 key、ENOENT、EEXIST 等路径不再被 ENOSPC 抢先。注释引用 Linux `ipcget`/issue-310、issue-307；更新 `executor-memory` 与 `issue-310.json`。",
+  "files_changed": ["kernel/src/syscall/ipc/msg.rs", "auto-evolve/memory/executor-memory.md"],
+  "description": "**`kernel/src/syscall/ipc/msg.rs`** **`sys_msgget`** **（** **约** **395–408** **行** **）** **在** **取得** **`MSG_MANAGER`** **锁** **后** **立即** **判断** **`queue_count() >= MSGMNI`** **→** **`ENOSPC`** **，** **尚未** **区分** **`key`** **/** **`msgflg`** **是否** **合法** **或** **是否** **可走** **`IPC_PRIVATE`** **快速** **创建** **路径** **。** **当** **系统** **队列** **已达** **上限** **且** **用户** **传入** **非法** **`msgflg`** **位** **或** **与** **`key`** **冲突** **的** **标志** **组合** **时** **，** **本** **实现** **固定** **先** **返回** **`ENOSPC`** **；** **Linux** **`ipcget`** **链** **对** **`msgflg`** **净化** **/** **`security`** **/** **`lookup`** **的** **先后** **可能** **不同** **，** **极端** **模糊** **测试** **下** **与** **上游** **错误** **码** **顺序** **可能** **不一致** **。** **与** **issue-303**/**issue-305**/**issue-307** **「** **资源** **/** **句柄** **解析** **与** **标量** **校验** **顺序** **」** **同类** **。**\n\n**建议** **：** **对照** **Linux** **`msgget`** **/** **`ipcget`** **实现** **顺序** **，** **按需** **重排** **或** **在** **`sys_msgget`** **注释** **中** **说明** **有意** **简化** **/** **与** **上游** **差异** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["msgget"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/ipc/msg.rs:395-423"],
+    "related_files": ["kernel/src/syscall/ipc/shm.rs"],
+    "key_insight": "msgget ENOSPC 与 key/msgflg 校验顺序"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：队列满 + 非法 msgflg 对照 Linux 返回顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游 `msgget` 错误优先级一致，或文档/注释明确说明差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "查阅 Linux `msgget`/`ipcget` 对 `MSGMNI` 与 `key`/`msgflg` 的处理顺序，按需重排或补充注释（可引用 issue-307）。",
+  "references": ["man 2 msgget", "kernel/src/syscall/ipc/msg.rs", "issue-307"]
+}

@@ -8,6 +8,8 @@ mod stat;
 mod timer;
 mod user;
 
+pub(crate) use self::timer::time_value_from_nanos;
+
 use alloc::{boxed::Box, string::String, sync::Arc, vec::Vec};
 use core::{
     cell::RefCell,
@@ -15,6 +17,7 @@ use core::{
     sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicUsize, Ordering},
 };
 
+use axerrno::{AxError, AxResult};
 use axpoll::PollSet;
 use axsync::{Mutex, spin::SpinNoIrq};
 use axtask::{TaskExt, TaskInner};
@@ -29,6 +32,23 @@ use starry_signal::{
 
 pub use self::{futex::*, ops::*, resources::*, signal::*, stat::*, timer::*, user::*};
 use crate::mm::AddrSpace;
+
+/// Sentinel for `setresuid` / `setresgid` / `setreuid` unused slots: Linux `(uid_t)-1` / `(gid_t)-1`.
+pub const CRED_NO_CHANGE: u32 = u32::MAX;
+
+/// Upper bound for `setgroups` / supplementary GIDs (see `NGROUPS_MAX` on Linux).
+pub const SUPP_GROUPS_MAX: usize = 4096;
+
+/// Job-control state shared by all threads in a process (`SIGSTOP` / `SIGCONT`).
+#[derive(Default)]
+pub struct JobCtl {
+    /// Present while the process is job-stopped (still alive, not a zombie).
+    pub stop_sig: Option<u8>,
+    /// A `waitpid(WUNTRACED)` has not yet consumed this stop event.
+    pub stop_wait_pending: bool,
+    /// A `waitpid(WCONTINUED)` has not yet consumed this continue event.
+    pub continued_wait_pending: bool,
+}
 
 ///  A wrapper type that assumes the inner type is `Sync`.
 #[repr(transparent)]
@@ -75,11 +95,19 @@ pub struct Thread {
     /// Ready to exit
     pub exit: Arc<AtomicBool>,
 
+    /// Set by `rt_sigreturn` so the next return to the user loop skips one `check_signals` pass.
+    skip_next_signal_check: AtomicBool,
+
     /// Indicates whether the thread is currently accessing user memory.
     accessing_user_memory: AtomicBool,
 
     /// Self exit event
     pub exit_event: Arc<PollSet>,
+
+    /// Linux-visible scheduling policy (`SCHED_*`, e.g. `SCHED_OTHER`/`SCHED_NORMAL` == 0).
+    sched_policy: AtomicI32,
+    /// `sched_param.sched_priority` for this thread (persisted; real-time scheduling not wired).
+    sched_priority: AtomicI32,
 }
 
 impl Thread {
@@ -92,9 +120,12 @@ impl Thread {
             robust_list_head: AtomicUsize::new(0),
             time: AssumeSync(RefCell::new(TimeManager::new())),
             exit: Arc::new(AtomicBool::new(false)),
+            skip_next_signal_check: AtomicBool::new(false),
             oom_score_adj: AtomicI32::new(200),
             accessing_user_memory: AtomicBool::new(false),
             exit_event: Arc::default(),
+            sched_policy: AtomicI32::new(0),
+            sched_priority: AtomicI32::new(0),
         })
     }
 
@@ -150,6 +181,22 @@ impl Thread {
         self.accessing_user_memory
             .store(accessing, Ordering::Release);
     }
+
+    /// Current `sched_getscheduler` policy (`SCHED_*`).
+    pub fn sched_policy(&self) -> i32 {
+        self.sched_policy.load(Ordering::Relaxed)
+    }
+
+    /// Current `sched_param.sched_priority`.
+    pub fn sched_priority_value(&self) -> i32 {
+        self.sched_priority.load(Ordering::Relaxed)
+    }
+
+    /// Set policy and priority from `sched_setscheduler` (stored only; axtask RR is unchanged).
+    pub fn set_sched_policy_param(&self, policy: i32, priority: i32) {
+        self.sched_policy.store(policy, Ordering::Relaxed);
+        self.sched_priority.store(priority, Ordering::Relaxed);
+    }
 }
 
 #[extern_trait]
@@ -192,9 +239,12 @@ pub struct ProcessData {
     pub exe_path: RwLock<String>,
     /// The command line arguments
     pub cmdline: RwLock<Arc<Vec<String>>>,
+    /// Environment strings (`KEY=value`) for the process; used when `execve` is called with
+    /// `envp == NULL` (inherit environment, Linux `execve(2)`).
+    pub environment: RwLock<Arc<Vec<String>>>,
     /// The virtual memory address space.
     // TODO: scopify
-    pub aspace: Arc<Mutex<AddrSpace>>,
+    pub aspace: Arc<RwLock<AddrSpace>>,
     /// The resource scope
     pub scope: RwLock<Scope>,
     /// The user heap top
@@ -205,10 +255,15 @@ pub struct ProcessData {
 
     /// The child exit wait event
     pub child_exit_event: Arc<PollSet>,
+    /// Woken when any thread in this thread group exits (`exit_thread`); e.g. `execve` waits here.
+    pub thread_group_exit_event: Arc<PollSet>,
     /// Self exit event
     pub exit_event: Arc<PollSet>,
     /// The exit signal of the thread
     pub exit_signal: Option<Signo>,
+
+    /// Job control (`waitpid` stopped / continued).
+    pub jobctl: Mutex<JobCtl>,
 
     /// The process signal manager
     pub signal: Arc<ProcessSignalManager>,
@@ -218,15 +273,51 @@ pub struct ProcessData {
 
     /// The default mask for file permissions.
     umask: AtomicU32,
+
+    /// Real / effective / saved user-IDs (`setresuid` / `getuid` family).
+    ruid: AtomicU32,
+    euid: AtomicU32,
+    suid: AtomicU32,
+    /// Real / effective / saved group-IDs (`setresgid` / `getgid` family).
+    rgid: AtomicU32,
+    egid: AtomicU32,
+    sgid: AtomicU32,
+
+    /// Supplementary group IDs (`getgroups` / `setgroups`); excludes primary `rgid`.
+    supplementary_gids: Mutex<Vec<u32>>,
+
+    /// Linux capability sets (`capget` / `capset`), version-3 lower 32 bits each.
+    /// Default all bits set to match prior stub behavior; `capset` can clear.
+    cap_effective: AtomicU32,
+    cap_permitted: AtomicU32,
+    cap_inheritable: AtomicU32,
+
+    /// Process nice (`getpriority` / `setpriority`, range -20..=19 on Linux; default 0).
+    nice: AtomicI32,
+
+    /// Sum of exited threads' user/system CPU time (nanoseconds).
+    exited_threads_utime_ns: AtomicUsize,
+    exited_threads_stime_ns: AtomicUsize,
+    /// Cumulative user/system CPU of children reaped via `wait` (nanoseconds).
+    child_utime_ns: AtomicUsize,
+    child_stime_ns: AtomicUsize,
+
+    /// `membarrier(2)` REGISTER_* bits: Linux **expedited** commands require matching registration.
+    pub(crate) membarrier_reg_private_expedited: AtomicBool,
+    pub(crate) membarrier_reg_private_expedited_sync_core: AtomicBool,
 }
 
 impl ProcessData {
+    /// Linux `S_IRWXUGO` (`0o777`): bits that participate in `umask(2)` and `mode & !umask`.
+    const UMASK_PERM_MASK: u32 = 0o777;
+
     /// Create a new [`ProcessData`].
     pub fn new(
         proc: Arc<Process>,
         exe_path: String,
         cmdline: Arc<Vec<String>>,
-        aspace: Arc<Mutex<AddrSpace>>,
+        environment: Arc<Vec<String>>,
+        aspace: Arc<RwLock<AddrSpace>>,
         signal_actions: Arc<SpinNoIrq<SignalActions>>,
         exit_signal: Option<Signo>,
     ) -> Arc<Self> {
@@ -234,6 +325,7 @@ impl ProcessData {
             proc,
             exe_path: RwLock::new(exe_path),
             cmdline: RwLock::new(cmdline),
+            environment: RwLock::new(environment),
             aspace,
             scope: RwLock::new(Scope::new()),
             heap_top: AtomicUsize::new(crate::config::USER_HEAP_BASE),
@@ -241,8 +333,11 @@ impl ProcessData {
             rlim: RwLock::default(),
 
             child_exit_event: Arc::default(),
+            thread_group_exit_event: Arc::default(),
             exit_event: Arc::default(),
             exit_signal,
+
+            jobctl: Mutex::new(JobCtl::default()),
 
             signal: Arc::new(ProcessSignalManager::new(
                 signal_actions,
@@ -252,7 +347,197 @@ impl ProcessData {
             futex_table: Arc::new(FutexTable::new()),
 
             umask: AtomicU32::new(0o022),
+
+            ruid: AtomicU32::new(0),
+            euid: AtomicU32::new(0),
+            suid: AtomicU32::new(0),
+            rgid: AtomicU32::new(0),
+            egid: AtomicU32::new(0),
+            sgid: AtomicU32::new(0),
+
+            supplementary_gids: Mutex::new(Vec::new()),
+
+            cap_effective: AtomicU32::new(u32::MAX),
+            cap_permitted: AtomicU32::new(u32::MAX),
+            cap_inheritable: AtomicU32::new(u32::MAX),
+
+            nice: AtomicI32::new(0),
+
+            exited_threads_utime_ns: AtomicUsize::new(0),
+            exited_threads_stime_ns: AtomicUsize::new(0),
+            child_utime_ns: AtomicUsize::new(0),
+            child_stime_ns: AtomicUsize::new(0),
+
+            membarrier_reg_private_expedited: AtomicBool::new(false),
+            membarrier_reg_private_expedited_sync_core: AtomicBool::new(false),
         })
+    }
+
+    /// Copy r/e/s uid and gid from a parent process (fork / vfork child).
+    pub fn copy_credentials_from(&self, parent: &ProcessData) {
+        let o = Ordering::SeqCst;
+        self.ruid.store(parent.ruid.load(o), o);
+        self.euid.store(parent.euid.load(o), o);
+        self.suid.store(parent.suid.load(o), o);
+        self.rgid.store(parent.rgid.load(o), o);
+        self.egid.store(parent.egid.load(o), o);
+        self.sgid.store(parent.sgid.load(o), o);
+
+        let pg = parent.supplementary_gids.lock();
+        let mut cg = self.supplementary_gids.lock();
+        cg.clear();
+        cg.extend_from_slice(&pg);
+
+        self.nice
+            .store(parent.nice.load(Ordering::SeqCst), Ordering::SeqCst);
+
+        self.cap_effective
+            .store(parent.cap_effective.load(o), o);
+        self.cap_permitted
+            .store(parent.cap_permitted.load(o), o);
+        self.cap_inheritable
+            .store(parent.cap_inheritable.load(o), o);
+
+        self.exited_threads_utime_ns.store(0, o);
+        self.exited_threads_stime_ns.store(0, o);
+        self.child_utime_ns.store(0, o);
+        self.child_stime_ns.store(0, o);
+    }
+
+    #[inline]
+    pub fn get_nice(&self) -> i32 {
+        self.nice.load(Ordering::Relaxed)
+    }
+
+    pub fn set_nice(&self, value: i32) {
+        self.nice.store(value, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn getuid(&self) -> u32 {
+        self.ruid.load(Ordering::SeqCst)
+    }
+
+    #[inline]
+    pub fn geteuid(&self) -> u32 {
+        self.euid.load(Ordering::SeqCst)
+    }
+
+    #[inline]
+    pub fn getgid(&self) -> u32 {
+        self.rgid.load(Ordering::SeqCst)
+    }
+
+    #[inline]
+    pub fn getegid(&self) -> u32 {
+        self.egid.load(Ordering::SeqCst)
+    }
+
+    /// Real, effective, and saved user-IDs (`getresuid(2)`).
+    #[inline]
+    pub fn get_resuid(&self) -> (u32, u32, u32) {
+        let o = Ordering::SeqCst;
+        (
+            self.ruid.load(o),
+            self.euid.load(o),
+            self.suid.load(o),
+        )
+    }
+
+    /// Real, effective, and saved group-IDs (`getresgid(2)`).
+    #[inline]
+    pub fn get_resgid(&self) -> (u32, u32, u32) {
+        let o = Ordering::SeqCst;
+        (
+            self.rgid.load(o),
+            self.egid.load(o),
+            self.sgid.load(o),
+        )
+    }
+
+    fn cred_change_allowed(new: u32, r: u32, e: u32, s: u32) -> bool {
+        new == r || new == e || new == s
+    }
+
+    /// Linux-like `setresuid`: `CRED_NO_CHANGE` leaves that component unchanged.
+    pub fn setresuid(&self, req_r: u32, req_e: u32, req_s: u32) -> AxResult<()> {
+        let old_r = self.ruid.load(Ordering::SeqCst);
+        let old_e = self.euid.load(Ordering::SeqCst);
+        let old_s = self.suid.load(Ordering::SeqCst);
+
+        if old_e != 0 {
+            if req_r != CRED_NO_CHANGE && !Self::cred_change_allowed(req_r, old_r, old_e, old_s) {
+                return Err(AxError::PermissionDenied);
+            }
+            if req_e != CRED_NO_CHANGE && !Self::cred_change_allowed(req_e, old_r, old_e, old_s) {
+                return Err(AxError::PermissionDenied);
+            }
+            if req_s != CRED_NO_CHANGE && !Self::cred_change_allowed(req_s, old_r, old_e, old_s) {
+                return Err(AxError::PermissionDenied);
+            }
+        }
+
+        let o = Ordering::SeqCst;
+        if req_r != CRED_NO_CHANGE {
+            self.ruid.store(req_r, o);
+        }
+        if req_e != CRED_NO_CHANGE {
+            self.euid.store(req_e, o);
+        }
+        if req_s != CRED_NO_CHANGE {
+            self.suid.store(req_s, o);
+        }
+        Ok(())
+    }
+
+    /// Linux-like `setresgid`.
+    pub fn setresgid(&self, req_r: u32, req_e: u32, req_s: u32) -> AxResult<()> {
+        let old_r = self.rgid.load(Ordering::SeqCst);
+        let old_e = self.egid.load(Ordering::SeqCst);
+        let old_s = self.sgid.load(Ordering::SeqCst);
+
+        if old_e != 0 {
+            if req_r != CRED_NO_CHANGE && !Self::cred_change_allowed(req_r, old_r, old_e, old_s) {
+                return Err(AxError::PermissionDenied);
+            }
+            if req_e != CRED_NO_CHANGE && !Self::cred_change_allowed(req_e, old_r, old_e, old_s) {
+                return Err(AxError::PermissionDenied);
+            }
+            if req_s != CRED_NO_CHANGE && !Self::cred_change_allowed(req_s, old_r, old_e, old_s) {
+                return Err(AxError::PermissionDenied);
+            }
+        }
+
+        let o = Ordering::SeqCst;
+        if req_r != CRED_NO_CHANGE {
+            self.rgid.store(req_r, o);
+        }
+        if req_e != CRED_NO_CHANGE {
+            self.egid.store(req_e, o);
+        }
+        if req_s != CRED_NO_CHANGE {
+            self.sgid.store(req_s, o);
+        }
+        Ok(())
+    }
+
+    /// Supplementary groups only (not including primary real GID).
+    pub fn get_supplementary_groups(&self) -> Vec<u32> {
+        self.supplementary_gids.lock().clone()
+    }
+
+    /// Replace supplementary groups. Requires effective uid0 (CAP_SETGID not modeled).
+    pub fn set_supplementary_groups(&self, gids: &[u32]) -> AxResult<()> {
+        if self.geteuid() != 0 {
+            return Err(AxError::PermissionDenied);
+        }
+        if gids.len() > SUPP_GROUPS_MAX {
+            return Err(AxError::InvalidInput);
+        }
+        let mut g = self.supplementary_gids.lock();
+        g.clear();
+        g.extend_from_slice(gids);
+        Ok(())
     }
 
     /// Get the top address of the user heap.
@@ -278,11 +563,105 @@ impl ProcessData {
 
     /// Set the umask.
     pub fn set_umask(&self, umask: u32) {
-        self.umask.store(umask, Ordering::SeqCst);
+        self.umask.store(umask & Self::UMASK_PERM_MASK, Ordering::SeqCst);
     }
 
-    /// Set the umask and return the old value.
+    /// Set the umask and return the old value (Linux: `mask & S_IRWXUGO` / `0o777` for both).
     pub fn replace_umask(&self, umask: u32) -> u32 {
-        self.umask.swap(umask, Ordering::SeqCst)
+        let new = umask & Self::UMASK_PERM_MASK;
+        let old = self.umask.swap(new, Ordering::SeqCst);
+        old & Self::UMASK_PERM_MASK
+    }
+
+    /// Returns `(effective, permitted, inheritable)` capability masks (lower 32 bits).
+    pub fn get_capabilities(&self) -> (u32, u32, u32) {
+        let o = Ordering::SeqCst;
+        (
+            self.cap_effective.load(o),
+            self.cap_permitted.load(o),
+            self.cap_inheritable.load(o),
+        )
+    }
+
+    /// Applies `capset(2)` data for this process. Enforces `effective`/`inheritable` ⊆ `permitted`.
+    /// Requires effective uid 0 or `CAP_SETPCAP` in the current effective set.
+    pub fn set_capabilities(&self, eff: u32, perm: u32, inh: u32) -> AxResult<()> {
+        const CAP_SETPCAP: u32 = 1 << 8;
+
+        if eff & !perm != 0 || inh & !perm != 0 {
+            return Err(AxError::InvalidInput);
+        }
+
+        let euid = self.euid.load(Ordering::SeqCst);
+        let cur_eff = self.cap_effective.load(Ordering::SeqCst);
+        if euid != 0 && (cur_eff & CAP_SETPCAP) == 0 {
+            return Err(AxError::PermissionDenied);
+        }
+
+        let o = Ordering::SeqCst;
+        self.cap_effective.store(eff, o);
+        self.cap_permitted.store(perm, o);
+        self.cap_inheritable.store(inh, o);
+        Ok(())
+    }
+
+    /// Called when a thread exits: fold its CPU time into process-wide exited totals.
+    pub fn accumulate_exited_thread_cpu_ns(&self, utime_ns: usize, stime_ns: usize) {
+        self.exited_threads_utime_ns
+            .fetch_add(utime_ns, Ordering::SeqCst);
+        self.exited_threads_stime_ns
+            .fetch_add(stime_ns, Ordering::SeqCst);
+    }
+
+    /// Linux `times` / `wait4` child CPU: waited-for zombie's thread-group time.
+    pub fn accumulate_waited_child_cpu_ns(&self, utime_ns: usize, stime_ns: usize) {
+        self.child_utime_ns.fetch_add(utime_ns, Ordering::SeqCst);
+        self.child_stime_ns.fetch_add(stime_ns, Ordering::SeqCst);
+    }
+
+    /// Cumulative waited-children CPU (nanoseconds), for `times` / `getrusage` child fields.
+    pub fn waited_children_cpu_nanos(&self) -> (usize, usize) {
+        let o = Ordering::Relaxed;
+        (
+            self.child_utime_ns.load(o),
+            self.child_stime_ns.load(o),
+        )
+    }
+
+    /// Thread-group CPU (nanoseconds): exited threads plus all live threads in this process.
+    ///
+    /// If a `tid` from the process thread list is missing from `TASK_TABLE` (e.g. races around
+    /// zombie accounting), that thread is **skipped** so `times`/`wait` still return partial
+    /// sums. [`thread_group_cpu_nanos_strict`] fails instead for `getrusage(RUSAGE_SELF)`.
+    pub fn thread_group_cpu_nanos(&self) -> (usize, usize) {
+        self.thread_group_cpu_nanos_inner(true)
+            .expect("skip_missing_tasks: get_task errors are not propagated")
+    }
+
+    /// Like [`thread_group_cpu_nanos`], but returns [`AxError::NoSuchProcess`] if any listed thread
+    /// cannot be resolved — avoids silently under-counting CPU for `getrusage(2)` `RUSAGE_SELF`
+    /// (issue-371).
+    pub fn thread_group_cpu_nanos_strict(&self) -> AxResult<(usize, usize)> {
+        self.thread_group_cpu_nanos_inner(false)
+    }
+
+    fn thread_group_cpu_nanos_inner(&self, skip_missing_tasks: bool) -> AxResult<(usize, usize)> {
+        let mut ut = self.exited_threads_utime_ns.load(Ordering::Relaxed);
+        let mut st = self.exited_threads_stime_ns.load(Ordering::Relaxed);
+        for tid in self.proc.threads() {
+            let task = match get_task(tid) {
+                Ok(t) => t,
+                Err(_e) if skip_missing_tasks => continue,
+                Err(e) => return Err(e),
+            };
+            if let Some(thr) = task.try_as_thread() {
+                if thr.proc_data.proc.pid() == self.proc.pid() {
+                    let (u, s) = thr.time.borrow().cpu_nanos();
+                    ut += u;
+                    st += s;
+                }
+            }
+        }
+        Ok((ut, st))
     }
 }

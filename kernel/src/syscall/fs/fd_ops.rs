@@ -1,27 +1,38 @@
 use alloc::{format, string::ToString, sync::Arc};
-use core::{
-    ffi::{c_char, c_int},
-    mem,
-    ops::{Deref, DerefMut},
-};
+use core::ffi::{c_char, c_int};
 
 use axerrno::{AxError, AxResult};
-use axfs::{FS_CONTEXT, FileBackend, OpenOptions, OpenResult};
+use axfs::{FS_CONTEXT, FileBackend, FileFlags, OpenOptions, OpenResult};
 use axfs_ng_vfs::{DirEntry, FileNode, Location, NodePermission, NodeType, Reference};
 use axtask::current;
 use bitflags::bitflags;
 use linux_raw_sys::general::*;
+use spin::RwLock;
 
 use crate::{
     file::{
-        Directory, FD_TABLE, File, FileLike, Pipe, add_file_like, close_file_like, get_file_like,
-        with_fs,
+        Directory, FD_TABLE, File, FileLike, MemfdCreatedFile, Pipe, add_file_like,
+        add_file_like_at_least, close_file_like, dirfd_for_path_resolution, get_file_like, with_fs,
     },
-    mm::{UserPtr, vm_load_string},
+    mm::{UserConstPtr, UserPtr, vm_load_string},
     pseudofs::{Device, dev::tty},
     syscall::sys::{sys_getegid, sys_geteuid},
     task::AsThread,
 };
+
+/// Linux `fs/open.c` `O_PATH_FLAGS`: with `O_PATH`, only these `open(2)` bits may be set
+/// (`build_open_flags`; rejects `O_CREAT`/`O_TRUNC`/`O_EXCL`/`O_APPEND`/… with `O_PATH`).
+const OPEN_PATH_FLAG_MASK: u32 = O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC | O_PATH;
+
+fn validate_open_flags(flags: u32) -> AxResult<()> {
+    if flags & O_PATH == 0 {
+        return Ok(());
+    }
+    if flags & !OPEN_PATH_FLAG_MASK != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    Ok(())
+}
 
 /// Convert open flags to [`OpenOptions`].
 fn flags_to_options(flags: c_int, mode: __kernel_mode_t, (uid, gid): (u32, u32)) -> OpenOptions {
@@ -108,6 +119,69 @@ fn add_to_fd(result: OpenResult, flags: u32) -> AxResult<i32> {
     add_file_like(f, flags & O_CLOEXEC != 0)
 }
 
+/// Linux `fcntl(F_SETFL)` flags allowed in `arg` (see `man 2 fcntl` / kernel `SETFL_MASK`).
+const F_SETFL_MASK: u32 = O_APPEND | O_NONBLOCK | O_DIRECT | O_NOATIME | FASYNC | O_DSYNC;
+
+/// Maps [`axfs::FileFlags`] to Linux `open(2)`/`fcntl(F_GETFL)` access + `O_APPEND`/`O_PATH` bits.
+fn axfs_flags_to_linux_open_bits(ff: FileFlags) -> c_int {
+    let mut ret: c_int = 0;
+    if ff.contains(FileFlags::PATH) {
+        ret |= O_PATH as c_int;
+    }
+    let read = ff.contains(FileFlags::READ);
+    let write = ff.contains(FileFlags::WRITE);
+    if ff.contains(FileFlags::APPEND) {
+        ret |= O_APPEND as c_int;
+    }
+    match (read, write) {
+        (true, false) => ret |= O_RDONLY as c_int,
+        (false, true) => ret |= O_WRONLY as c_int,
+        (true, true) => ret |= O_RDWR as c_int,
+        (false, false) => {
+            if ff.contains(FileFlags::PATH) {
+                ret |= O_RDONLY as c_int;
+            }
+        }
+    }
+    ret
+}
+
+fn f_getfl_for_file_like(f: &Arc<dyn FileLike>) -> AxResult<c_int> {
+    let mut ret: c_int = if let Some(file) = f.downcast_ref::<File>() {
+        axfs_flags_to_linux_open_bits(file.inner().flags())
+    } else if let Some(m) = f.downcast_ref::<MemfdCreatedFile>() {
+        axfs_flags_to_linux_open_bits(m.inner_file().inner().flags())
+    } else {
+        let mut r = 0;
+        let perm = NodePermission::from_bits_truncate(f.stat()?.mode as _);
+        let read = perm.contains(NodePermission::OWNER_READ);
+        let write = perm.contains(NodePermission::OWNER_WRITE);
+        match (read, write) {
+            (true, true) => r |= O_RDWR as c_int,
+            (true, false) => r |= O_RDONLY as c_int,
+            (false, true) => r |= O_WRONLY as c_int,
+            (false, false) => {}
+        }
+        r
+    };
+    if f.nonblocking() {
+        ret |= O_NONBLOCK as c_int;
+    }
+    Ok(ret)
+}
+
+fn f_setfl_rest_for_axfs_file(file: &File, rest: u32) -> AxResult<()> {
+    if rest & (O_DIRECT | O_NOATIME | FASYNC | O_DSYNC) != 0 {
+        return Err(AxError::OperationNotSupported);
+    }
+    let append = file.inner().flags().contains(FileFlags::APPEND);
+    let want_append = rest & O_APPEND != 0;
+    if want_append != append {
+        return Err(AxError::OperationNotSupported);
+    }
+    Ok(())
+}
+
 /// Open or create a file.
 /// fd: file descriptor
 /// filename: file path to be opened or created
@@ -120,12 +194,22 @@ pub fn sys_openat(
     flags: i32,
     mode: __kernel_mode_t,
 ) -> AxResult<isize> {
+    // Linux do_sys_open: build_open_flags before getname/copy of pathname (EINVAL for bad flag
+    // combinations before EFAULT on bad path pointer; issue-323; same theme as issue-318/issue-305).
+    validate_open_flags(flags as u32)?;
+
     let path = vm_load_string(path)?;
+    // Linux rejects empty pathname with EINVAL before open lookup (issue-405; issue-393 theme;
+    // bad flags rejected first, issue-323; O_PATH details issue-259).
+    if path.is_empty() {
+        return Err(AxError::InvalidInput);
+    }
     debug!("sys_openat <= {dirfd} {path:?} {flags:#o} {mode:#o}");
 
     let mode = mode & !current().as_thread().proc_data.umask();
 
     let options = flags_to_options(flags, mode, (sys_geteuid()? as _, sys_getegid()? as _));
+    let dirfd = dirfd_for_path_resolution(dirfd, path.as_str());
     with_fs(dirfd, |fs| options.open(fs, path))
         .and_then(|it| add_to_fd(it, flags as _))
         .map(|fd| fd as isize)
@@ -155,18 +239,22 @@ bitflags! {
 }
 
 pub fn sys_close_range(first: i32, last: i32, flags: u32) -> AxResult<isize> {
+    // Linux __sys_close_range: reject unknown flag bits before first/last range (EINVAL ordering;
+    // issue-324; same theme as issue-323/issue-317).
+    let flags = CloseRangeFlags::from_bits(flags).ok_or(AxError::InvalidInput)?;
     if first < 0 || last < first {
         return Err(AxError::InvalidInput);
     }
-    let flags = CloseRangeFlags::from_bits(flags).ok_or(AxError::InvalidInput)?;
     debug!("sys_close_range <= fds: [{first}, {last}], flags: {flags:?}");
     if flags.contains(CloseRangeFlags::UNSHARE) {
-        // TODO: optimize
+        // Linux `CLOSE_RANGE_UNSHARE`: private FD table for this task group slot (see `clone` without
+        // `CLONE_FILES`). Cannot use `scope_mut(..).write().clone_from(&FD_TABLE.read())` here:
+        // that deadlocks when the active table is the same `Arc` as the scope slot. Snapshot under
+        // a read lock, then replace the slot with a fresh `Arc` like `!CLONE_FILES` does for a child.
         let curr = current();
         let mut scope = curr.as_thread().proc_data.scope.write();
-        let mut guard = FD_TABLE.scope_mut(&mut scope);
-        let old_files = mem::take(guard.deref_mut());
-        old_files.write().clone_from(old_files.read().deref());
+        let snapshot = FD_TABLE.read().clone();
+        *FD_TABLE.scope_mut(&mut scope) = Arc::new(RwLock::new(snapshot));
     }
 
     let cloexec = flags.contains(CloseRangeFlags::CLOEXEC);
@@ -186,15 +274,21 @@ pub fn sys_close_range(first: i32, last: i32, flags: u32) -> AxResult<isize> {
     Ok(0)
 }
 
-fn dup_fd(old_fd: c_int, cloexec: bool) -> AxResult<isize> {
+fn dup_fd(old_fd: c_int, cloexec: bool, min_fd: usize) -> AxResult<isize> {
     let f = get_file_like(old_fd)?;
-    let new_fd = add_file_like(f, cloexec)?;
+    // Linux fd numbers are `int`; do not truncate `usize`→`c_int`→`usize` (e.g. `0x1_0000_0000` → 0,
+    // bypassing `add_file_like_at_least` bounds). `add_file_like_at_least` enforces `AX_FILE_LIMIT`
+    // (issue-410; `file/mod.rs`).
+    if min_fd > c_int::MAX as usize {
+        return Err(AxError::InvalidInput);
+    }
+    let new_fd = add_file_like_at_least(f, cloexec, min_fd)?;
     Ok(new_fd as _)
 }
 
 pub fn sys_dup(old_fd: c_int) -> AxResult<isize> {
     debug!("sys_dup <= {old_fd}");
-    dup_fd(old_fd, false)
+    dup_fd(old_fd, false, 0)
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -214,12 +308,14 @@ bitflags::bitflags! {
 }
 
 pub fn sys_dup3(old_fd: c_int, new_fd: c_int, flags: c_int) -> AxResult<isize> {
-    let flags = Dup3Flags::from_bits(flags).ok_or(AxError::InvalidInput)?;
-    debug!("sys_dup3 <= old_fd: {old_fd}, new_fd: {new_fd}, flags: {flags:?}");
-
+    // Linux `do_dup3`: `oldfd == newfd` → EINVAL before rejecting unknown `flags` bits (issue-341;
+    // same theme as close_range issue-324 / openat issue-323).
     if old_fd == new_fd {
         return Err(AxError::InvalidInput);
     }
+
+    let flags = Dup3Flags::from_bits(flags).ok_or(AxError::InvalidInput)?;
+    debug!("sys_dup3 <= old_fd: {old_fd}, new_fd: {new_fd}, flags: {flags:?}");
 
     let mut fd_table = FD_TABLE.write();
     let mut f = fd_table
@@ -240,37 +336,51 @@ pub fn sys_fcntl(fd: c_int, cmd: c_int, arg: usize) -> AxResult<isize> {
     debug!("sys_fcntl <= fd: {fd} cmd: {cmd} arg: {arg}");
 
     match cmd as u32 {
-        F_DUPFD => dup_fd(fd, false),
-        F_DUPFD_CLOEXEC => dup_fd(fd, true),
-        F_SETLK | F_SETLKW => Ok(0),
-        F_OFD_SETLK | F_OFD_SETLKW => Ok(0),
+        F_DUPFD => dup_fd(fd, false, arg),
+        F_DUPFD_CLOEXEC => dup_fd(fd, true, arg),
+        F_SETLK | F_OFD_SETLK => {
+            // Linux do_fcntl: fget(fd) before copy_from_user(flock) (EBADF before EFAULT).
+            get_file_like(fd)?;
+            let fl = *UserConstPtr::<flock64>::from(arg).get_as_ref()?;
+            crate::file::record_lock::sys_fcntl_setlk(fd, false, &fl)
+        }
+        F_SETLKW | F_OFD_SETLKW => {
+            get_file_like(fd)?;
+            let fl = *UserConstPtr::<flock64>::from(arg).get_as_ref()?;
+            crate::file::record_lock::sys_fcntl_setlk(fd, true, &fl)
+        }
         F_GETLK | F_OFD_GETLK => {
-            let arg = UserPtr::<flock64>::from(arg);
-            arg.get_as_mut()?.l_type = F_UNLCK as _;
-            Ok(0)
+            get_file_like(fd)?;
+            let ptr = UserPtr::<flock64>::from(arg);
+            let fl = ptr.get_as_mut()?;
+            crate::file::record_lock::sys_fcntl_getlk(fd, fl)
         }
         F_SETFL => {
-            get_file_like(fd)?.set_nonblocking(arg & (O_NONBLOCK as usize) > 0)?;
+            // Linux do_fcntl: fget(fd) before F_SETFL arg mask check (EBADF before EINVAL).
+            // issue-412; F_GETFL symmetry / pipe-only O_NONBLOCK: issue-252.
+            let f = get_file_like(fd)?;
+            let arg = arg as u32;
+            if arg & !F_SETFL_MASK != 0 {
+                return Err(AxError::InvalidInput);
+            }
+            f.set_nonblocking(arg & O_NONBLOCK != 0)?;
+            let rest = arg & !O_NONBLOCK;
+            if rest == 0 {
+                return Ok(0);
+            }
+            if let Some(file) = f.downcast_ref::<File>() {
+                f_setfl_rest_for_axfs_file(file, rest)?;
+            } else if let Some(m) = f.downcast_ref::<MemfdCreatedFile>() {
+                f_setfl_rest_for_axfs_file(m.inner_file(), rest)?;
+            } else {
+                // Pipe/socket/etc.: Linux only allows `O_NONBLOCK` here (issue-252).
+                return Err(AxError::InvalidInput);
+            }
             Ok(0)
         }
         F_GETFL => {
             let f = get_file_like(fd)?;
-
-            let mut ret = 0;
-            if f.nonblocking() {
-                ret |= O_NONBLOCK;
-            }
-
-            let perm = NodePermission::from_bits_truncate(f.stat()?.mode as _);
-            if perm.contains(NodePermission::OWNER_WRITE) {
-                if perm.contains(NodePermission::OWNER_READ) {
-                    ret |= O_RDWR;
-                } else {
-                    ret |= O_WRONLY;
-                }
-            }
-
-            Ok(ret as _)
+            f_getfl_for_file_like(&f).map(|r| r as isize)
         }
         F_GETFD => {
             let cloexec = FD_TABLE
@@ -300,13 +410,12 @@ pub fn sys_fcntl(fd: c_int, cmd: c_int, arg: usize) -> AxResult<isize> {
         }
         _ => {
             warn!("unsupported fcntl parameters: cmd: {cmd}");
-            Ok(0)
+            Err(AxError::InvalidInput)
         }
     }
 }
 
 pub fn sys_flock(fd: c_int, operation: c_int) -> AxResult<isize> {
     debug!("flock <= fd: {fd}, operation: {operation}");
-    // TODO: flock
-    Ok(0)
+    crate::file::flock::sys_flock(fd, operation)
 }

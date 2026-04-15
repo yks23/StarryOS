@@ -1,0 +1,31 @@
+{
+  "id": "issue-192",
+  "title": "ioctl：`TIOCGWINSZ`+`NotATty` 分支注释写「ignore」易误解为向用户态吞错",
+  "status": "resolved",
+  "created_at": "2026-04-14T04:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`sys_ioctl`** 中 **`NotATty` + `TIOCGWINSZ`** 分支注释改为说明：与 **Linux** 一致仍向用户态返回失败（**`NotATty`/`ENOTTY`**）；**`inspect_err`** 仅避免对 glibc 探测刷屏 **`warn!`**，**不**改变 **`Result`**。无行为变更。**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过。",
+  "files_changed": [
+    "kernel/src/syscall/fs/ctl.rs",
+    "auto-evolve/issue-pool/issue-192.json",
+    "auto-evolve/memory/executor-memory.md"
+  ],
+  "description": "**`kernel/src/syscall/fs/ctl.rs`** **`sys_ioctl`** 在非 **`FIONBIO`** 路径上调用 **`f.ioctl(cmd, arg)`**，并对 **`AxError::NotATty`** 使用 **`inspect_err`**：若 **`cmd == TIOCGWINSZ`** 则 **`return`闭包**（**仅不打 `warn!`**）。**`inspect_err` 不改变 `Result`**，**用户态仍收到 `ENOTTY`（或映射后的错误）**，与 **Linux** 对非 tty **`TIOCGWINSZ`** 的行为一致。注释 **「glibc likes … just ignore it」** 易被读成 **「syscall 应忽略错误」**；若维护者据此改为 **`Ok(0)`** 或 **`map_err` 吞错**，将与 **Linux** 及依赖 **`errno == ENOTTY`** 的探测逻辑（**`isatty`** 等）偏离。**与 issue-031**（ioctl 非终端场景）互补：本条聚焦 **注释准确性/可维护性**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["ioctl"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/ctl.rs:48-59"],
+    "related_files": [],
+    "key_insight": "`inspect_err` 只抑制日志；注释「ignore」未说明仍返回失败"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "对 **非 tty** **`fd`** 调用 **`ioctl(TIOCGWINSZ, ...)`**，确认 **Starry** 与 **Linux** 均为失败且 **`errno`** 一致；再读代码确认注释与行为一致。",
+    "expected_output_contains": "",
+    "pass_criteria": "注释写明 **「仅抑制 warn，仍返回 ENOTTY」**或等价表述；禁止无规格地 **`Ok(0)`**。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（2026-04-12）"
+  },
+  "suggested_fix": "改写注释为 **「抑制非 tty 上 `TIOCGWINSZ` 的告警刷屏；syscall 仍返回 `NotATty`」**；必要时链上 **`map_err` 文档化** 而非改成功返回。",
+  "references": ["man 2 ioctl", "issue-031"]
+}

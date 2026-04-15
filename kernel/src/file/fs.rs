@@ -8,13 +8,19 @@ use core::{
 
 use axerrno::{AxError, AxResult};
 use axfs::{FS_CONTEXT, FsContext};
-use axfs_ng_vfs::{Location, Metadata, NodeFlags};
+use axfs_ng_vfs::{Location, Metadata, NodeFlags, NodeType};
 use axpoll::{IoEvents, Pollable};
 use axsync::Mutex;
 use axtask::future::{block_on, poll_io};
-use linux_raw_sys::general::{AT_EMPTY_PATH, AT_FDCWD, AT_SYMLINK_NOFOLLOW};
+use linux_raw_sys::{
+    general::{AT_EMPTY_PATH, AT_FDCWD, AT_SYMLINK_NOFOLLOW},
+    ioctl::{
+        TCGETS, TCGETS2, TCSETS, TCSETS2, TCSETSF, TCSETSF2, TCSETSW, TCSETSW2, TIOCGPTN, TIOCGPGRP,
+        TIOCGWINSZ, TIOCNOTTY, TIOCSPGRP, TIOCSPTLCK, TIOCSWINSZ, TIOCSCTTY,
+    },
+};
 
-use super::{FileLike, Kstat, get_file_like};
+use super::{FileLike, Kstat, get_file_like, memfd::MemfdCreatedFile};
 use crate::file::{IoDst, IoSrc};
 
 pub fn with_fs<R>(dirfd: c_int, f: impl FnOnce(&mut FsContext) -> AxResult<R>) -> AxResult<R> {
@@ -24,6 +30,17 @@ pub fn with_fs<R>(dirfd: c_int, f: impl FnOnce(&mut FsContext) -> AxResult<R>) -
     } else {
         let dir = Directory::from_fd(dirfd)?.inner.clone();
         f(&mut fs.with_current_dir(dir)?)
+    }
+}
+
+/// Effective `dirfd` for pathname resolution. Linux ignores `dirfd` when `path` is absolute
+/// (starts with `/`); see statx(2) situation 1 and openat(2).
+#[inline]
+pub fn dirfd_for_path_resolution(dirfd: c_int, path: &str) -> c_int {
+    if path.starts_with('/') {
+        AT_FDCWD
+    } else {
+        dirfd
     }
 }
 
@@ -48,6 +65,24 @@ impl ResolveAtResult {
     }
 }
 
+/// Resolve an open fd to a VFS [`Location`] for `fstatfs(2)` and similar syscalls.
+///
+/// Returns [`AxError::InvalidInput`] for fds that are not backed by a path in the VFS
+/// (e.g. sockets, pipes), matching Linux `EINVAL` for those cases.
+pub fn location_from_fd(fd: c_int) -> AxResult<Location> {
+    let file_like = get_file_like(fd)?;
+    let f = file_like.as_ref();
+    if let Some(file) = f.downcast_ref::<File>() {
+        Ok(file.inner().backend()?.location().clone())
+    } else if let Some(m) = f.downcast_ref::<MemfdCreatedFile>() {
+        Ok(m.inner_file().inner().backend()?.location().clone())
+    } else if let Some(dir) = f.downcast_ref::<Directory>() {
+        Ok(dir.inner().clone())
+    } else {
+        Err(AxError::InvalidInput)
+    }
+}
+
 pub fn resolve_at(dirfd: c_int, path: Option<&str>, flags: u32) -> AxResult<ResolveAtResult> {
     match path {
         Some("") | None => {
@@ -58,20 +93,25 @@ pub fn resolve_at(dirfd: c_int, path: Option<&str>, flags: u32) -> AxResult<Reso
             let f = file_like.clone();
             Ok(if let Some(file) = f.downcast_ref::<File>() {
                 ResolveAtResult::File(file.inner().backend()?.location().clone())
+            } else if let Some(m) = f.downcast_ref::<MemfdCreatedFile>() {
+                ResolveAtResult::File(m.inner_file().inner().backend()?.location().clone())
             } else if let Some(dir) = f.downcast_ref::<Directory>() {
                 ResolveAtResult::File(dir.inner().clone())
             } else {
                 ResolveAtResult::Other(file_like)
             })
         }
-        Some(path) => with_fs(dirfd, |fs| {
-            if flags & AT_SYMLINK_NOFOLLOW != 0 {
-                fs.resolve_no_follow(path)
-            } else {
-                fs.resolve(path)
-            }
-            .map(ResolveAtResult::File)
-        }),
+        Some(path) => {
+            let dirfd = dirfd_for_path_resolution(dirfd, path);
+            with_fs(dirfd, |fs| {
+                if flags & AT_SYMLINK_NOFOLLOW != 0 {
+                    fs.resolve_no_follow(path)
+                } else {
+                    fs.resolve(path)
+                }
+                .map(ResolveAtResult::File)
+            })
+        }
     }
 }
 
@@ -124,6 +164,29 @@ fn path_for(loc: &Location) -> Cow<'static, str> {
         .map_or_else(|_| "<error>".into(), |f| Cow::Owned(f.to_string()))
 }
 
+/// Terminal/PTY ioctls handled by [`crate::pseudofs::dev::tty::Tty`]; only valid on character devices.
+fn is_tty_driver_ioctl(cmd: u32) -> bool {
+    matches!(
+        cmd,
+        TCGETS
+            | TCGETS2
+            | TCSETS
+            | TCSETSF
+            | TCSETSW
+            | TCSETS2
+            | TCSETSF2
+            | TCSETSW2
+            | TIOCGPGRP
+            | TIOCSPGRP
+            | TIOCGWINSZ
+            | TIOCSWINSZ
+            | TIOCSPTLCK
+            | TIOCGPTN
+            | TIOCSCTTY
+            | TIOCNOTTY
+    )
+}
+
 impl FileLike for File {
     fn read(&self, dst: &mut IoDst) -> AxResult<usize> {
         let inner = self.inner();
@@ -152,7 +215,11 @@ impl FileLike for File {
     }
 
     fn ioctl(&self, cmd: u32, arg: usize) -> AxResult<usize> {
-        self.inner().backend()?.location().ioctl(cmd, arg)
+        let loc = self.inner().backend()?.location();
+        if loc.node_type() != NodeType::CharacterDevice && is_tty_driver_ioctl(cmd) {
+            return Err(AxError::NotATty);
+        }
+        loc.ioctl(cmd, arg)
     }
 
     fn set_nonblocking(&self, flag: bool) -> AxResult {
@@ -213,11 +280,11 @@ impl Directory {
 
 impl FileLike for Directory {
     fn read(&self, _dst: &mut IoDst) -> AxResult<usize> {
-        Err(AxError::BadFileDescriptor)
+        Err(AxError::IsADirectory)
     }
 
     fn write(&self, _src: &mut IoSrc) -> AxResult<usize> {
-        Err(AxError::BadFileDescriptor)
+        Err(AxError::IsADirectory)
     }
 
     fn stat(&self) -> AxResult<Kstat> {

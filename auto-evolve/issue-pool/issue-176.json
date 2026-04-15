@@ -1,0 +1,27 @@
+{
+  "id": "issue-176",
+  "title": "sys_prctl(PR_SET_MM) 一律 EINVAL，与 Linux 无 CAP_SYS_RESOURCE 时常见 EPERM 不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T16:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`PR_SET_MM`**：将 **`arg2`** 转为 **`u32`**（`usize` 不可转则 **`EINVAL`**）；**`linux_raw_sys` 列出的 `PR_SET_MM_*`（1–15）** 视为合法子命令，未实现/需特权 → **`OperationNotPermitted`（`EPERM`）**；其余 **`EINVAL`**。尚未接 **`CAP_SYS_RESOURCE`** 真值校验。",
+  "files_changed": ["kernel/src/syscall/task/ctl.rs"],
+  "description": "**`sys_prctl`**（`kernel/src/syscall/task/ctl.rs`）对 **`PR_SET_MM`** **不解析 **`arg2`**（子命令）及后续参数**，直接 **`return Err(AxError::InvalidInput)`**（用户态多为 **`EINVAL`**）。**Linux `prctl(2)` `PR_SET_MM`**：对**合法 **`PR_SET_MM_*`** 子命令**，调用方若无 **`CAP_SYS_RESOURCE`**，典型返回 **`EPERM`**；**非法子命令**或参数错误才多为 **`EINVAL`**。**Starry** 将**所有 **`PR_SET_MM`** 请求**打成 **`EINVAL`**，与 **glibc/运行时探测**（依赖 **`errno` 区分 **EPERM** vs **EINVAL**）或部分测试用例不一致；且未体现「能力/权限不足」与「选项非法」的差别。若进程模型中长期等价 **root**，仍可能与 **seccomp/伪造返回值** 场景下的行为对照不符。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["prctl"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/ctl.rs:212-215"],
+    "related_files": ["linux_raw_sys::prctl::PR_SET_MM_*"],
+    "key_insight": "`PR_SET_MM` 分支固定 `InvalidInput`，未按子命令/能力映射 EPERM"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "非特权（或剥离 **`CAP_SYS_RESOURCE`**）进程对 **`prctl(PR_SET_MM, PR_SET_MM_EXE_FILE, …)`** 等**语法合法**子命令对比 **Linux** 与 **Starry** 的 **`errno`**；再对**非法**子命令对比 **`EINVAL`**。",
+    "expected_output_contains": "",
+    "pass_criteria": "与 **Linux** 一致：**合法子命令 + 无权限 → EPERM**；**非法参数/子命令 → EINVAL**（或文档化 **Starry** 策略）。",
+    "last_result": "`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` 通过（未跑对照测试）。"
+  },
+  "suggested_fix": "解析 **`arg2` 为 `PR_SET_MM_*`**：未知/越界 → **`EINVAL`**；已知子命令若暂不实现或需特权 → **`OperationNotPermitted`**（或与 **`CAP_SYS_RESOURCE`** 检查挂钩）。避免 **`PR_SET_MM` 整类 **EINVAL****。",
+  "references": ["man 2 prctl", "Linux kernel prctl.c PR_SET_MM"]
+}

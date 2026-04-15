@@ -1,0 +1,27 @@
+{
+  "id": "issue-297",
+  "title": "`unlink`/`rmdir`/`symlink`/`rename` 等 legacy 路径仅 `x86_64` 注册；文件路径 syscall 段仅有 `renameat` 前有 ABI 旁注，其余 `*at` 路由未对称说明",
+  "status": "resolved",
+  "created_at": "2026-04-13T12:05:00Z",
+  "severity": "low",
+  "fix_summary": "在 `mod.rs` 中 `Sysno::mkdir` 前增加概括注释：legacy 单路径（mkdir/link/rmdir/unlink/symlink/rename）仅 x86 系 Sysno 有号；riscv/aarch64 上 libc 经 `*at(AT_FDCWD)` 与 renameat/renameat2 落到已接线 `sys_*`；交叉引用 issue-292。`executor-memory` 在 `unlinkat` 后增加同主题列表条与 issue-297。",
+  "files_changed": ["kernel/src/syscall/mod.rs", "auto-evolve/memory/executor-memory.md"],
+  "description": "**`kernel/src/syscall/mod.rs`** **文件** **路径** **相关** **分支** **中** **，`Sysno::rmdir`** **、** **`Sysno::unlink`** **、** **`Sysno::symlink`** **、** **`Sysno::rename`** **等** **置于** **`#[cfg(target_arch = \"x86_64\")]`** **（** **约** **50–60** **行** **）** **；** **`unlinkat`** **、** **`symlinkat`** **、** **`renameat2`** **等** **无** **此** **限制** **。** **与** **`poll`/`renameat`/`access`** **同类** **：** **非** **x86** **ABI** **上** **`syscalls::Sysno`** **可能** **无** **独立** **legacy** **号** **，** **libc** **`unlink`/`rmdir`** **等** **常** **实现** **为** **对** **`*at(AT_FDCWD, …)`** **的** **薄** **包装** **。**\n\n**`renameat`** **分支** **前** **已有** **issue-292** **风格** **注释** **说明** **`riscv64`** **与** **`renameat2`** **关系** **；** **`rmdir`/`unlink`/`symlink`/`rename`** **等** **cfg** **块** **前** **无** **同级** **说明** **，** **读者** **易** **误判** **为** **遗漏** **实现** **而非** **ABI** **/****libc** **路由** **。**\n\n**建议**：在 **上述** **legacy** **`#[cfg]`** **组** **前** **增加** **一段** **概括性** **注释** **（** **或** **在** **`executor-memory`** **中** **列表** **说明** **）** **：** **哪些** **legacy** **名** **在** **`riscv64`** **由** **何种** **`*at`** **/****`renameat2`** **替代** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["rmdir", "unlink", "symlink", "rename", "unlinkat", "symlinkat", "renameat2"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/mod.rs:50-76"],
+    "related_files": ["auto-evolve/memory/executor-memory.md"],
+    "key_insight": "多数字 legacy 仅 x86_64；renameat 有注释，unlink/rmdir 等无对称 ABI 旁注"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 `syscalls` riscv64 `Sysno` 与 musl `unlink`/`rmdir` 实现。",
+    "expected_output_contains": "",
+    "pass_criteria": "`mod.rs` 或 executor 文档对 legacy `unlink`/`rmdir`/… 与 `*at` 的关系有明确说明，或经评审认为无需补充。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `rmdir`/`unlink`/`symlink`/`rename` 等 `#[cfg(x86_64)]` 组前增加与 `renameat` 段风格一致的 ABI/路由说明，或集中到 executor-memory。",
+  "references": ["man 2 unlink", "man 2 unlinkat", "kernel/src/syscall/mod.rs", "issue-292", "issue-296"]
+}

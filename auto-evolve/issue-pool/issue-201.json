@@ -1,0 +1,31 @@
+{
+  "id": "issue-201",
+  "title": "utimensat/utime/utimes：`vm_read_uninit`+`assume_init` 读用户时间结构，`FIXME AnyBitPattern` 与 issue-190 同类",
+  "status": "resolved",
+  "created_at": "2026-04-16T08:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`ctl.rs`**：新增 **`read_timespec_user`** / **`read_timeval_user`**（**`addr_of!` +字段级 `vm_read`**）。**`sys_utimensat`**、**`sys_utimes`**（**x86_64**）、**`sys_utime`**（**x86_64**）去掉 **`vm_read_uninit`/`assume_init`** 与 **`FIXME`**。**`[T;2]`** 用户指针用 **`cast()`** 到 **`*const T`** 再 **`wrapping_add(1)`** 读第二项。**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过。",
+  "files_changed": [
+    "kernel/src/syscall/fs/ctl.rs",
+    "auto-evolve/issue-pool/issue-201.json",
+    "auto-evolve/memory/executor-memory.md"
+  ],
+  "description": "**`kernel/src/syscall/fs/ctl.rs`** **`sys_utimensat`** 在 **`times` 非空时使用 **`// FIXME: AnyBitPattern`** 与 **`unsafe { times.vm_read_uninit()?.assume_init() }`** 读 **`[timespec; 2]`**（约 **576-578** 行）。同文件 **`sys_utime`**（**`utimbuf`**）、**`sys_utimes`**（**`[timeval; 2]`**，**x86_64**）亦为相同模式。**`assume_init`** 要求 **`MaybeUninit`** 已由 **`vm_read_uninit`** 完全初始化；若 **`linux_raw_sys`/`uapi` 结构体** 将来引入 **padding、对齐或新字段**，或 **`vm_read_uninit`** 路径与布局假设偏离，存在与 **issue-190/`prlimit64`**、**issue-184/`getrusage`** 同类的 **可审计性/升级脆弱性**。**更稳妥**：按字段 **`vm_read`** 或 **`zerocopy::FromBytes`** /显式 **`timespec { tv_sec, tv_nsec }`** 构造，并与 **`UTIME_NOW`/`UTIME_OMIT`** 分支统一校验 **`tv_nsec`**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["utimensat", "utime", "utimes"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/ctl.rs:520-592"],
+    "related_files": [],
+    "key_insight": "`assume_init` + FIXME；`riscv64` 上 `utimensat` 必走此路径"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "静态审查 + **`linux_raw_sys` 版本升级**试编译；可选 **Miri** 对用户缓冲未对齐/部分映射的 **`vm_read`** 行为。",
+    "expected_output_contains": "",
+    "pass_criteria": "消除 **`assume_init`** 或证明 **`timespec`/`utimbuf`/`timeval`** 全 **`Pod`** 且读路径与 **uapi** 逐字节一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（2026-04-12）"
+  },
+  "suggested_fix": "对 **`timespec`** 拆 **`tv_sec`/`tv_nsec` 两次标量读**；**`utimbuf`**、**`timeval`** 同理；删除 **`FIXME`**。",
+  "references": ["man 2 utimensat", "issue-190", "Rust MaybeUninit"]
+}

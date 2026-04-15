@@ -50,8 +50,11 @@ impl FileLike for EventFd {
                     }
                 });
             match result {
-                Ok(count) => {
-                    dst.write(&count.to_ne_bytes())?;
+                Ok(prev) => {
+                    // Linux `eventfd_read`: semaphore mode returns 8-byte value `1` (counter -= 1);
+                    // non-semaphore mode returns the previous counter before decrement-to-zero (issue-359).
+                    let out = if self.semaphore { 1u64 } else { prev };
+                    dst.write(&out.to_ne_bytes())?;
                     self.poll_tx.wake();
                     Ok(size_of::<u64>())
                 }

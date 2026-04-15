@@ -1,21 +1,73 @@
 use alloc::{boxed::Box, vec::Vec};
+use core::mem::{offset_of, size_of};
 use core::net::Ipv4Addr;
 
 use axerrno::{AxError, AxResult};
 use axio::prelude::*;
 use axnet::{CMsgData, RecvFlags, RecvOptions, SendFlags, SendOptions, SocketAddrEx, SocketOps};
 use linux_raw_sys::net::{
-    MSG_PEEK, MSG_TRUNC, SCM_RIGHTS, SOL_SOCKET, cmsghdr, msghdr, sockaddr, socklen_t,
+    MSG_CONFIRM, MSG_CMSG_CLOEXEC, MSG_CTRUNC, MSG_DONTROUTE, MSG_DONTWAIT, MSG_EOR,
+    MSG_ERRQUEUE, MSG_FIN, MSG_MORE, MSG_NOSIGNAL, MSG_OOB, MSG_PEEK, MSG_PROBE, MSG_RST,
+    MSG_SYN, MSG_TRUNC, MSG_WAITALL, SCM_RIGHTS, SOL_SOCKET, cmsghdr, msghdr, sockaddr,
+    socklen_t,
 };
+
+/// Linux `recvmsg(2)` / `recvfrom(2)` 第三参 flags：仅允许内核接受的 `MSG_*` 组合（与 Linux
+/// `recvmsg` 策略一致），未知位须 **`EINVAL`**。
+const RECVMSG_FLAGS_MASK: u32 = MSG_OOB
+    | MSG_PEEK
+    | MSG_DONTROUTE
+    | MSG_TRUNC
+    | MSG_DONTWAIT
+    | MSG_WAITALL
+    | MSG_ERRQUEUE
+    | MSG_CMSG_CLOEXEC;
+
+/// `recvmsg` 掩码内、Starry 尚未实现的 `MSG_*`（显式 **`Unsupported`**，勿静默忽略）。
+const RECVMSG_FLAGS_UNSUPPORTED: u32 =
+    MSG_OOB | MSG_DONTROUTE | MSG_ERRQUEUE | MSG_CMSG_CLOEXEC;
+
+/// Linux `sendmsg(2)` / `sendto(2)` flags：与 `recv` 掩码不同（不含 **`MSG_PEEK`** / **`MSG_WAITALL`** /
+/// **`MSG_TRUNC`** / **`MSG_ERRQUEUE`** 等仅接收或错误队列语义位；`send` 携带时内核通常 **`EINVAL`**，
+/// issue-266 / issue-269）。
+const SENDMSG_FLAGS_MASK: u32 = MSG_OOB
+    | MSG_DONTROUTE
+    | MSG_PROBE
+    | MSG_DONTWAIT
+    | MSG_EOR
+    | MSG_FIN
+    | MSG_SYN
+    | MSG_CONFIRM
+    | MSG_RST
+    | MSG_NOSIGNAL
+    | MSG_MORE
+    | MSG_CMSG_CLOEXEC;
+
+/// `sendmsg`/`sendto` 掩码内、仅适用于 `recvmsg` 的 `MSG_*`（与 `RECVMSG_FLAGS_UNSUPPORTED` 对称，
+/// 显式 **`ENOTSUP`**，勿静默忽略；issue-372）。
+const SENDMSG_FLAGS_UNSUPPORTED: u32 = MSG_CMSG_CLOEXEC;
 
 use super::addr::SocketAddrExt;
 use crate::{
     file::{FileLike, Socket, add_file_like},
     mm::{IoVec, IoVectorBuf, UserConstPtr, UserPtr, VmBytes, VmBytesMut},
-    syscall::net::{CMsg, CMsgBuilder},
+    syscall::net::{CMsg, CMsgBuilder, cmsg_align},
 };
 
-fn send_impl(
+/// Linux `copy_msghdr_from_user` / `verify_iovec` 风格：指针为 NULL 时对应长度须为 0，否则 **EINVAL**。
+fn validate_msghdr_ptr_len_consistency(msg: &msghdr) -> AxResult<()> {
+    if msg.msg_control.is_null() && msg.msg_controllen != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    if msg.msg_name.is_null() && msg.msg_namelen != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    Ok(())
+}
+
+/// After [`Socket::from_fd`] and `flags` validation: optional `to` address + [`Socket::send`].
+fn send_on_socket(
+    socket: &Socket,
     fd: i32,
     mut src: impl Read + IoBuf,
     flags: u32,
@@ -23,25 +75,52 @@ fn send_impl(
     addrlen: socklen_t,
     cmsg: Vec<CMsgData>,
 ) -> AxResult<isize> {
-    let addr = if addr.is_null() || addrlen == 0 {
+    // Linux `move_addr_to_kernel`: non-NULL `msg_name`/`dest_addr` with `addrlen == 0` → EINVAL.
+    let addr = if addr.is_null() {
         None
+    } else if addrlen == 0 {
+        return Err(AxError::InvalidInput);
     } else {
         Some(SocketAddrEx::read_from_user(addr, addrlen)?)
     };
 
     debug!("sys_send <= fd: {fd}, flags: {flags}, addr: {addr:?}");
-
-    let socket = Socket::from_fd(fd)?;
     let sent = socket.send(
         &mut src,
         SendOptions {
             to: addr,
-            flags: SendFlags::default(),
+            flags: SendFlags::from_bits_truncate(flags),
             cmsg,
         },
     )?;
 
     Ok(sent as isize)
+}
+
+#[inline]
+fn validate_sendmsg_flags(flags: u32) -> AxResult<()> {
+    if flags & !SENDMSG_FLAGS_MASK != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    if flags & SENDMSG_FLAGS_UNSUPPORTED != 0 {
+        return Err(AxError::OperationNotSupported);
+    }
+    Ok(())
+}
+
+fn send_impl(
+    fd: i32,
+    src: impl Read + IoBuf,
+    flags: u32,
+    addr: UserConstPtr<sockaddr>,
+    addrlen: socklen_t,
+    cmsg: Vec<CMsgData>,
+) -> AxResult<isize> {
+    // Linux __sys_sendto: sockfd_lookup before flag validation and copy sockaddr (EBADF before
+    // EINVAL; issue-294). Matches `sys_sendmsg` order in this file.
+    let socket = Socket::from_fd(fd)?;
+    validate_sendmsg_flags(flags)?;
+    send_on_socket(&socket, fd, src, flags, addr, addrlen, cmsg)
 }
 
 pub fn sys_sendto(
@@ -56,23 +135,45 @@ pub fn sys_sendto(
 }
 
 pub fn sys_sendmsg(fd: i32, msg: UserConstPtr<msghdr>, flags: u32) -> AxResult<isize> {
-    let msg = msg.get_as_ref()?;
+    // Linux __sys_sendmsg: sockfd_lookup before copy_msghdr_from_user (EBADF before EFAULT).
+    let socket = Socket::from_fd(fd)?;
+    validate_sendmsg_flags(flags)?;
+
+    // Whole-structure snapshot (like `copy_msghdr_from_user`): `msg_control` / `msg_controllen` /
+    // `msg_iov` / … come from one load sequence, not independent re-reads of user `msghdr` (issue-197).
+    let msg = *msg.get_as_ref()?;
+    validate_msghdr_ptr_len_consistency(&msg)?;
     let mut cmsg = Vec::new();
     if !msg.msg_control.is_null() {
         let mut ptr = msg.msg_control as usize;
-        let ptr_end = ptr + msg.msg_controllen;
-        while ptr + size_of::<cmsghdr>() <= ptr_end {
-            let hdr = UserConstPtr::<cmsghdr>::from(ptr).get_as_ref()?;
-            if ptr_end - ptr < hdr.cmsg_len {
+        let ptr_end = ptr
+            .checked_add(msg.msg_controllen)
+            .ok_or(AxError::InvalidInput)?;
+        while let Some(hdr_end) = ptr.checked_add(size_of::<cmsghdr>()) {
+            if hdr_end > ptr_end {
+                break;
+            }
+            // Snapshot header in kernel: stepping and `CMsg::parse` use the same `cmsg_len`
+            // (Linux copies ancillary headers before parsing; avoids TOCTOU on user `cmsg_len`).
+            let hdr = *UserConstPtr::<cmsghdr>::from(ptr).get_as_ref()?;
+            if hdr.cmsg_len < size_of::<cmsghdr>() {
                 return Err(AxError::InvalidInput);
             }
-            cmsg.push(Box::new(CMsg::parse(hdr)?) as CMsgData);
-            ptr += hdr.cmsg_len;
+            let step = cmsg_align(hdr.cmsg_len)?;
+            let Some(next) = ptr.checked_add(step) else {
+                return Err(AxError::InvalidInput);
+            };
+            if next > ptr_end {
+                return Err(AxError::InvalidInput);
+            }
+            cmsg.push(Box::new(CMsg::parse(&hdr, ptr)?) as CMsgData);
+            ptr += step;
         }
     }
-    send_impl(
+    send_on_socket(
+        &socket,
         fd,
-        IoVectorBuf::new(msg.msg_iov as *const IoVec, msg.msg_iovlen)?.into_io(),
+        IoVectorBuf::new(msg.msg_iov.cast::<IoVec>(), msg.msg_iovlen)?.into_io(),
         flags,
         UserConstPtr::from(msg.msg_name as usize),
         msg.msg_namelen as socklen_t,
@@ -80,26 +181,45 @@ pub fn sys_sendmsg(fd: i32, msg: UserConstPtr<msghdr>, flags: u32) -> AxResult<i
     )
 }
 
-fn recv_impl(
+#[inline]
+fn validate_recvmsg_flags(flags: u32) -> AxResult<()> {
+    if flags & !RECVMSG_FLAGS_MASK != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    if flags & RECVMSG_FLAGS_UNSUPPORTED != 0 {
+        return Err(AxError::OperationNotSupported);
+    }
+    Ok(())
+}
+
+/// `recv_on_socket` uses this as `RecvOptions::from` when the user supplies `msg_name`/`addr`.
+/// Datagram transports overwrite it with the sender; stream transports (TCP, Unix stream, vsock)
+/// leave it unchanged. Linux `recvfrom(2)` then returns the connected peer (same as `getpeername`).
+#[inline]
+fn recv_addr_is_kernel_placeholder(addr: &SocketAddrEx) -> bool {
+    matches!(
+        addr,
+        SocketAddrEx::Ip(sa) if sa.ip().is_unspecified() && sa.port() == 0
+    )
+}
+
+/// After [`Socket::from_fd`], [`validate_recvmsg_flags`], and (for `recvmsg`) user `msghdr` setup.
+fn recv_on_socket(
+    socket: &Socket,
     fd: i32,
     mut dst: impl Write + IoBufMut,
     flags: u32,
     addr: UserPtr<sockaddr>,
     addrlen: UserPtr<socklen_t>,
     cmsg_builder: Option<CMsgBuilder>,
+    msg_flags_out: Option<UserPtr<u32>>,
 ) -> AxResult<isize> {
     debug!("sys_recv <= fd: {fd}, flags: {flags}");
 
-    let socket = Socket::from_fd(fd)?;
-    let mut recv_flags = RecvFlags::empty();
-    if flags & MSG_PEEK != 0 {
-        recv_flags |= RecvFlags::PEEK;
-    }
-    if flags & MSG_TRUNC != 0 {
-        recv_flags |= RecvFlags::TRUNCATE;
-    }
+    let recv_flags = RecvFlags::from_bits_truncate(flags);
 
     let mut cmsg = Vec::new();
+    let mut msg_trunc = false;
 
     let mut remote_addr =
         (!addr.is_null()).then(|| SocketAddrEx::Ip((Ipv4Addr::UNSPECIFIED, 0).into()));
@@ -109,39 +229,105 @@ fn recv_impl(
             from: remote_addr.as_mut(),
             flags: recv_flags,
             cmsg: Some(&mut cmsg),
+            msg_trunc: msg_flags_out
+                .is_some()
+                .then_some(core::ptr::addr_of_mut!(msg_trunc)),
         },
     )?;
 
-    if let Some(remote_addr) = remote_addr {
+    if let Some(mut remote_addr) = remote_addr {
+        if recv_addr_is_kernel_placeholder(&remote_addr)
+            && let Ok(peer) = socket.peer_addr()
+        {
+            remote_addr = peer;
+        }
         remote_addr.write_to_user(addr, addrlen.get_as_mut()?)?;
     }
 
+    let mut cmsg_trunc = false;
     if let Some(mut builder) = cmsg_builder {
-        for cmsg in cmsg {
+        let mut iter = cmsg.into_iter();
+        while let Some(cmsg) = iter.next() {
             let Ok(cmsg) = cmsg.downcast::<CMsg>() else {
                 warn!("received unexpected cmsg");
+                cmsg_trunc = true;
                 continue;
             };
 
             let pushed = match *cmsg {
-                CMsg::Rights { fds } => builder.push(SOL_SOCKET, SCM_RIGHTS, |data| {
-                    let mut written = 0;
-                    for (f, chunk) in fds.into_iter().zip(data.chunks_exact_mut(size_of::<i32>())) {
-                        let fd = add_file_like(f, false)?;
-                        chunk.copy_from_slice(&fd.to_ne_bytes());
-                        written += size_of::<i32>();
+                CMsg::Rights { fds } => {
+                    // `push` may return `Ok(false)` before invoking the closure; do not move `fds`
+                    // into a `FnOnce` that could be dropped unrun (issue-183).
+                    if builder.remaining() < size_of::<cmsghdr>() {
+                        cmsg_trunc = true;
+                        drop(fds);
+                        continue;
                     }
-                    Ok(written)
-                })?,
+                    let body_cap = builder.remaining() - size_of::<cmsghdr>();
+                    let total = fds.len();
+                    let pushed_inner = builder.push(SOL_SOCKET, SCM_RIGHTS, move |data| {
+                        let cap_fds = data.len() / size_of::<i32>();
+                        let to_install = total.min(cap_fds);
+                        let mut it = fds.into_iter();
+                        for (f, chunk) in it
+                            .by_ref()
+                            .take(to_install)
+                            .zip(data.chunks_exact_mut(size_of::<i32>()))
+                        {
+                            let fd = add_file_like(f, false)?;
+                            chunk.copy_from_slice(&fd.to_ne_bytes());
+                        }
+                        for f in it {
+                            drop(f);
+                        }
+                        Ok(to_install * size_of::<i32>())
+                    })?;
+                    if total.saturating_mul(size_of::<i32>()) > body_cap {
+                        cmsg_trunc = true;
+                    }
+                    pushed_inner
+                }
             };
             if !pushed {
+                cmsg_trunc = true;
                 break;
             }
         }
+        if iter.next().is_some() {
+            cmsg_trunc = true;
+        }
+        builder.commit()?;
+    } else if !cmsg.is_empty() {
+        cmsg_trunc = true;
+    }
+
+    if let Some(out) = msg_flags_out {
+        let mut mf = 0u32;
+        if msg_trunc {
+            mf |= MSG_TRUNC;
+        }
+        if cmsg_trunc {
+            mf |= MSG_CTRUNC;
+        }
+        *out.get_as_mut()? = mf;
     }
 
     debug!("sys_recv => fd: {fd}, recv: {recv}");
     Ok(recv as isize)
+}
+
+fn recv_impl(
+    fd: i32,
+    dst: impl Write + IoBufMut,
+    flags: u32,
+    addr: UserPtr<sockaddr>,
+    addrlen: UserPtr<socklen_t>,
+    cmsg_builder: Option<CMsgBuilder>,
+) -> AxResult<isize> {
+    // Linux __sys_recvfrom: sockfd_lookup before flag checks (EBADF before EINVAL/EOPNOTSUPP).
+    let socket = Socket::from_fd(fd)?;
+    validate_recvmsg_flags(flags)?;
+    recv_on_socket(&socket, fd, dst, flags, addr, addrlen, cmsg_builder, None)
 }
 
 pub fn sys_recvfrom(
@@ -156,18 +342,30 @@ pub fn sys_recvfrom(
 }
 
 pub fn sys_recvmsg(fd: i32, msg: UserPtr<msghdr>, flags: u32) -> AxResult<isize> {
-    let msg = msg.get_as_mut()?;
-    recv_impl(
+    // Linux __sys_recvmsg: sockfd_lookup before flag validation and copy_msghdr_from_user
+    // (EBADF before EINVAL/EOPNOTSUPP/EFAULT) (issue-293).
+    let socket = Socket::from_fd(fd)?;
+    validate_recvmsg_flags(flags)?;
+    // Snapshot `msghdr` + field addresses: avoid holding `&mut msghdr` across `recv` (issue-198).
+    let base = msg.address().as_usize();
+    let m = *msg.get_as_mut()?;
+    validate_msghdr_ptr_len_consistency(&m)?;
+    let cmsg_builder = if m.msg_control.is_null() {
+        None
+    } else {
+        Some(CMsgBuilder::new(
+            UserPtr::<cmsghdr>::from(m.msg_control as usize),
+            UserPtr::<usize>::from(base + offset_of!(msghdr, msg_controllen)),
+        )?)
+    };
+    recv_on_socket(
+        &socket,
         fd,
-        IoVectorBuf::new(msg.msg_iov as *mut IoVec, msg.msg_iovlen)?.into_io(),
+        IoVectorBuf::new(m.msg_iov.cast::<IoVec>(), m.msg_iovlen)?.into_io(),
         flags,
-        UserPtr::from(msg.msg_name as usize),
-        UserPtr::from(&mut msg.msg_namelen as *mut _ as *mut socklen_t),
-        (!msg.msg_control.is_null()).then(|| {
-            CMsgBuilder::new(
-                UserPtr::from(msg.msg_control as *mut cmsghdr),
-                &mut msg.msg_controllen,
-            )
-        }),
+        UserPtr::from(m.msg_name as usize),
+        UserPtr::<socklen_t>::from(base + offset_of!(msghdr, msg_namelen)),
+        cmsg_builder,
+        Some(UserPtr::<u32>::from(base + offset_of!(msghdr, msg_flags))),
     )
 }

@@ -1,0 +1,27 @@
+{
+  "id": "issue-274",
+  "title": "shutdown(2)：`AF_INET` UDP 忽略 `how`，一律 `close()` 整 socket，与 Linux 半关闭语义分叉",
+  "status": "resolved",
+  "created_at": "2026-04-12T16:00:00Z",
+  "severity": "low",
+  "fix_summary": "`UdpSocket` 增加 `rx_shut`/`tx_shut`：`Shutdown::Read`/`Write` 仅置标志并拒绝后续 `recv`/`send`（`InvalidInput`/`BrokenPipe`），`poll` 相应掩掉 `IN`/`OUT`；`Shutdown::Both` 置两标志并 `socket.close()`，不再对任意 `how` 全 close。",
+  "files_changed": ["vendor/axnet-ng/src/udp.rs"],
+  "description": "**`kernel/src/syscall/net/socket.rs`** **`sys_shutdown`**（约 **168–178** 行）将 **`how`** 映射为 **`axnet::Shutdown`** 后调用 **`SocketOps::shutdown`**。**`AF_INET` `SOCK_DGRAM`** 由 **`vendor/axnet-ng/src/udp.rs`** **`UdpSocket::shutdown`** 实现（约 **310–318** 行）：**`how`** **参数** **被** **忽略**（**`_how`**），**始终** **`socket.close()`** 并 **返回** **`Ok(())`**，**TODO(mivik): shutdown** **仍** **在**。\n\n**Linux** **对** **UDP** **`shutdown(2)`** **的** **`SHUT_RD`/`SHUT_WR`/`SHUT_RDWR`** **语义** **与** **TCP** **不同**（**例如** **仅** **停止** **读/写** **一侧**、**未必** **等价** **于** **立即** **销毁** **整** **fd** **语义**），**且** **随** **内核** **版本** **有** **文档化** **行为**。**当前** **实现** **与** **「按** **`how`** **半关闭」** **的** **常见** **预期** **及** **Linux** **对照** **易** **分叉**。\n\n**建议**：在 **`UdpSocket`** **中** **按** **`Shutdown::Read`/`Write`/`Both`** **分别** **对接** **smol/协议栈** **能力**（**或** **在** **无法** **半关闭** **时** **显式** **`EOPNOTSUPP`/`EINVAL`**，**勿** **静默** **全** **close** **冒充** **成功** **半关闭**）。\n\n**对照**：**`TcpSocket::shutdown`** **已** **区分** **`how`**（**`vendor/axnet-ng/src/tcp.rs`**）；**Unix** **`UnixSocket::shutdown`** **委托** **`transport`**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["shutdown"],
+  "source_context": {
+    "primary_files": ["vendor/axnet-ng/src/udp.rs:310-318", "kernel/src/syscall/net/socket.rs:168-178"],
+    "related_files": ["vendor/axnet-ng/src/tcp.rs:473-505"],
+    "key_insight": "UDP shutdown 忽略 how，全 close"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 Linux UDP `shutdown(fd, SHUT_WR)` 等。",
+    "expected_output_contains": "",
+    "pass_criteria": "UDP `shutdown` 的 `how` 与 Linux 行为一致，或对不支持组合返回明确 errno。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `UdpSocket::shutdown` 中实现按 `Shutdown` 分支的读/写侧关闭，或返回与 Linux 一致的错误码。",
+  "references": ["man 2 shutdown", "man 7 udp", "vendor/axnet-ng/src/udp.rs"]
+}

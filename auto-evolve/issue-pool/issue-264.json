@@ -1,0 +1,27 @@
+{
+  "id": "issue-264",
+  "title": "mmap：`MAP_ANONYMOUS` 强制要求 `fd <= 0`，Linux 忽略 `fd` 值（可带任意合法 fd）",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "移除 `MAP_ANONYMOUS` 与 `fd<=0` 的 XOR；匿名映射忽略 `fd`（不 `File::from_fd`），`offset==0`；无 `MAP_ANONYMOUS` 时 `fd<=0` → `EINVAL`，与 Linux 一致。",
+  "files_changed": ["kernel/src/syscall/mm/mmap.rs"],
+  "description": "**`kernel/src/syscall/mm/mmap.rs`** **`sys_mmap`**（约 **135–177** 行）在 **`MmapFlags::ANONYMOUS`** 与 **`fd <= 0`** 之间做 **XOR** 校验：\n\n```rust\nif map_flags.contains(MmapFlags::ANONYMOUS) != (fd <= 0) {\n    return Err(AxError::InvalidInput);\n}\n```\n\n即 **匿名映射** 仅当 **`fd` 为 0、负数或 -1** 时才允许；**`MAP_ANONYMOUS | MAP_PRIVATE` + `fd == 3`（已打开的有效文件描述符）** 会 **EINVAL**。\n\n**Linux `mmap(2)`**（手册 **VERSIONS**）：自 **Linux 2.6.12** 起，若指定 **`MAP_ANONYMOUS`**，**`fd` 参数被忽略**（此前曾要求 **`-1`**）。因此用户态可传入 **任意**（含正数）**合法** **`fd`**，内核不将其用于后备存储，调用 **成功**。\n\n**本仓库后续逻辑**（约 **224–228** 行）在 **`fd > 0`** 时取 **`File::from_fd`**；对 **匿名映射** 若放宽入口校验，应 **不** 根据 **`fd`** 打开文件（与 Linux「忽略 fd」一致），仅走 **`Backend::new_alloc`/`new_shared`** 分支。\n\n**建议**：删除或改写上述 **XOR** 条件：在 **`MAP_ANONYMOUS`** 时 **不** 要求 **`fd <= 0`**，并保证 **匿名路径** **从不** **`File::from_fd`**；非匿名映射仍要求 **`fd`** 有效。\n\n**回归注意**：**非匿名** **`fd == 0`**（如 stdin）在 Linux 上亦常 **EINVAL**，当前 **`fd <= 0` ⇒ 非匿名失败** 的行为可保留。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["mmap"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/mm/mmap.rs:135-177", "kernel/src/syscall/mm/mmap.rs:224-291"],
+    "related_files": [],
+    "key_insight": "MAP_ANONYMOUS 与 fd<=0 绑定，Linux 忽略 fd"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；用户态 `mmap(..., MAP_ANONYMOUS|MAP_PRIVATE, open(\"/dev/zero\",...), 0)` 等与 Linux 对照。",
+    "expected_output_contains": "",
+    "pass_criteria": "MAP_ANONYMOUS 时 fd 被忽略且映射成功，或与 Linux 差异显式文档化。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "匿名分支忽略 fd 数值；仅非匿名时 `fd > 0` 且 `File::from_fd`。",
+  "references": ["man 2 mmap VERSIONS", "kernel/src/syscall/mm/mmap.rs"]
+}

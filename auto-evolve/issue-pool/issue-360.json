@@ -1,0 +1,32 @@
+{
+  "id": "issue-360",
+  "title": "`madvise(2)`：`sys_madvise` 将大量 `MADV_*` 列入 `KNOWN_MADV_ADVICE` 通过首道校验，但 `match` 仅实现子集；其余合法 Linux `advice`（如 `MADV_MERGEABLE`/`MADV_COLD`/`MADV_PAGEOUT`/`MADV_HUGEPAGE` 等）落入默认分支 `EOPNOTSUPP`，与上游对这些 hint/reclaim 语义的成功或 no-op 行为不一致",
+  "status": "resolved",
+  "created_at": "2026-04-14T00:05:00Z",
+  "resolved_at": "2026-04-14T00:00:00Z",
+  "severity": "medium",
+  "description": "**`kernel/src/syscall/mm/mmap.rs`** **`KNOWN_MADV_ADVICE`** **（** **约** **412–440** **行** **）** **枚举** **了** **与** **`linux/uapi`** **一致的** **多种** **`MADV_*`** **，** **未** **在** **列表** **中** **者** **先** **`InvalidInput`** **。** **`sys_madvise`** **（** **约** **442–476** **行** **）** **`match`** **仅** **处理** **`DONTNEED`/`FREE`/`WILLNEED`/`POPULATE_*`** **及** **`NORMAL`/`RANDOM`/`SEQUENTIAL`** **；** **其余** **已** **被** **`KNOWN`** **接纳** **的** **`advice`** **走** **`_`** **`→`** **`OperationNotSupported`** **。** **Linux** **内核** **对** **`MADV_COLD`/`MADV_PAGEOUT`** **等** **有** **reclaim** **路径** **，** **对** **`MADV_MERGEABLE`** **等** **在** **可用** **时** **注册** **KSM** **或** **no-op** **；** **用户态** **仅** **依赖** **「** **合法** **`advice`** **即** **可** **尝试** **」** **时** **会** **在** **Starry** **上** **稳定** **得到** **`EOPNOTSUPP`** **，** **与** **glibc** **/`madvise` 探测** **行为** **分歧** **。**\n\n**建议** **：** **在** **`executor-memory`** **/** **注释** **中** **明确** **「** **KNOWN** **但** **未** **实现** **→** **`ENOTSUP`** **」** **为** **有意** **策略** **；** **或** **将** **纯** **hint** **类** **与** **`MADV_NORMAL`** **合并** **为** **`Ok(0)`** **，** **reclaim** **类** **逐步** **对齐** **Linux** **或** **单独** **文档** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["madvise"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/mm/mmap.rs:410-476"],
+    "related_files": [],
+    "key_insight": "KNOWN_MADV_ADVICE vs match arms EOPNOTSUPP gap vs Linux"
+  },
+  "fix_summary": "`sys_madvise`：`KNOWN_MADV_ADVICE` 内除 **`DONTNEED`/`FREE`/`DONTNEED_LOCKED`**、**`WILLNEED`/`POPULATE_*`**、**`NORMAL`/`RANDOM`/`SEQUENTIAL`** 与 **`MADV_REMOVE`/`HWPOISON`/`SOFT_OFFLINE`（ENOTSUP）** 外，**其余 uapi `MADV_*` 一律 `Ok(0)` no-op**（对齐 Linux 对 hint/reclaim 的常见成功/no-op；issue-360）。**`KNOWN`**/**注释**/**executor-memory** 同步。",
+  "files_changed": [
+    "kernel/src/syscall/mm/mmap.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-360.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：对已映射匿名区 `madvise(MADV_MERGEABLE)` / `MADV_COLD` 对照 Linux `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "与 Linux 对各类 `MADV_*` 的成功/no-op/不支持分层一致或文档化。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "拆分「未知 advice→EINVAL」与「已知未实现→文档化 ENOTSUP」；对可安全忽略 hint 返回 `Ok(0)`。",
+  "references": ["man 2 madvise", "kernel/mm/madvise.c", "kernel/src/syscall/mm/mmap.rs"]
+}

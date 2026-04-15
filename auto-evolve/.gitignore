@@ -1,0 +1,18 @@
+kernel-state.json
+daemon-state.json
+daemon.pid
+progress-report.json
+msg-queue/debugger/*.json
+msg-queue/executor/*.json
+logs/*.log
+__pycache__/
+
+# 测试构建产物和结果
+test-build/
+test-results/
+
+# 测试二进制（太大，用脚本重新生成）
+test-suites/ltp/riscv64/
+test-suites/libc-test/riscv64/
+test-suites/oscomp-basic/riscv64/
+test-suites/oscomp-basic/src/

@@ -1,0 +1,32 @@
+{
+  "id": "issue-365",
+  "title": "`epoll_wait`/`epoll_pwait`/`epoll_pwait2`：`do_epoll_wait` 使用 `block_on(future::timeout(...))` 且无 `interruptible`；`block_on` 外层 `Err(_)` 映射为 `Ok(0)`，与 Linux 在信号打断阻塞等待时返回 `-EINTR` 的语义不对齐（同主题见 `ppoll`/`do_poll` issue-355、`select`/`do_select` issue-364）",
+  "status": "resolved",
+  "created_at": "2026-04-12T20:00:00Z",
+  "resolved_at": "2026-04-14T00:00:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/io_mpx/epoll.rs`** **`do_epoll_wait`** **（** **约** **122–132** **行** **）** **：** **`with_blocked_signals`** **内** **`match block_on(future::timeout(timeout, poll_io(...))) { Ok(r) => r.map(...), Err(_) => Ok(0) }`** **。** **未** **使用** **`interruptible`** **包装** **，** **与** **已** **在** **`poll.rs`** **`do_poll`** **中** **为** **`ppoll`** **引入** **的** **`EINTR`** **分层** **（** **issue-355** **）** **不一致** **。** **`Err(_)`** **一律** **当作** **「** **零** **事件** **」** **返回** **，** **可能** **掩盖** **信号** **导致的** **可** **中断** **等待** **结束** **，** **与** **`Linux`** **`epoll_wait`** **被** **信号** **中断** **时** **的** **`-EINTR`** **行为** **不符** **。**\n\n**建议** **：** **参照** **`do_poll`** **：** **`interruptible`** **`+`** **与** **`Option<Duration>`/`TimeValue`** **一致** **的** **超时** **future** **（** **如** **`timeout_at`** **）** **；** **区分** **超时** **（** **返回** **就绪** **计数** **，** **可为** **0** **）** **与** **`Interrupted`** **→** **`AxError::Interrupted`** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["epoll_wait", "epoll_pwait", "epoll_pwait2"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/io_mpx/epoll.rs:101-134"],
+    "related_files": ["kernel/src/syscall/io_mpx/poll.rs", "kernel/src/syscall/io_mpx/select.rs"],
+    "key_insight": "do_epoll_wait timeout Err vs EINTR; no interruptible"
+  },
+  "fix_summary": "**`do_epoll_wait`**：**`block_on`(`interruptible`(`future::timeout_at`(`poll_io`)))`**；**`Ok(Ok(Ok(n)))`** **成功**、**`Ok(Err(Elapsed))`** 超时 **`Ok(0)`**、**`Err(Interrupted)`** → **`AxError::Interrupted`（EINTR）**；删 **`Err(_) => Ok(0)`**。**`timeout`** **`Option<TimeValue>`**；**`sys_epoll_pwait`** **`TimeValue::from_millis`**。**issue-365**。",
+  "files_changed": [
+    "kernel/src/syscall/io_mpx/epoll.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-365.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：阻塞 `epoll_wait` 期间发信号对照 Linux `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "信号中断返回 EINTR 或与 Linux 一致；超时与中断可区分。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "对齐 `do_poll`/`do_select`（计划）：`interruptible` + 超时 future 分层，删除 `Err(_) => Ok(0)` 吞 `EINTR` 的路径。",
+  "references": ["man 7 epoll", "kernel/src/syscall/io_mpx/epoll.rs", "kernel/src/syscall/io_mpx/poll.rs"]
+}

@@ -1,0 +1,27 @@
+{
+  "id": "issue-312",
+  "title": "`uname(2)`：`sys_uname` 写入的 `new_utsname.domainname` 固定为 GitHub 仓库 URL 字符串，与 Linux 上该字段通常表示 NIS/YP 域名或 `(none)` 的惯例不一致，可能误导依赖 `domainname` 做环境探测或配置的用户态",
+  "status": "resolved",
+  "created_at": "2026-04-12T12:30:00Z",
+  "severity": "low",
+  "fix_summary": "将 `UTSNAME.domainname` 从 GitHub URL 改为 `pad_str(\"(none)\")`，与 Linux 上未设置 NIS 域名时的常见值一致；在 `sys.rs` 注释说明勿用 HTTP URL 及 issue-312。`executor-memory` `uname` 条补充 `domainname` 语义。",
+  "files_changed": ["kernel/src/syscall/sys.rs", "auto-evolve/memory/executor-memory.md"],
+  "description": "**`kernel/src/syscall/sys.rs`** **常量** **`UTSNAME`** **（** **约** **145–152** **行** **）** **中** **`domainname`** **被** **`pad_str(\"https://github.com/Starry-OS/StarryOS\")`** **填充** **。** **Linux** **`struct utsname`** **的** **`domainname`** **在** **典型** **发行版** **上** **多为** **NIS** **域名** **、** **空** **或** **`(none)`** **，** **并非** **HTTP(S)** **URL** **。** **部分** **程序** **用** **`uname().domainname`** **推断** **网络** **/** **目录** **服务** **环境** **；** **当前** **值** **易** **被** **误判** **为** **合法** **DNS** **域名** **或** **泄露** **构建** **元数据** **。** **`sysname`/`release`/`version`/`machine`** **等** **字段** **与** **常见** **Linux** **ABI** **期望** **已** **有** **注释** **或** **固定** **策略** **；** **`domainname`** **建议** **单独** **对齐** **语义** **或** **在** **注释** **中** **说明** **有意** **用作** **项目** **链接** **。**\n\n**建议** **：** **改为** **`(none)`** **/** **空** **填充** **或** **与** **`nodename`** **一致的** **短** **标识** **；** **若** **保留** **URL** **，** **在** **代码** **与** **`executor-memory`** **中** **明确** **文档化** **为** **Starry** **扩展** **行为** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["uname"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/sys.rs:145-160"],
+    "related_files": [],
+    "key_insight": "uname domainname 非常规 URL"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；`uname -a` / 读取 `utsname.domainname` 对照常见 Linux。",
+    "expected_output_contains": "",
+    "pass_criteria": "`domainname` 与上游惯例一致，或文档说明为有意差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "将 `UTSNAME.domainname` 改为 `(none)` 或与 NIS 语义一致的占位；若保留 URL，在 `sys_uname` 旁注释说明非 Linux 默认语义。",
+  "references": ["man 2 uname", "kernel/src/syscall/sys.rs"]
+}

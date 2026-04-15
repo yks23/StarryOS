@@ -1,0 +1,32 @@
+{
+  "id": "issue-375",
+  "title": "`get_robust_list(2)`：`sys_get_robust_list` 先 `get_task`/`may_peer_process_by_cred`，再 `head`/`size` 的 `vm_write`；无效 `tid` 与 `NULL`/`坏` 用户指针同时存在时可能先 `NoSuchProcess`/`EPERM` 而非 `EFAULT`，与 Linux 常先校验用户输出指针的分层可能不一致",
+  "status": "resolved",
+  "created_at": "2026-04-13T00:00:00Z",
+  "resolved_at": "2026-04-13T05:00:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/sync/futex.rs`** **`sys_get_robust_list`** **（** **约** **119–134** **行** **）** **：** **依次** **`get_task(tid)?`** **、** **`may_peer_process_by_cred`** **，** **然后** **`head.vm_write(...)`** **、** **`size.vm_write(...)`** **。** **当** **`tid`** **无** **对应** **任务** **（** **`NoSuchProcess`** **）** **或** **跨** **任务** **访问** **被拒** **（** **`OperationNotPermitted`** **）** **与** **`head`/`size` 不可写** **/** **`NULL`** **（** **`vm_write`** **→** **`BadAddress`** **）** **同时** **可能** **成立** **时** **，** **Starry** **先** **返回** **查找** **/** **凭证** **错误** **。** **Linux** **常见** **模式** **为** **先** **`access_ok`/`copy_to_user`** **准备** **或** **在** **同一** **失败** **路径** **上** **保证** **`EFAULT`** **优先** **于** **`ESRCH`/`EPERM`** **（** **与** **本** **仓库** **多** **处** **「** **用户** **指针** **/`EBADF`** **先于** **其它** **`EINVAL`」** **主题** **对照** **）** **。** **issue-277** **已** **覆盖** **凭证** **门控** **本身** **；** **本条** **聚焦** **`EFAULT`** **与** **`get_task`/`EPERM`** **的** **相对** **顺序** **。**\n\n**建议** **：** **在** **`get_task`** **之前** **对** **`head`/`size` 做** **`is_null()`** **或** **`check_access`** **（** **与** **`rt_sigpending`** **等** **`NULL` → `EFAULT` 早退** **风格** **一致** **）** **；** **或** **对照** **Linux** **`get_robust_list`** **实现** **固定** **顺序** **并** **文档化** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["get_robust_list"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/sync/futex.rs:119-134"],
+    "related_files": [],
+    "key_insight": "get_task/cred before user pointer writes; EFAULT vs ESRCH/EPERM ordering"
+  },
+  "fix_summary": "**`sys_get_robust_list`**：**`head`/`size` `NULL`** **或** **`check_access`** **失败** **→** **`BadAddress`** **先于** **`get_task`/`may_peer_process_by_cred`**。**issue-375**。**",
+  "files_changed": [
+    "kernel/src/syscall/sync/futex.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-375.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：用户态构造非法 `tid` + `head==NULL` 对照 Linux `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "与 Linux 在并发无效 tid 与坏指针下的 errno 分层一致，或文档化偏差。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "将用户输出指针的可写性/`NULL` 校验提前到 `get_task` 之前，或对齐 Linux `get_robust_list` 的校验顺序。",
+  "references": ["man 2 get_robust_list", "kernel/src/syscall/sync/futex.rs"]
+}

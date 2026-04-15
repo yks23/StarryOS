@@ -1,0 +1,27 @@
+{
+  "id": "issue-225",
+  "title": "sys_fallocate：仅接受 mode==0，拒绝全部 FALLOC_FL_*，与 Linux fallocate(2)/稀疏文件语义差距大",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "medium",
+  "fix_summary": "`sys_fallocate`：引入 **`linux_raw_sys`** 的 **`FALLOC_FL_*`** 组成 **`FALLOC_FL_KNOWN_MASK`**；**`mode` 含未知位** → **`EINVAL`**；**仅实现 `mode == 0`**（默认区间预分配/`set_len`）；**非零且已知组合**（**`KEEP_SIZE`/打洞/零填充等**）→ **`EOPNOTSUPP`**，与 **`EINVAL` 全拒** 区分（issue-225）。",
+  "files_changed": ["kernel/src/syscall/fs/io.rs"],
+  "description": "**`kernel/src/syscall/fs/io.rs`** **`sys_fallocate`**（约 **146–169** 行）在 **`mode != 0`** 时直接 **`InvalidInput`**，仅当 **`mode == 0`** 时用 **`set_len(max(current, offset+len))`** 实现**预分配/扩展文件逻辑长度**。\n\n**Linux `fallocate(2)`**：**`mode`** 为 **`FALLOC_FL_*`** 标志位组合（如 **`FALLOC_FL_KEEP_SIZE`**、**`FALLOC_FL_PUNCH_HOLE`**、**`FALLOC_FL_ZERO_RANGE`**、**`FALLOC_FL_COLLAPSE_RANGE`** 等），用于**打洞**、**零填充**、**不移动 EOF 的预分配**等。当前实现**无法**表达任何非零 **`mode`**，依赖 **`fallocate`/`posix_fallocate` 扩展行为** 的应用（数据库、容器镜像工具等）会得到 **`EINVAL`**，与 **Linux/glibc** 行为不一致。\n\n**`lseek` `SEEK_HOLE`/`SEEK_DATA`** 已在 **`lseek_data_hole_dense`** 注释中说明 **Starry** 尚未暴露完整 **extent/hole** 图（**`io.rs` 约 28–31 行**）；本 issue 与 **issue-019**（**`madvise`/msync** no-op）同属 **VFS/页缓存策略**缺口，但入口为 **`syscall` 层 `fallocate`**。\n\n**建议**：按能力分级：**显式拒绝未知位**；对 **`PUNCH_HOLE`/`ZERO_RANGE`** 在 **VFS 支持前** 返回 **`EOPNOTSUPP`** 并文档化；或实现与 **`SharedPages`/文件后端** 一致的 **hole** 元数据后再放开。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["fallocate"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/io.rs:146-169"],
+    "related_files": ["kernel/src/syscall/fs/io.rs:28-31"],
+    "key_insight": "mode 仅 0；无 FALLOC_FL_* 分发"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；`fallocate(fd, FALLOC_FL_KEEP_SIZE|…)` 与 Linux 对照。",
+    "expected_output_contains": "",
+    "pass_criteria": "支持的 `FALLOC_FL_*` 子集与 Linux 一致，或明确文档化仅支持 `mode==0`。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos：通过（exit 0）"
+  },
+  "suggested_fix": "引入 `linux_raw_sys`/`uapi` 的 `FALLOC_FL_*` 掩码校验；分阶段实现或 `EOPNOTSUPP`。",
+  "references": ["man 2 fallocate", "issue-019", "issue-020"]
+}

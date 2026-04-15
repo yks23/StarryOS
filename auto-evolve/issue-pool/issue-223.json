@@ -1,0 +1,27 @@
+{
+  "id": "issue-223",
+  "title": "getsockopt：`call_dispatch!` 未包含 `SO_RCVTIMEO`/`SO_SNDTIMEO`，查询超时返回 ENOPROTOOPT，与 setsockopt/Linux 不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "medium",
+  "fix_summary": "`sys_getsockopt` 在 **`IP_TTL`** 之后增加 **`SOL_SOCKET` + `SO_RCVTIMEO`/`SO_SNDTIMEO`**：`optlen >= sizeof(timeval)`，`GetSocketOption::ReceiveTimeout`/`SendTimeout` 取 **`Duration`**，**`conv::Duration::rust_to_sys`** → **`time::write_timeval_user`** 字段写回用户 **`timeval`**，并置 **`*optlen = sizeof(timeval)`**（与 issue-217 **`setsockopt`** 对称）。新增 **`write_timeval_user`**（与 **`read_timeval_user`** 对称）。",
+  "files_changed": ["kernel/src/syscall/net/opt.rs", "kernel/src/time.rs"],
+  "description": "**`kernel/src/syscall/net/opt.rs`** **`sys_setsockopt`**（**issue-217 verified**）已为 **`SOL_SOCKET` + `SO_RCVTIMEO`/`SO_SNDTIMEO`** 实现 **`read_timeval_user`** + **`SetSocketOption::ReceiveTimeout`/`SendTimeout`**。\n\n**`sys_getsockopt`**（约 **136–196** 行）在 **`IP_TTL`**、**`TCP_INFO`** 特判后，对 **`(level, optname)`** 使用 **`call_dispatch!(dispatch, (level, optname))`**。宏 **`call_dispatch!`**（约 **104–122** 行）仅列出 **`SO_REUSEADDR`/`SO_ERROR`/…/`SO_PEERCRED`** 及 **`TCP_*`** 等，**未包含** **`ReceiveTimeout`/`SendTimeout`**（**`axnet` `GetSocketOption`** 已存在对应变体，见 **`vendor/axnet-ng/src/options.rs`**）。\n\n因此 **`getsockopt(..., SO_RCVTIMEO)`** / **`SO_SNDTIMEO`** 落入 **`_ => ENOPROTOOPT`**（约 **131** 行），与 **Linux** 可 **`getsockopt`** 读回 **`struct timeval`**、以及与 **已实现的 `setsockopt`** 行为 **不对称**。\n\n**建议**：在 **`sys_getsockopt`** 中 **`SOL_SOCKET` + `SO_RCVTIMEO`/`SO_SNDTIMEO`** 增加与 **`setsockopt`** 对称的分支： **`get_option(GetSocketOption::ReceiveTimeout(&mut d))`/`SendTimeout`**，将 **`Duration`** 转为 **`timeval`** 写入用户缓冲（**`tv_sec`/`tv_usec` 字段写**或 **`vm_write`** 与 **issue-217** 写回策略对齐），并正确更新 **`*optlen`**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["getsockopt"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/opt.rs:104-196"],
+    "related_files": ["kernel/src/syscall/net/opt.rs:228-241", "vendor/axnet-ng/src/options.rs:53-72"],
+    "key_insight": "setsockopt 有 RCVTIMEO/SNDTIMEO；getsockopt 宏表无对应项"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；用户态 `getsockopt(SO_RCVTIMEO)` 与 Linux 对照。",
+    "expected_output_contains": "",
+    "pass_criteria": "`getsockopt` 能返回当前收发超时或文档化 ENOPROTOOPT 为有意限制。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos：通过（exit 0）"
+  },
+  "suggested_fix": "在 `sys_getsockopt` 增加 `SO_RCVTIMEO`/`SO_SNDTIMEO` 分支，或扩展 `call_dispatch!` 含 `ReceiveTimeout`/`SendTimeout as Duration`。",
+  "references": ["man 7 socket", "issue-217"]
+}

@@ -14,7 +14,10 @@ use axtask::current;
 use memory_addr::{MemoryAddr, PAGE_SIZE_4K, VirtAddr};
 use starry_vm::vm_write_slice;
 
-use crate::task::AsThread;
+use crate::{
+    config::{USER_SPACE_BASE, USER_SPACE_SIZE},
+    task::AsThread,
+};
 
 /// Check whether pages are resident in memory.
 ///
@@ -51,19 +54,25 @@ pub fn sys_mincore(addr: usize, length: usize, vec: *mut u8) -> AxResult<isize> 
         return Err(AxError::InvalidInput);
     }
 
-    // EFAULT: vec must not be null (basic check, vm_write_slice will do full validation)
+    // length=0: Linux mm/mincore.c returns0 without touching `vec` (NULL is ok).
+    // POSIX: zero-length mincore is a no-op after addr alignment is checked.
+    if length == 0 {
+        return Ok(0);
+    }
+
+    // EFAULT: vec must not be null when any output is produced
     if vec.is_null() {
         return Err(AxError::BadAddress);
     }
 
     debug!("sys_mincore <= addr: {addr:#x}, length: {length:#x}, vec: {vec:?}");
 
-    // Special case: length=0
-    // According to Linux kernel (mm/mincore.c), length=0 returns success
-    // WITHOUT validating that addr is mapped.  This is intentional behavior
-    // to match POSIX semantics where a zero-length operation is a no-op.
-    if length == 0 {
-        return Ok(0);
+    // Linux ENOMEM: `length > TASK_SIZE - addr` (overflow or past user AS end). Reject before
+    // `vec![..; page_count]` so absurd `length` cannot force huge kernel allocations (issue-354).
+    const USER_SPACE_END: usize = USER_SPACE_BASE + USER_SPACE_SIZE;
+    let end = addr.checked_add(length).ok_or(AxError::NoMemory)?;
+    if addr < USER_SPACE_BASE || end > USER_SPACE_END {
+        return Err(AxError::NoMemory);
     }
 
     // Calculate number of pages to check
@@ -71,7 +80,7 @@ pub fn sys_mincore(addr: usize, length: usize, vec: *mut u8) -> AxResult<isize> 
 
     // Get current address space
     let curr = current();
-    let aspace = curr.as_thread().proc_data.aspace.lock();
+    let aspace = curr.as_thread().proc_data.aspace.read();
 
     let mut result = vec![0u8; page_count];
     let mut i = 0;

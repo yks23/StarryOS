@@ -1,0 +1,32 @@
+{
+  "id": "issue-401",
+  "title": "`fstatat`/`statx`/`faccessat2`：`path` 为 `\"\"` 且无 `AT_EMPTY_PATH` 时未在 `resolve_at` 前拒绝为 `EINVAL`",
+  "status": "resolved",
+  "created_at": "2026-04-13T00:15:00Z",
+  "severity": "low",
+  "description": "`kernel/src/syscall/fs/stat.rs` **`sys_fstatat`**（约 44–75 行）、**`sys_statx`**（约 77–136 行）、**`sys_faccessat2`**（约 145–183 行）：在 **`path.nullable().map(vm_load_string)`** 得到 **`Some(\"\")`** 且 **`flags & AT_EMPTY_PATH == 0`** 时，Linux **通常** **`EINVAL`**（空串 **+** **`AT_EMPTY_PATH`** **表示** **作用于** **`dirfd`**，与 **`statx`** 注释 **situation 4**及 **issue-399** **`ctl.rs`** **`reject_empty_pathname_without_empty_path_flag`** **语义** **一致**）。当前 **直接** **`resolve_at`**，**未** 复用 **`ctl.rs`** **`reject_empty_pathname_without_empty_path_flag`**（模块内私有，**`stat.rs`** 须本地等价逻辑或上提共享）。\n\n建议：三处 **`path`** **`Option`** **就绪后**、**`resolve_at`** **前** **调用** **与** **issue-399** **相同** **谓词** **，** **注释** **引用** **issue-401** **及** **issue-399**/**issue-331**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["fstatat", "newfstatat", "stat", "lstat", "fstat", "statx", "faccessat2", "access"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/stat.rs:44-75", "kernel/src/syscall/fs/stat.rs:77-136", "kernel/src/syscall/fs/stat.rs:145-183"],
+    "related_files": ["kernel/src/syscall/fs/at_path.rs", "kernel/src/syscall/fs/ctl.rs", "kernel/src/syscall/fs/mod.rs"],
+    "key_insight": "`reject_empty_pathname_without_empty_path_flag` 上提至 `syscall/fs/at_path.rs`（`pub(crate)`）；`sys_fstatat`/`sys_statx`/`sys_faccessat2` 在 `resolve_at` 前调用；`ctl.rs` 继续复用"
+  },
+  "fix_summary": "新增 `kernel/src/syscall/fs/at_path.rs`，将 `reject_empty_pathname_without_empty_path_flag` 上提为 `pub(crate)`；`ctl.rs` 改为 `use super::at_path::...`；`stat.rs` 三处在 `path` 就绪后、`resolve_at` 前调用该辅助并加 issue-401/issue-399/issue-331 注释。",
+  "files_changed": [
+    "kernel/src/syscall/fs/at_path.rs",
+    "kernel/src/syscall/fs/mod.rs",
+    "kernel/src/syscall/fs/ctl.rs",
+    "kernel/src/syscall/fs/stat.rs"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：`fstatat(AT_FDCWD, \"\", …, 0)` / `statx`/`faccessat2` 对照 Linux `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "空字符串路径且无 AT_EMPTY_PATH 时返回 EINVAL（`InvalidInput`）。",
+    "last_result": "通过：`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`（exit 0）"
+  },
+  "suggested_fix": "将 `reject_empty_pathname_without_empty_path_flag` 上提为 `syscall::fs` 公共辅助，或在 `stat.rs` 复制等价检查于 `resolve_at` 之前。",
+  "references": ["man 2 fstatat", "man 2 statx", "man 2 faccessat2", "kernel/src/syscall/fs/stat.rs", "issue-399", "issue-331", "issue-283"]
+}

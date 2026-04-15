@@ -1,0 +1,27 @@
+{
+  "id": "issue-278",
+  "title": "pidfd_getfd：忽略 `flags` 参数，非零时应 EINVAL（与 Linux 分叉）",
+  "status": "resolved",
+  "created_at": "2026-04-12T23:00:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_pidfd_getfd` 入口增加 `flags != 0` → `InvalidInput`（EINVAL），与 Linux `pidfd_getfd(2)` 预留标志位及同文件 `sys_pidfd_send_signal` 一致。",
+  "files_changed": ["kernel/src/syscall/fs/pidfd.rs"],
+  "description": "**`kernel/src/syscall/fs/pidfd.rs`** **`sys_pidfd_getfd`**（约 **55–68** 行）接收第三参 **`flags: u32`**，**实现** **中** **未** **读取** **或** **校验** **`flags`**，**直接** **在** **目标** **进程** **fd** **表** **中** **复制** **文件** **描述符**。\n\n**Linux `pidfd_getfd(2)`** / **`kernel/pid.c`**：**`flags`** **须** **为** **0**（**或** **内核** **已** **定义** **的** **掩码** **内** **位**）；**未知** **非零** **位** **通常** **`errno=EINVAL`**。**当前** **Starry** **对** **任意** **`flags`** **均** **静默** **成功**，**与** **Linux** **在** **预留** **标志** **位** **上的** **拒绝** **语义** **分叉**。\n\n**对照**：同文件 **`sys_pidfd_send_signal`** 已对 **`flags != 0`** **返回** **`InvalidInput`**（约 **77–78** 行）。\n\n**建议**：在 **`sys_pidfd_getfd`** **入口** **增加** **`if flags != 0 { return Err(InvalidInput); }`**（**或** **与** **上游** **`PIDFD_GETFD_*`** **掩码** **对齐** **的** **位** **校验**）。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["pidfd_getfd"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/pidfd.rs:55-68"],
+    "related_files": ["kernel/src/syscall/fs/pidfd.rs:71-78"],
+    "key_insight": "pidfd_getfd 未校验 flags"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 Linux `pidfd_getfd` 对 flags 的 EINVAL。",
+    "expected_output_contains": "",
+    "pass_criteria": "非零/未知 flags → EINVAL（InvalidInput），或与 Linux 一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `sys_pidfd_getfd` 开头 `if flags != 0 { return Err(AxError::InvalidInput); }`，或按 Linux uapi 掩码校验。",
+  "references": ["man 2 pidfd_getfd", "kernel/src/syscall/fs/pidfd.rs"]
+}

@@ -1,0 +1,27 @@
+{
+  "id": "issue-293",
+  "title": "`recvfrom`/`recvmsg`：`validate_recvmsg_flags` 在 `Socket::from_fd` 之前，非法 `flags` 的 `EINVAL` 可能先于非法 `fd` 的 `EBADF`，与 Linux `sockfd_lookup` 优先顺序可能不一致",
+  "status": "resolved",
+  "created_at": "2026-04-13T08:00:00Z",
+  "severity": "low",
+  "fix_summary": "`recv_impl` 与 `sys_recvmsg` 中先 `Socket::from_fd(fd)?` 再 `validate_recvmsg_flags(flags)?`，使无效 socket fd 时 `EBADF` 先于非法 `MSG_*` 的 `EINVAL`/`EOPNOTSUPP`。更新 `recv_on_socket` 文档注释与 executor-memory（含 issue-135  Debugger 条目的顺序说明）。",
+  "files_changed": ["kernel/src/syscall/net/io.rs", "auto-evolve/memory/executor-memory.md"],
+  "description": "**`kernel/src/syscall/net/io.rs`** **`recv_impl`** **（** **约** **308–318** **行** **）** **与** **`sys_recvmsg`** **（** **约** **332–335** **行** **）** **均** **先** **`validate_recvmsg_flags(flags)?`** **，** **再** **`Socket::from_fd(fd)?`** **，** **最后** **才** **访问** **用户** **`msghdr`/`buf`** **等** **。**\n\n**Linux** **`__sys_recvmsg`/`__sys_recvfrom`** **路径** **通常** **先** **`sockfd_lookup`** **/****`fget`** **解析** **`fd`** **（** **非法** **`fd`** **→** **`EBADF`** **）** **，** **再** **在校验** **`struct` **msghdr** **或** **拷贝** **用户** **缓冲** **前** **处理** **`flags`** **（** **未知** **`MSG_*`** **位** **等** **→** **`EINVAL`/`EOPNOTSUPP`** **等** **）** **。** **当** **同时** **存在** **非法** **`fd`** **与** **非法** **`flags`** **时** **，** **错误** **码** **先后** **可能** **与** **「** **先** **`EINVAL`** **(flags)** **再** **`EBADF`** **(fd)** **」** **不同** **（** **与** **issue-281**/**284** **类** **「** **输出** **/****用户** **指针** **与** **VFS** **顺序** **」** **不同** **维度** **，** **但** **同属** **syscall** **错误** **顺序** **）** **。**\n\n**建议**：将 **`Socket::from_fd(fd)?`** **提前** **到** **`validate_recvmsg_flags`** **之前** **（** **与** **`send_impl`** **注释** **「** **sockfd_lookup** **before** **…** **」** **一致** **）** **；** **或** **文档化** **与** **目标** **Linux** **版本** **在** **`EBADF`/`EINVAL`** **先后** **上的** **差异** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["recvfrom", "recvmsg"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/io.rs:308-358"],
+    "related_files": [],
+    "key_insight": "flags 校验先于 from_fd，非法 fd+flags 时 errno 顺序可能与 Linux 不同"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 Linux net/socket.c `__sys_recvmsg` 中 `sockfd_lookup` 与 flags 校验顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "非法 fd 与非法 flags 同时存在时 errno 顺序与目标 Linux 一致，或显式文档化差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "先 `Socket::from_fd` 再 `validate_recvmsg_flags`，与 send 路径及 Linux 常见顺序对齐。",
+  "references": ["man 2 recvmsg", "man 2 recvfrom", "kernel/src/syscall/net/io.rs", "issue-276"]
+}

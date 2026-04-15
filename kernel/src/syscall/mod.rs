@@ -34,6 +34,13 @@ pub fn handle_syscall(uctx: &mut UserContext) {
         Sysno::chdir => sys_chdir(uctx.arg0() as _),
         Sysno::fchdir => sys_fchdir(uctx.arg0() as _),
         Sysno::chroot => sys_chroot(uctx.arg0() as _),
+        // Legacy directory-path syscalls (`mkdir`, `link`, `rmdir`, `unlink`, `symlink`, `rename`)
+        // exist only on ABIs where `syscalls::Sysno` defines them (e.g. x86/x86_64). Linux riscv64 /
+        // aarch64 often omit separate `__NR_*` for these; glibc/musl usually wrap the `*at`
+        // counterparts with `AT_FDCWD` (`mkdirat`, `linkat`, `unlinkat`, `symlinkat`), wiring through
+        // to `sys_mkdirat` / `sys_linkat` / `sys_unlinkat` / `sys_symlinkat` below. `rename(2)`
+        // lowers to `renameat` / `renameat2` (see the riscv64 `renameat` note below, issue-292).
+        // (issue-297)
         #[cfg(target_arch = "x86_64")]
         Sysno::mkdir => sys_mkdir(uctx.arg0() as _, uctx.arg1() as _),
         Sysno::mkdirat => sys_mkdirat(uctx.arg0() as _, uctx.arg1() as _, uctx.arg2() as _),
@@ -58,6 +65,8 @@ pub fn handle_syscall(uctx: &mut UserContext) {
         Sysno::symlinkat => sys_symlinkat(uctx.arg0() as _, uctx.arg1() as _, uctx.arg2() as _),
         #[cfg(target_arch = "x86_64")]
         Sysno::rename => sys_rename(uctx.arg0() as _, uctx.arg1() as _),
+        // `syscalls::Sysno` has no `renameat` variant on `riscv64` (Linux riscv64 ABI / musl only
+        // define `renameat2`; libc `renameat(2)` uses `renameat2` with flags=0 → `sys_renameat2`).
         #[cfg(not(target_arch = "riscv64"))]
         Sysno::renameat => sys_renameat(
             uctx.arg0() as _,
@@ -76,6 +85,12 @@ pub fn handle_syscall(uctx: &mut UserContext) {
         Sysno::syncfs => sys_syncfs(uctx.arg0() as _),
 
         // file ops
+        // Legacy path-only syscalls (`chown`, `lchown`, `chmod`, `readlink`, `utime`, `utimes`)
+        // exist only on ABIs where `syscalls::Sysno` defines them (e.g. x86/x86_64). Linux riscv64 /
+        // aarch64 often omit separate `__NR_*` for these; glibc/musl usually route them via
+        // `fchownat` / `fchmodat` / `readlinkat` / `utimensat` with `AT_FDCWD` (and
+        // `AT_SYMLINK_NOFOLLOW` for `lchown`, `utimensat` for `utime`/`utimes`) → the `sys_*`
+        // handlers below (issue-300; symmetric to `fs ctl` legacy `*at`, issue-297).
         #[cfg(target_arch = "x86_64")]
         Sysno::chown => sys_chown(uctx.arg0() as _, uctx.arg1() as _, uctx.arg2() as _),
         #[cfg(target_arch = "x86_64")]
@@ -117,6 +132,11 @@ pub fn handle_syscall(uctx: &mut UserContext) {
         ),
 
         // fd ops
+        // Legacy `open(2)` / `dup2(2)` syscall numbers exist only on ABIs where `syscalls::Sysno`
+        // defines `Sysno::open` / `Sysno::dup2` (x86/x86_64). Linux riscv64/aarch64 often omit
+        // separate `__NR_open` / `__NR_dup2`; libc usually routes `open(2)` via `openat` with
+        // `AT_FDCWD` and `dup2(2)` via `dup3(old, new, 0)` → `sys_openat` / `sys_dup3` below
+        // (issue-301; symmetric to `file ops` legacy `*at`, issue-300).
         #[cfg(target_arch = "x86_64")]
         Sysno::open => sys_open(uctx.arg0() as _, uctx.arg1() as _, uctx.arg2() as _),
         Sysno::openat => sys_openat(
@@ -218,6 +238,9 @@ pub fn handle_syscall(uctx: &mut UserContext) {
         ),
 
         // io mpx
+        // Legacy `poll(2)` syscall number exists only on ABIs where `syscalls::Sysno` defines
+        // `Sysno::poll` (x86/x86_64). Linux riscv64/aarch64 have no separate `__NR_poll`; libc
+        // implements `poll(2)` via `__NR_ppoll` → `sys_ppoll` below (issue-291).
         #[cfg(target_arch = "x86_64")]
         Sysno::poll => sys_poll(uctx.arg0().into(), uctx.arg1() as _, uctx.arg2() as _),
         Sysno::ppoll => sys_ppoll(
@@ -227,6 +250,10 @@ pub fn handle_syscall(uctx: &mut UserContext) {
             uctx.arg3().into(),
             uctx.arg4() as _,
         ),
+        // Legacy `select(2)` syscall number exists only on ABIs where `syscalls::Sysno` defines
+        // `Sysno::select` (x86/x86_64). Linux riscv64/aarch64 have no separate `__NR_select`; libc
+        // implements `select(2)` via `__NR_pselect6` → `sys_pselect6` below (issue-295; symmetric
+        // to poll/ppoll, issue-291).
         #[cfg(target_arch = "x86_64")]
         Sysno::select => sys_select(
             uctx.arg0() as _,
@@ -279,6 +306,10 @@ pub fn handle_syscall(uctx: &mut UserContext) {
 
         // pipe
         Sysno::pipe2 => sys_pipe2(uctx.arg0() as _, uctx.arg1() as _),
+        // Legacy `pipe(2)` syscall number exists only on ABIs where `syscalls::Sysno` defines
+        // `Sysno::pipe` (x86/x86_64). Linux riscv64/aarch64 typically have no separate `__NR_pipe`;
+        // libc implements `pipe(2)` via `pipe2` / `__NR_pipe2` → `sys_pipe2` with flags=0 (same
+        // handler as `Sysno::pipe2` above, issue-298; symmetric to poll/select, issue-291/295).
         #[cfg(target_arch = "x86_64")]
         Sysno::pipe => sys_pipe2(uctx.arg0() as _, 0),
 
@@ -299,6 +330,11 @@ pub fn handle_syscall(uctx: &mut UserContext) {
         Sysno::memfd_create => sys_memfd_create(uctx.arg0().into(), uctx.arg1() as _),
 
         // fs stat
+        // Legacy `stat(2)` / `lstat(2)` syscall numbers exist only on ABIs where `syscalls::Sysno`
+        // defines `Sysno::stat` / `Sysno::lstat` (x86/x86_64). Linux riscv64/aarch64 typically omit
+        // separate `__NR_stat` / `__NR_lstat`; libc implements them via `newfstatat` / `fstatat`
+        // with `AT_FDCWD` and flags `0` vs `AT_SYMLINK_NOFOLLOW` for `lstat` semantics →
+        // `sys_fstatat` below (issue-299; symmetric to `access`/`faccessat*`, issue-296).
         #[cfg(target_arch = "x86_64")]
         Sysno::stat => sys_stat(uctx.arg0() as _, uctx.arg1() as _),
         Sysno::fstat => sys_fstat(uctx.arg0() as _, uctx.arg1() as _),
@@ -325,6 +361,10 @@ pub fn handle_syscall(uctx: &mut UserContext) {
             uctx.arg3() as _,
             uctx.arg4() as _,
         ),
+        // Legacy `access(2)` syscall number exists only on ABIs where `syscalls::Sysno` defines
+        // `Sysno::access` (x86/x86_64). Linux riscv64/aarch64 typically have no separate
+        // `__NR_access`; libc implements `access(2)` via `faccessat`/`faccessat2` with `AT_FDCWD`
+        // → `sys_faccessat2` below (issue-296; symmetric to poll issue-291, renameat issue-292).
         #[cfg(target_arch = "x86_64")]
         Sysno::access => sys_access(uctx.arg0() as _, uctx.arg1() as _),
         Sysno::faccessat | Sysno::faccessat2 => sys_faccessat2(
@@ -354,6 +394,7 @@ pub fn handle_syscall(uctx: &mut UserContext) {
             uctx.arg1() as _,
             uctx.arg2() as _,
             uctx.arg3() as _,
+            uctx.arg4(),
         ),
         Sysno::madvise => sys_madvise(uctx.arg0(), uctx.arg1() as _, uctx.arg2() as _),
         Sysno::msync => sys_msync(uctx.arg0(), uctx.arg1() as _, uctx.arg2() as _),
@@ -387,10 +428,13 @@ pub fn handle_syscall(uctx: &mut UserContext) {
         }
         Sysno::sched_getparam => sys_sched_getparam(uctx.arg0() as _, uctx.arg1() as _),
         Sysno::getpriority => sys_getpriority(uctx.arg0() as _, uctx.arg1() as _),
+        Sysno::setpriority => sys_setpriority(uctx.arg0() as _, uctx.arg1() as _, uctx.arg2() as _),
 
         // task ops
         Sysno::execve => sys_execve(uctx, uctx.arg0() as _, uctx.arg1() as _, uctx.arg2() as _),
         Sysno::set_tid_address => sys_set_tid_address(uctx.arg0()),
+        // `arch_prctl(2)` is x86-specific (FS/GS base, TLS). `Sysno::arch_prctl` exists only on
+        // x86 ABIs; Linux riscv64/aarch64 have no `arch_prctl` syscall or `Sysno` variant (issue-302).
         #[cfg(target_arch = "x86_64")]
         Sysno::arch_prctl => sys_arch_prctl(uctx, uctx.arg0() as _, uctx.arg1() as _),
         Sysno::prctl => sys_prctl(
@@ -434,11 +478,20 @@ pub fn handle_syscall(uctx: &mut UserContext) {
             uctx.arg0() as _, // args_ptr
             uctx.arg1() as _, // args_size
         ),
+        // Legacy `fork(2)` syscall number exists only on ABIs where `syscalls::Sysno` defines
+        // `Sysno::fork` (x86/x86_64). Linux riscv64/aarch64 typically have no separate `__NR_fork`;
+        // libc implements `fork(2)` via `clone` / `clone3` with the traditional flags → `sys_clone` /
+        // `sys_clone3` above (issue-302; symmetric to `fd ops` `open`/`dup2`, issue-301).
         #[cfg(target_arch = "x86_64")]
         Sysno::fork => sys_fork(uctx),
         Sysno::exit => sys_exit(uctx.arg0() as _),
         Sysno::exit_group => sys_exit_group(uctx.arg0() as _),
-        Sysno::wait4 => sys_waitpid(uctx.arg0() as _, uctx.arg1() as _, uctx.arg2() as _),
+        Sysno::wait4 => sys_waitpid(
+            uctx.arg0() as _,
+            uctx.arg1() as _,
+            uctx.arg2() as _,
+            uctx.arg3() as _,
+        ),
         Sysno::getsid => sys_getsid(uctx.arg0() as _),
         Sysno::setsid => sys_setsid(),
         Sysno::getpgid => sys_getpgid(uctx.arg0() as _),
@@ -474,14 +527,12 @@ pub fn handle_syscall(uctx: &mut UserContext) {
             uctx.arg0() as _,
             uctx.arg1() as _,
             uctx.arg2() as _,
-            uctx.arg3() as _,
         ),
         Sysno::rt_tgsigqueueinfo => sys_rt_tgsigqueueinfo(
             uctx.arg0() as _,
             uctx.arg1() as _,
             uctx.arg2() as _,
             uctx.arg3() as _,
-            uctx.arg4() as _,
         ),
         Sysno::sigaltstack => sys_sigaltstack(uctx.arg0() as _, uctx.arg1() as _),
         Sysno::futex => sys_futex(
@@ -502,6 +553,8 @@ pub fn handle_syscall(uctx: &mut UserContext) {
         Sysno::geteuid => sys_geteuid(),
         Sysno::getgid => sys_getgid(),
         Sysno::getegid => sys_getegid(),
+        Sysno::getresuid => sys_getresuid(uctx.arg0() as _, uctx.arg1() as _, uctx.arg2() as _),
+        Sysno::getresgid => sys_getresgid(uctx.arg0() as _, uctx.arg1() as _, uctx.arg2() as _),
         Sysno::setuid => sys_setuid(uctx.arg0() as _),
         Sysno::setgid => sys_setgid(uctx.arg0() as _),
         Sysno::getgroups => sys_getgroups(uctx.arg0() as _, uctx.arg1() as _),
@@ -510,15 +563,17 @@ pub fn handle_syscall(uctx: &mut UserContext) {
         Sysno::sysinfo => sys_sysinfo(uctx.arg0() as _),
         Sysno::syslog => sys_syslog(uctx.arg0() as _, uctx.arg1() as _, uctx.arg2() as _),
         Sysno::getrandom => sys_getrandom(uctx.arg0() as _, uctx.arg1() as _, uctx.arg2() as _),
-        Sysno::seccomp => sys_seccomp(uctx.arg0() as _, uctx.arg1() as _, uctx.arg2() as _),
+        Sysno::seccomp => sys_seccomp(uctx.arg0() as _, uctx.arg1() as _, uctx.arg2()),
         #[cfg(target_arch = "riscv64")]
-        Sysno::riscv_flush_icache => sys_riscv_flush_icache(),
+        Sysno::riscv_flush_icache => {
+            sys_riscv_flush_icache(uctx.arg0(), uctx.arg1(), uctx.arg2())
+        }
 
         // sync
         Sysno::membarrier => sys_membarrier(uctx.arg0() as _, uctx.arg1() as _, uctx.arg2() as _),
 
         // time
-        Sysno::gettimeofday => sys_gettimeofday(uctx.arg0() as _),
+        Sysno::gettimeofday => sys_gettimeofday(uctx.arg0() as _, uctx.arg1() as _),
         Sysno::times => sys_times(uctx.arg0() as _),
         Sysno::clock_gettime => sys_clock_gettime(uctx.arg0() as _, uctx.arg1() as _),
         Sysno::clock_getres => sys_clock_getres(uctx.arg0() as _, uctx.arg1() as _),
@@ -614,20 +669,30 @@ pub fn handle_syscall(uctx: &mut UserContext) {
             uctx.arg3() as _,
         ),
 
-        // dummy fds
-        Sysno::timerfd_create
-        | Sysno::fanotify_init
-        | Sysno::inotify_init1
-        | Sysno::userfaultfd
-        | Sysno::perf_event_open
-        | Sysno::io_uring_setup
-        | Sysno::bpf
-        | Sysno::fsopen
-        | Sysno::fspick
-        | Sysno::open_tree
-        | Sysno::memfd_secret => sys_dummy_fd(sysno),
+        Sysno::timerfd_create => sys_timerfd_create(uctx.arg0() as _, uctx.arg1() as _),
+        Sysno::timerfd_settime => sys_timerfd_settime(
+            uctx.arg0() as _,
+            uctx.arg1() as _,
+            uctx.arg2() as _,
+            uctx.arg3() as _,
+        ),
+        Sysno::timerfd_gettime => sys_timerfd_gettime(uctx.arg0() as _, uctx.arg1() as _),
 
-        Sysno::timer_create | Sysno::timer_gettime | Sysno::timer_settime => Ok(0),
+        Sysno::inotify_init1 => sys_inotify_init1(uctx.arg0() as _),
+        Sysno::fanotify_init => sys_fanotify_init(uctx.arg0() as _, uctx.arg1() as _),
+
+        Sysno::bpf | Sysno::userfaultfd => Err(AxError::Unsupported),
+        Sysno::perf_event_open => Err(AxError::PermissionDenied),
+        Sysno::io_uring_setup => sys_io_uring_setup(uctx.arg0() as u32, uctx.arg1() as _),
+
+        Sysno::fsopen => sys_fsopen(uctx.arg0().into(), uctx.arg1() as u32),
+        Sysno::fspick => sys_fspick(uctx.arg0() as _, uctx.arg1().into(), uctx.arg2() as u32),
+        Sysno::open_tree => sys_open_tree(uctx.arg0() as _, uctx.arg1().into(), uctx.arg2() as u32),
+        Sysno::memfd_secret => sys_memfd_secret(uctx.arg0().into(), uctx.arg1() as u32),
+
+        Sysno::timer_create | Sysno::timer_gettime | Sysno::timer_settime | Sysno::timer_delete => {
+            Err(AxError::Unsupported)
+        }
 
         _ => {
             warn!("Unimplemented syscall: {sysno}");

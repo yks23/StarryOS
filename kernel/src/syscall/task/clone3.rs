@@ -24,17 +24,18 @@ pub struct Clone3Args {
     pub cgroup: u64,
 }
 
-const MIN_CLONE_ARGS_SIZE: usize = core::mem::size_of::<u64>() * 8;
+/// Linux `clone3(2)`: `args_size` must be ≥ `sizeof(struct clone_args)` (uapi `clone_args` is 11×`u64`).
+const MIN_CLONE_ARGS_SIZE: usize = mem::size_of::<Clone3Args>();
 
 impl TryFrom<Clone3Args> for CloneArgs {
     type Error = axerrno::AxError;
 
     fn try_from(args: Clone3Args) -> AxResult<Self> {
         if args.set_tid != 0 || args.set_tid_size != 0 {
-            warn!("sys_clone3: set_tid/set_tid_size not supported, ignoring");
+            return Err(AxError::InvalidInput);
         }
         if args.cgroup != 0 {
-            warn!("sys_clone3: cgroup parameter not supported, ignoring");
+            return Err(AxError::InvalidInput);
         }
 
         let flags = CloneFlags::from_bits_truncate(args.flags);
@@ -71,20 +72,31 @@ impl TryFrom<Clone3Args> for CloneArgs {
 pub fn sys_clone3(uctx: &UserContext, args: *const u8, size: usize) -> AxResult<isize> {
     debug!("sys_clone3 <= args: {args:p}, size: {size}");
 
+    // Linux `clone3`: **EFAULT** for NULL `args` before `args_size` validation (issue-376;
+    // contrasts with prior "EINVAL first for undersized size" ordering; issue-308 `BadAddress` theme).
+    if args.is_null() {
+        return Err(AxError::BadAddress);
+    }
+
     if size < MIN_CLONE_ARGS_SIZE {
         warn!("sys_clone3: size {size} too small, minimum is {MIN_CLONE_ARGS_SIZE}");
         return Err(AxError::InvalidInput);
     }
 
-    if size > core::mem::size_of::<Clone3Args>() {
-        debug!("sys_clone3: size {size} larger than expected, using known fields only");
+    let mut buffer = [0u8; core::mem::size_of::<Clone3Args>()];
+    // Linux ignores trailing bytes when size exceeds the struct; never slice past `buffer`.
+    let read_len = size.min(buffer.len());
+    if size > buffer.len() {
+        debug!(
+            "sys_clone3: size {size} larger than Clone3Args ({}), reading {read_len} bytes only",
+            buffer.len()
+        );
     }
 
-    let mut buffer = [0u8; core::mem::size_of::<Clone3Args>()];
     // SAFETY: MaybeUninit<T> is compatible with T, and we're filling in the
     // buffer with bytes read from the user
     vm_read_slice(args, unsafe {
-        mem::transmute::<&mut [u8], &mut [MaybeUninit<u8>]>(&mut buffer[..size])
+        mem::transmute::<&mut [u8], &mut [MaybeUninit<u8>]>(&mut buffer[..read_len])
     })?;
     let clone3_args: Clone3Args =
         bytemuck::try_pod_read_unaligned(&buffer).map_err(|_| AxError::InvalidInput)?;

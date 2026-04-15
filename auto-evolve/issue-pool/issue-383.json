@@ -1,0 +1,27 @@
+{
+  "id": "issue-383",
+  "title": "`set_robust_list(2)`：`sys_set_robust_list` 在 `size` 合法时未对非 NULL `head` 做用户区可读探测，与 Linux `copy_from_user`/`EFAULT` 时机不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T22:15:00Z",
+  "severity": "low",
+  "description": "`kernel/src/syscall/sync/futex.rs` `sys_set_robust_list`（约 146–152 行）：在 `size == sizeof(robust_list_head)` 后直接 `set_robust_list_head(head.addr())`，**未**对非 NULL `head` 做 `check_access` 或字段级 `vm_read` 探测。Linux在 `set_robust_list` 路径会对用户 `head` 执行 `copy_from_user`/`access_ok` 类校验；不可读/越界地址应在**本次 syscall** 上返回 `EFAULT`，而非仅推迟到线程 `exit` 时 `exit_robust_list` 再失败（且当前 exit 路径对坏链表仅 `warn`）。`sys_get_robust_list` 已对用户 `head`/`size` 做 `check_access`（约 126–131 行），主题可对照。\n\n`head == NULL` 表示清除 robust链表时通常无需探测（与 Linux 一致）。\n\n建议：在 `size` 校验通过后，若 `!head.is_null()` 则 `check_access(head.addr(), size_of::<robust_list_head>())` 或等价 `vm_read` 探测后再 `set_robust_list_head`。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["set_robust_list"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/sync/futex.rs:146-152"],
+    "related_files": ["kernel/src/syscall/sync/futex.rs:121-143", "kernel/src/task/ops.rs:216-265"],
+    "key_insight": "`size` 合法后、非 NULL `head`：`check_access` → `BadAddress`；NULL清除链表不探测"
+  },
+  "fix_summary": "`sys_set_robust_list`：在 `size == sizeof(robust_list_head)` 后，若 `head` 非 NULL 则对 `robust_list_head` 范围 `check_access`，失败映射为 `BadAddress`（与 `get_robust_list` 对称，issue-383）。",
+  "files_changed": ["kernel/src/syscall/sync/futex.rs"],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：非法用户 `head` 指针 +正确 `size` 对照 Linux `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "非 NULL且不可读 `head` 在 syscall 返回 `BadAddress`（EFAULT），或文档化推迟校验。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（仓库既有警告）"
+  },
+  "suggested_fix": "`size` 合法且 `head` 非空时增加 `check_access`/`vm_read` 与 `get_robust_list` 对称。",
+  "references": ["man 2 set_robust_list", "kernel/src/syscall/sync/futex.rs", "issue-375", "issue-277"]
+}

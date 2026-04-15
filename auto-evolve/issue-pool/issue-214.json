@@ -1,0 +1,27 @@
+{
+  "id": "issue-214",
+  "title": "shmctl IPC_SET：`*buf.get_as_mut()` 整颗用户 `ShmidDs` 赋给内核，与 Linux 仅更新 `shm_perm` 不符",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "medium",
+  "fix_summary": "`sys_shmctl`在 `IPC_SET` 时不再执行 `shm_inner.shmid_ds = *buf.get_as_mut()?`。改为在用户缓冲经 `get_as_mut` 校验后，仅写回 `shm_perm.uid`、`shm_perm.gid`、`shm_perm.mode & 0o777`（与 `msgctl` `IPC_SET` 及 Linux `shmctl(2)` 一致）。`shm_segsz`、`shm_nattch`、时间戳、`shm_cpid`/`shm_lpid` 等仍由内核维护。文件末尾对 `shm_ctime` 的更新逻辑未改。",
+  "files_changed": ["kernel/src/syscall/ipc/shm.rs"],
+  "description": "**`kernel/src/syscall/ipc/shm.rs`** **`sys_shmctl`** 在 **`cmd == IPC_SET`** 时执行 **`shm_inner.shmid_ds = *buf.get_as_mut()?`**（约 **544–545** 行）。**`UserPtr::get_as_mut`** 返回对用户缓冲区的可变引用，解引用后把**整颗**用户态 **`ShmidDs`** 拷贝进内核。\n\nLinux **`shmctl(2)` `IPC_SET`** 语义：仅根据用户缓冲中的 **`struct shmid_ds`** 更新 **`shm_perm.uid`**、**`shm_perm.gid`**、**`shm_perm.mode`**（权限位）；**不得**用用户提供的值覆盖 **`shm_segsz`**、**`shm_nattch`**、时间戳、**`shm_cpid`/`shm_lpid`** 等由内核维护的字段。当前实现等价于允许用户覆写段大小与附着计数等元数据，与 **issue-213**（**`msgctl` `IPC_SET`** 整读但仅用部分字段）相比，本路径是**整写覆盖内核对象**，语义与安全面更大。\n\n**建议**：与 **`msgctl` `IPC_SET`** 类似，只 **`vm_read`** **`IpcPerm`** 中允许用户设置的 **`uid`/`gid`/`mode`**（或等价字段读），再写回 **`shm_inner.shmid_ds.shm_perm`**，并保留 **`shm_ctime`** 等内核更新逻辑。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["shmctl"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/ipc/shm.rs:534-557"],
+    "related_files": ["kernel/src/mm/access.rs:151-154"],
+    "key_insight": "IPC_SET 应只应用 shm_perm 子集，非整结构替换"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "对照 man 2 shmctl IPC_SET；可构造用户态篡改 shm_segsz 的回归用例（若测试框架就绪）。",
+    "expected_output_contains": "",
+    "pass_criteria": "IPC_SET 仅更新 shm_perm 中 Linux 允许的字段，其余 shmid_ds 字段保持内核权威。",
+    "last_result": "通过：`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`（exit 0，仅有既有 warning）。"
+  },
+  "suggested_fix": "实现 `read_shm_ipc_perm_user` 或字段读，仅合并 `uid`/`gid`/`mode`；禁止整颗 `ShmidDs` 从用户赋值。",
+  "references": ["man 2 shmctl", "issue-213"]
+}

@@ -1,0 +1,32 @@
+{
+  "id": "issue-200",
+  "title": "get_mempolicy：忽略 `flags`/`addr` 合法性，未知位或非法组合仍返回成功",
+  "status": "resolved",
+  "created_at": "2026-04-16T00:00:00Z",
+  "severity": "medium",
+  "fix_summary": "**`linux-raw-sys`** 启用 **`mempolicy`**。**`sys_get_mempolicy`**：拒绝 **`flags & ~(MPOL_F_NODE|MPOL_F_ADDR|MPOL_F_MEMS_ALLOWED)`**；**`MPOL_F_MEMS_ALLOWED`** 不得与 **`MPOL_F_ADDR`/`MPOL_F_NODE`** 同用；**`flags==0`** 须 **`addr==0`**；**`MPOL_F_ADDR`** 须 **`addr!=0`**，否则须 **`addr==0`**；**仅 `MPOL_F_NODE`**（无 interleave 策略的本内核）→ **`EINVAL`**；**`MPOL_F_ADDR`** 时 **`VirtAddr`** 须在 **`AddrSpace`** 范围内且 **`find_area`** 命中，否则 **`EFAULT`（`BadAddress`）**。策略输出仍为 **`MPOL_DEFAULT` stub**。**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过。",
+  "files_changed": [
+    "kernel/Cargo.toml",
+    "kernel/src/syscall/task/ctl.rs",
+    "auto-evolve/issue-pool/issue-200.json",
+    "auto-evolve/memory/executor-memory.md"
+  ],
+  "description": "**`kernel/src/syscall/task/ctl.rs`** **`sys_get_mempolicy(policy, nodemask, maxnode, addr, flags)`** 在 **`nodemask`/`maxnode`** 基础校验之后，直接假定 **无 NUMA 策略** 并写入 **`MPOL_DEFAULT`（0）**、按需清零 **`nodemask`**，**完全不解析 `flags` 与 `addr`**。**Linux `get_mempolicy(2)`** 要求 **`flags`** 仅为 **`MPOL_F_NODE`/`MPOL_F_ADDR`/`MPOL_F_MEMS_ALLOWED`** 等允许位的组合；**置位未定义或互斥非法组合** 应 **`EINVAL`**；**`MPOL_F_ADDR`** 时 **`addr`** 参与解析，**`EFAULT`**/**`EINVAL`** 规则与 **是否映射** 相关。**Starry** 对 **`flags == usize::MAX`**、**`MPOL_F_ADDR` 与无效 `addr`** 等仍 **`Ok(0)`**，与 **Linux** 及 **LTP/libc探测** 行为不一致；也与 **issue-023**（能力层 stub）互补——本条聚焦 **参数校验** 而非 **真实 NUMA 语义**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["get_mempolicy"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/ctl.rs:120-148"],
+    "related_files": ["kernel/src/syscall/mod.rs:416-421"],
+    "key_insight": "仅校验 `nodemask`+`maxnode`；`flags`/`addr` 未读"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "在 **Linux** 与 **Starry** 上调用 **`get_mempolicy(NULL, NULL, 0,0, ~0)`**、**`get_mempolicy` + `MPOL_F_ADDR` + 未映射 `addr`** 等，比较 **`errno`**。",
+    "expected_output_contains": "",
+    "pass_criteria": "未知 **`flags`** 位或 **Linux 文档中的非法组合** → **`EINVAL`**（或与 **stub** 策略一致的 **`ENOSYS`/`EOPNOTSUPP`**，但不得静默成功）。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（2026-04-12）"
+  },
+  "suggested_fix": "引入 **`linux_raw_sys`** 中 **`MPOL_F_*` 掩码**：拒绝 **`flags & ~ALLOWED`**；对 **`MPOL_F_ADDR`** 至少做 **`addr` 用户区/映射** 校验或显式 **`Unsupported`**；其余路径保持 **`MPOL_DEFAULT` stub**。",
+  "references": ["man 2 get_mempolicy", "Linux mm/mempolicy.c", "issue-023"]
+}

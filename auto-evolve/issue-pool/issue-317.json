@@ -1,0 +1,27 @@
+{
+  "id": "issue-317",
+  "title": "`splice(2)`：`sys_splice` 在通过 `DummyFd`/`Pipe::from_fd`/`File::from_fd`/`get_file_like` 解析 `fd_in`/`fd_out` 之前校验 `flags`（未知位 `EINVAL`、非零 `EOPNOTSUPP`），与 Linux `do_splice` 先 `fd` 安装再处理 `flags` 时「无效 fd」与非法 `flags` 组合的 `EBADF`/`EINVAL` 优先级可能不完全一致",
+  "status": "resolved",
+  "created_at": "2026-04-22T12:05:00Z",
+  "severity": "low",
+  "fix_summary": "重排 `sys_splice`：`fd_in == fd_out` → EINVAL 仍最先；然后 `get_file_like(fd_in)`/`get_file_like(fd_out)`；再 `DummyFd` 检查；最后 `flags` 掩码与非零 `flags`（issue-247）。注释 issue-317/issue-315。更新 `executor-memory` splice 条、表格与最近更新；新增 `issue-317.json`。",
+  "files_changed": ["kernel/src/syscall/fs/io.rs", "auto-evolve/memory/executor-memory.md"],
+  "description": "**`kernel/src/syscall/fs/io.rs`** **`sys_splice`** **（** **约** **527–615** **行** **）** **顺序** **：** **`flags & !SPLICE_F_MASK`** **/** **`flags != 0`** **（** **`EINVAL`/`EOPNOTSUPP`** **）** **→** **`fd_in == fd_out`** **→** **`DummyFd::from_fd`** **等** **。** **当** **调用** **同时** **存在** **无效** **`fd`** **与** **非法** **`flags`** **位** **时** **，** **本** **实现** **固定** **先** **拒绝** **`flags`** **。** **Linux** **`__sys_splice`** **通常** **先** **`fd_install`/`get_file`** **路径** **解析** **描述** **符** **。** **与** **已** **修复** **的** **`copy_file_range`** **（** **issue-315** **）** **`fallocate`** **（** **issue-313** **）** **同类** **。**\n\n**建议** **：** **对照** **Linux** **`do_splice`** **入口** **，** **将** **对** **`fd_in`/`fd_out`** **的** **解析** **（** **或** **等价** **`fget`** **）** **提前** **到** **`flags`** **校验** **之前** **，** **或** **补充** **注释** **说明** **有意** **顺序** **（** **可** **引用** **issue-247** **非零** **`flags`** **语义** **）** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["splice"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/io.rs:527-615"],
+    "related_files": [],
+    "key_insight": "splice flags vs fd/EBADF order"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：无效 fd + 非法 splice flags 对照 Linux 返回顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游 `splice` 错误优先级一致，或注释说明差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "参考 issue-315：先解析两路 fd（或最小 `fget`），再校验 `flags`；`SendFile` 构造沿用现有逻辑。",
+  "references": ["man 2 splice", "kernel/src/syscall/fs/io.rs", "issue-247", "issue-315", "issue-313"]
+}

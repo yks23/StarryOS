@@ -1,0 +1,27 @@
+{
+  "id": "issue-385",
+  "title": "`riscv_flush_icache(2)`：`LOCAL` 分支 `check_access` 失败映射为 `InvalidInput`，与 Linux 对用户区间不可访问时常见 `EFAULT` 可能不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T23:50:00Z",
+  "severity": "low",
+  "description": "`kernel/src/syscall/sys.rs` `sys_riscv_flush_icache`（`#[cfg(riscv64)]`，约 442–461 行）：当 `flags` 含 `SYS_RISCV_FLUSH_ICACHE_LOCAL` 且 `start < end` 时调用 `crate::mm::check_access(start, len).map_err(|_| AxError::InvalidInput)?`。`check_access` 对越出用户 VA 窗口或未映射语义返回 `VmError::AccessDenied`；多数「用户指针无效/不可访问」路径在 Starry 其它 syscall 上映射为 `BadAddress`（EFAULT类），此处统一成 `InvalidInput`（EINVAL），与 Linux `flush_icache_user_range`/`access_ok` 失败常见 `EFAULT` 分层可能分叉。\n\n`flags==0` 全进程路径不校验 `start`/`end`（issue-353 已注释设计取舍），与 `LOCAL` 分支正交。\n\n建议：将 `check_access` 失败映射为 `BadAddress`，或对照 Linux `riscv_flush_icache` 精确 errno 并注释取舍。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["riscv_flush_icache"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/sys.rs:442-461"],
+    "related_files": ["kernel/src/mm/access.rs:287-295"],
+    "key_insight": "`LOCAL`：`check_access` 失败 → `BadAddress`（EFAULT）；`flags==0` 仍不校验区间（issue-353）"
+  },
+  "fix_summary": "`sys_riscv_flush_icache` `LOCAL` 分支：`check_access(start,len)` 失败由 `InvalidInput` 改为 `BadAddress`，对齐 Linux `access_ok`/EFAULT 分层（issue-385）。",
+  "files_changed": ["kernel/src/syscall/sys.rs"],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：`LOCAL` + 非用户 `start`/`end` 对照 Linux `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "不可访问用户区间 errno 与 Linux 一致，或文档化 EINVAL。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（仓库既有警告）"
+  },
+  "suggested_fix": "`map_err(|_| AxError::BadAddress)` 或分层注释。",
+  "references": ["man 2 riscv_flush_icache", "kernel/src/syscall/sys.rs", "issue-353"]
+}

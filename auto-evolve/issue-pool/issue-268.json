@@ -1,0 +1,27 @@
+{
+  "id": "issue-268",
+  "title": "munmap：`addr` 未校验页对齐，Linux 在地址未对齐时返回 EINVAL",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_munmap` 在 `length!=0` 后、`align_up_4k(length)` 与 `unmap` 前增加 `VirtAddr::from(addr).is_aligned_4k()`，未对齐 → `InvalidInput`（EINVAL），与 Linux/POSIX 及 `sys_msync`/issue-267 一致。",
+  "files_changed": ["kernel/src/syscall/mm/mmap.rs"],
+  "description": "**`kernel/src/syscall/mm/mmap.rs`** **`sys_munmap`**（约 **305–315** 行）在 **`length != 0`** 后将 **`length`** **`align_up_4k`**，以 **`VirtAddr::from(addr)`** 调用 **`aspace.unmap`**，**未** 检查 **`addr`** 是否 **4K 页对齐**。\n\n**Linux `munmap(2)`**：**`addr`** **必须** 为 **页对齐**；否则 **`errno`** 为 **`EINVAL`**（**POSIX** 亦要求起始地址对齐页边界）。\n\n**对照**：同文件 **`sys_mremap`** 已对 **`addr`** 做 **`is_multiple_of(PageSize::Size4K)`**（约 **362–364** 行）；**`sys_msync`** 对齐问题见 **issue-267**。\n\n**建议**：在 **`sys_munmap`** 入口增加 **`addr.is_multiple_of(PageSize::Size4K as usize)`**（或 **`VirtAddr::from(addr).is_aligned_4k()`**），**不对齐** → **`AxError::InvalidInput`**。\n\n**注意**：**`length`** 在 **Linux** 上通常 **向上取整到页**；当前 **`align_up_4k(length)`** 与 **Starry** **unmap** **实现** **一致**即可，**与** **`addr`** **校验** **独立**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["munmap"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/mm/mmap.rs:305-315"],
+    "related_files": ["kernel/src/syscall/mm/mmap.rs:342-364"],
+    "key_insight": "munmap 缺页对齐校验，同 mremap/msync 不一致"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；`munmap(页内偏移, len)` 与 Linux 对照。",
+    "expected_output_contains": "",
+    "pass_criteria": "未对齐 addr → EINVAL，或与 Linux 一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "`sys_munmap` 开头与 `sys_mremap` 相同页对齐检查。",
+  "references": ["man 2 munmap", "kernel/src/syscall/mm/mmap.rs"]
+}

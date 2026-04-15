@@ -1,0 +1,32 @@
+{
+  "id": "issue-188",
+  "title": "`cmsg_align`：`len + align - 1` 在超大 `len` 时 `usize` 溢出，对齐结果不可靠",
+  "status": "resolved",
+  "created_at": "2026-04-13T22:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`cmsg_align`** 改为 **`AxResult<usize>`**：**`len.checked_add(align - 1)`** 失败则 **`InvalidInput`（EINVAL）**，否则 **`& !(align - 1)`**。**`sys_sendmsg`** 与 **`CMsgBuilder::push`** 使用 **`?`** 传播。顺带修正 **`CMsgBuilder::push`** 中 **`remaining`**：在 **`commit` 前** 应用 **`capacity - self.written`**（**`issue-189`** 后 **` *self.len`** 仍为输入缓冲长度，误用会导致 **`remaining` 恒为 0**）。**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过。",
+  "files_changed": [
+    "kernel/src/syscall/net/cmsg.rs",
+    "kernel/src/syscall/net/io.rs",
+    "auto-evolve/issue-pool/issue-188.json",
+    "auto-evolve/memory/executor-memory.md"
+  ],
+  "description": "**`kernel/src/syscall/net/cmsg.rs`** 中 **`pub fn cmsg_align(len: usize) -> usize`** 实现为 **`(len + align - 1) & !(align - 1)`**（**`align = size_of::<usize>()`**）。当 **`len`** 接近 **`usize::MAX`** 时，**`len + align - 1`** 在 **Rust** 中按**环绕**语义计算（**debug** 下亦可触发 **`overflow` 检查** 若启用 **`checked`/`wrapping` 策略** 不一致），得到的「对齐」长度**非** **Linux `CMSG_ALIGN`** 在 **`size_t` 可表示范围内**的意图。**`sys_sendmsg`** 将 **`cmsg_align(hdr.cmsg_len)`** 作为步进 **`step`**；若 **`step` 因溢出变小**，可能与用户 **`cmsg_len` 真实占用** 脱钩，削弱与 **`ptr_end`/`checked_add`** 配套的边界论证（依赖 **`next > ptr_end`** 兜底仍可能留下与 **Linux** 不同的接受/拒绝集合）。**`CMsgBuilder::push`** 同样调用 **`cmsg_align`**。**修复方向**：**`len.checked_add(align - 1)`** 失败则 **`InvalidInput`** 或饱和到 **`usize::MAX`**并拒绝，与内核对 **ancillary 长度上界** 的策略对齐。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["sendmsg", "recvmsg"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/cmsg.rs:15-20"],
+    "related_files": ["kernel/src/syscall/net/io.rs"],
+    "key_insight": "`cmsg_align` 无 `checked_add`，超大 `len` 时环绕"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "单元测试或 **Miri**：对 **`cmsg_align(usize::MAX - 1)`**、**`cmsg_align(usize::MAX)`** 断言与 **Linux 宏**（在可移植范围内）一致或显式 **`EINVAL`**。",
+    "expected_output_contains": "",
+    "pass_criteria": "**`cmsg_align`** 不依赖未定义环绕；或对 **`cmsg_len` 先期上限** 拒绝。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（2026-04-12）"
+  },
+  "suggested_fix": "改为 **`len.checked_add(align - 1).map(|x| x & !(align - 1)).ok_or(...)`** 或在调用方限制 **`hdr.cmsg_len` ≤ 用户缓冲剩余** 且 **≤ 合理上界** 后再对齐。",
+  "references": ["man 3 CMSG_ALIGN", "Linux include/uapi/linux/socket.h"]
+}

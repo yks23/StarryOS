@@ -1,0 +1,32 @@
+{
+  "id": "issue-337",
+  "title": "`sigaltstack(2)`：`sys_sigaltstack` 在 `ss` 非空时先 `old_ss.vm_write(sig.stack())` 再 `read_signal_stack_user(ss)` 及 `ss.size < MINSIGSTKSZ` 校验；与 Linux `do_sigaltstack` 常见「先拷贝/校验用户 `ss`，成功后再 `copy_to_user(old)`」相比，在 `EFAULT`/`EINVAL`（过小 `ss_size`）失败路径上可能已向 `old_ss` 写入，而上游通常不在校验失败时暴露 `old`",
+  "status": "resolved",
+  "created_at": "2026-04-14T12:00:00Z",
+  "resolved_at": "2026-05-16T00:00:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/signal.rs`** **`sys_sigaltstack`** **（** **约** **467–487** **行** **）** **：** **`if let Some(old_ss) = old_ss.nullable() { old_ss.vm_write(sig.stack())?; }`** **在** **`if let Some(ss) = ss.nullable() { read_signal_stack_user(ss)?; ... }`** **之前** **执行** **。** **当** **调用者** **同时** **提供** **新** **`ss`** **与** **输出** **`old_ss`** **时** **，** **若** **`read_signal_stack_user`** **失败** **（** **`EFAULT`** **）** **或** **`ss.size < MINSIGSTKSZ`** **（** **`EINVAL`** **）** **，** **用户** **`old_ss`** **可能** **已被** **写入** **当前** **栈** **描述** **，** **而** **Linux** **常** **在** **确认** **新** **`stack_t`** **合法** **后** **才** **写** **`old`** **。** **与** **issue-244** **`sigaltstack`** **功能** **验证** **正交** **（** **语义** **/可见** **副作用** **顺序** **）** **。**\n\n**建议** **：** **对照** **Linux** **`kernel/signal.c`** **`do_sigaltstack`** **，** **将** **`read_signal_stack_user`/`ss_size`** **校验** **提前** **到** **`old_ss`** **写出** **之前** **，** **或** **在** **失败** **时** **保证** **与** **上游** **一致** **的** **用户** **可见** **状态** **（** **含** **注释** **说明** **差异** **）** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["sigaltstack"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/signal.rs:467-487"],
+    "related_files": [],
+    "key_insight": "sigaltstack old_ss written before new ss validated"
+  },
+  "fix_summary": "`sys_sigaltstack`：非空 `ss` 时先 `read_signal_stack_user` 与 `MINSIGSTKSZ`，通过后再 `old_ss.vm_write` 与 `set_stack`；`ss==NULL` 禁用路径仍先写 `old_ss` 再 `set_stack(default)`。失败路径不再提前写出 `old`，对齐 `do_sigaltstack`。",
+  "files_changed": [
+    "kernel/src/syscall/signal.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-337.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：非法 `ss` + 合法 `old_ss` 指针对照 Linux 是否在失败时仍写入 `old`。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游 `sigaltstack` 在失败路径上对 `old` 的可见副作用一致，或注释说明差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "先 `read_signal_stack_user`（及 `MINSIGSTKSZ` 等校验），仅在将成功安装新栈（或处理 `ss==NULL` 禁用）时再 `vm_write` `old_ss`；与 `do_sigaltstack` 对齐。",
+  "references": ["man 2 sigaltstack", "kernel/src/syscall/signal.rs", "issue-244"]
+}

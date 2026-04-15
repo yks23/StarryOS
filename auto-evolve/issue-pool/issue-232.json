@@ -1,0 +1,27 @@
+{
+  "id": "issue-232",
+  "title": "getitimer：输出 `itimerval` 未显式拒绝 NULL，与 clock_gettime/issue-231 显式风格不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`sys_getitimer`**：在 **`vm_write`** 前 **`value.is_null()` → `AxError::BadAddress`**（**EFAULT**），与 **issue-231**/**`getrusage`** 一致；**`sys_setitimer`** 的 **`old_value`** 仍 **`nullable()`**（Linux）。",
+  "files_changed": ["kernel/src/syscall/time.rs"],
+  "description": "**`kernel/src/syscall/time.rs`** **`sys_getitimer`**（约 **146–154** 行）在 **`ITimerType`** 解析成功后直接 **`value.vm_write(itimerval { ... })`**，**未** 对 **`value`** 做 **`is_null()`** 显式 **`BadAddress`**。\n\n**Linux `getitimer(2)`**：第二参数 **`curr_value`** 为输出 **`struct itimerval`**，**NULL** 时返回 **`EFAULT`**。同文件 **`sys_setitimer`**（约 **186–191** 行）对 **`old_value`** 使用 **`nullable()`**（**Linux** 允许 **NULL** 表示不写回旧值）；**`getitimer`** **无**「可选输出」语义，**应对齐** **`sys_clock_gettime`**（**issue-231 verified**）与 **`sys_getrusage`** 的 **NULL** 显式拒绝。\n\n**建议**：在 **`vm_write`** 前 **`if value.is_null() { return Err(AxError::BadAddress); }`**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["getitimer"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/time.rs:146-154"],
+    "related_files": ["kernel/src/syscall/time.rs:60-82", "kernel/src/syscall/time.rs:157-192"],
+    "key_insight": "setitimer old_value 可 NULL；getitimer 输出不可 NULL"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；`getitimer(ITIMER_REAL, NULL)`。",
+    "expected_output_contains": "",
+    "pass_criteria": "NULL 输出缓冲 → EFAULT/BadAddress。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos：通过（exit 0）"
+  },
+  "suggested_fix": "`if value.is_null() { return Err(AxError::BadAddress); }` 于 `vm_write` 之前。",
+  "references": ["man 2 getitimer", "issue-231"]
+}

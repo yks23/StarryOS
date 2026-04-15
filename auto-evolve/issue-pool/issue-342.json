@@ -1,0 +1,32 @@
+{
+  "id": "issue-342",
+  "title": "`clock_gettime(2)`：`sys_clock_gettime` 在 `ts.is_null()`/`vm_write(tp)` 之前完成 `clock_id` 分支与 `now` 计算；与 Linux `common_clock_get`/`put_user` 路径上「坏 `tp` → `EFAULT`」相对「不支持 `clock_id` → `EINVAL`」及相对采样顺序可能不完全一致",
+  "status": "resolved",
+  "created_at": "2026-04-15T16:00:00Z",
+  "resolved_at": "2026-05-21T00:00:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/time.rs`** **`sys_clock_gettime`** **（** **约** **86–112** **行** **）** **顺序** **：** **`match clock_id`** **求** **`now`** **（** **含** **`CLOCK_THREAD/PROCESS_CPUTIME_ID`** **等** **路径** **）** **→** **`if ts.is_null()`** **→** **`ts.vm_write`** **。** **（** **1** **）** **当** **`clock_id`** **不受** **支持** **（** **`_`** **分支** **`InvalidInput`** **）** **且** **`ts`** **`==`** **`NULL`** **时** **，** **本** **实现** **先** **`EINVAL`** **，** **而** **Linux** **部分** **路径** **可能** **先** **对** **`tp`** **做** **`put_user`** **探测** **→** **`EFAULT`** **（** **与** **具体** **`compat`** **/** **`native`** **及** **`clock_id`** **校验** **位置** **有关** **）** **。** **（** **2** **）** **当** **`clock_id`** **合法** **且** **`ts`** **`==`** **`NULL`** **时** **，** **本** **实现** **已** **完成** **一次** **时间** **采样** **再** **`EFAULT`** **；** **上游** **常** **在** **确认** **`tp`** **可** **写** **后再** **读** **时钟** **。** **同** **文件** **`sys_clock_nanosleep`** **将** **`clock_id`** **校验** **置于** **`read_timespec_user(req)`** **之前** **（** **issue-332** **注释** **）** **，** **`clock_gettime`** **未** **对称** **注释** **/** **顺序** **。**\n\n**建议** **：** **对照** **`kernel/time/posix-timers.c`** **/** **`common_clock_get`** **，** **将** **`ts.is_null()`** **或** **等价** **用户** **缓冲** **校验** **提前** **到** **`now`** **计算** **之前** **（** **或** **在** **拒绝** **非法** **`clock_id`** **与** **处理** **`tp`** **之间** **与** **Linux** **对齐** **）** **，** **并** **注释** **与** **`clock_nanosleep`** **/** **issue-332** **的** **关系** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["clock_gettime"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/time.rs:86-112"],
+    "related_files": ["kernel/src/syscall/task/schedule.rs"],
+    "key_insight": "clock_gettime samples time before tp NULL/EFAULT vs EINVAL order"
+  },
+  "fix_summary": "`sys_clock_gettime`：先 `ts.is_null()` → `BadAddress`（EFAULT），再 `match clock_id`/`now`/`vm_write`；非法 `clock_id`+NULL `tp` 时 EFAULT 先于 EINVAL；合法 `clock_id`+NULL 时不再先采样再 EFAULT。注释 issue-342 及与 `clock_nanosleep`/issue-332 的对照。",
+  "files_changed": [
+    "kernel/src/syscall/time.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-342.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：非法 `clock_id`+`tp==NULL`、合法 `clock_id`+`tp==NULL` 对照 Linux 返回顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游 `clock_gettime` 对 `clock_id`/`tp` 的校验与采样顺序一致，或注释说明差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "先校验 `tp` 非空/可写（或先拒绝非法 `clock_id` 与 Linux 一致），再读取对应时钟；保持与 `sys_clock_nanosleep` 注释中的 Linux 顺序叙述一致。",
+  "references": ["man 2 clock_gettime", "kernel/src/syscall/time.rs", "issue-332", "issue-250"]
+}

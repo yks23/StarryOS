@@ -1,0 +1,27 @@
+{
+  "id": "issue-245",
+  "title": "shmdt：`shmaddr` 为 0 或非页对齐时未显式 EINVAL（与 Linux 一致化）",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_shmdt`：在 `get_shmid_by_vaddr` 之前显式拒绝 `shmaddr==0`（NULL）与非 4K 页对齐地址，返回 `InvalidInput`（EINVAL）；引入 `MemoryAddr` 以使用 `VirtAddr::is_aligned(PAGE_SIZE_4K)`，与 Linux `shmdt(2)` 及 `sys_mincore` 风格一致。",
+  "files_changed": ["kernel/src/syscall/ipc/shm.rs"],
+  "description": "**`kernel/src/syscall/ipc/shm.rs`** **`sys_shmdt`**（约 **581–616** 行）将 **`shmaddr`** 转为 **`VirtAddr`** 后直接 **`get_shmid_by_vaddr`** / **`unmap`**，**未** 在入口 **`if shmaddr == 0`** 或 **`!shmaddr.is_aligned(PAGE_SIZE_4K)`** 时返回 **`EINVAL`**。\n\n**Linux `shmdt(2)`**：**`shmaddr`** 必须是 **`shmat()`** 返回的**映射起始地址**；**`NULL`/`0`** 与**非页对齐**地址均为 **`EINVAL`**（在 **`EIDRM`** 等之前按路径校验）。当前若 **`get_shmid_by_vaddr`** 未命中则 **`InvalidInput`**，与 **Linux** 错误码**大致** 一致，但 **未对齐** 时若误命中或 **`unmap`** 行为与 **Linux** 分叉，缺少显式防护；**`0`** 亦应与其它 **IPC** 一样 **`NULL` 显式拒绝**（对齐 **issue-230**/`msgctl` 风格）。\n\n**建议**：在 **`sys_shmdt` 开头** **`if shmaddr == 0 { return Err(InvalidInput); }`**；**`VirtAddr::from(shmaddr)`** 后 **`if !addr.is_aligned(PAGE_SIZE_4K) { return Err(InvalidInput); }`**（**EINVAL**）。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["shmdt"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/ipc/shm.rs:581-616"],
+    "related_files": ["kernel/src/syscall/ipc/shm.rs:435-534"],
+    "key_insight": "shmdt 未显式拒 0/对齐；依赖查找失败"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；`shmdt(0)`、`shmdt(未对齐)`。",
+    "expected_output_contains": "",
+    "pass_criteria": "`shmaddr==0` 与非页对齐 → EINVAL；与 Linux 一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0）"
+  },
+  "suggested_fix": "`shmaddr == 0` 与页对齐校验后 `get_shmid_by_vaddr`。",
+  "references": ["man 2 shmdt", "issue-152", "issue-230"]
+}

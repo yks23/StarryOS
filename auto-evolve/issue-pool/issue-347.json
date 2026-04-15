@@ -1,0 +1,32 @@
+{
+  "id": "issue-347",
+  "title": "`getsockopt(2)`：`sys_getsockopt` 先 `Socket::from_fd(fd)`（`EBADF`）再 `optlen.get_as_mut()`（坏 `optlen` 指针 → `EFAULT`）；与 Linux `sock_getsockopt`/`compat` 路径上「用户 `optlen` 探测」相对「`fget`/`sockfd_lookup`」的 `EFAULT`/`EBADF` 优先级可能不完全一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T14:15:00Z",
+  "resolved_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/net/opt.rs`** **`sys_getsockopt`** **（** **约** **136–162** **行** **）** **顺序** **：** **`Socket::from_fd(fd)?`** **→** **`optlen.get_as_mut()?`** **→** **各** **`level`/`optname`** **分支** **。** **当** **`fd`** **无效** **（** **`EBADF`** **）** **且** **`optlen`** **用户** **指针** **不可** **写** **（** **`EFAULT`** **）** **时** **，** **本** **路径** **固定** **先** **`EBADF`** **。** **Linux** **内核** **常** **在** **解析** **`sock`** **前** **或** **与** **`copy_from_user(&len, optlen)`** **交织** **，** **`EFAULT`/`EBADF`** **先后** **可能** **因** **架构** **/** **`compat`** **不同** **。** **与** **`issue-342`** **`clock_gettime`** **「** **用户** **缓冲** **/** **`EINVAL`** **」** **主题** **类似** **但** **作用于** **socket** **opt** **。**\n\n**建议** **：** **对照** **`net/socket.c` `do_getsockopt`** **，** **将** **`optlen`** **/`optval`** **可** **访问性** **检查** **提前** **到** **`from_fd`** **之前** **（** **或** **注释** **说明** **与** **上游** **差异** **）** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["getsockopt"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/opt.rs:136-162"],
+    "related_files": ["kernel/src/syscall/net/name.rs"],
+    "key_insight": "getsockopt EBADF before EFAULT on optlen"
+  },
+  "fix_summary": "`sys_getsockopt`：先 `optlen.get_as_mut()`（坏 `optlen` → `EFAULT`/`BadAddress`）再 `Socket::from_fd(fd)`（`EBADF`），与 Linux `do_getsockopt` 先拷贝/探测 `optlen` 再 `sockfd_lookup` 的常见顺序一致；取代 issue-122 的 from_fd 优先策略。",
+  "files_changed": [
+    "kernel/src/syscall/net/opt.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-347.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：坏 `fd` + 坏 `optlen` 对照 Linux 返回顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "`EBADF`/`EFAULT` 与上游 `getsockopt` 一致或文档化。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "先 `optlen.get_as_mut()`/`optval` 边界校验（与 Linux 一致），再 `Socket::from_fd`；或注释 errno 顺序差异。",
+  "references": ["man 2 getsockopt", "kernel/src/syscall/net/opt.rs", "issue-342"]
+}

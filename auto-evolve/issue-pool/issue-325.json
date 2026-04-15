@@ -1,0 +1,27 @@
+{
+  "id": "issue-325",
+  "title": "`execve(2)`：`sys_execve` 先 `vm_load_string(path)` 再 `argv.is_null()` → `BadAddress`，与 Linux `bprm_execve`/`copy_strings` 链上先处理 `argv`/`envp` 指针合法性时，「坏 `filename`」与「NULL `argv`」的 `EFAULT` 优先级可能不完全一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T22:05:00Z",
+  "severity": "low",
+  "fix_summary": "将 `argv.is_null()` → `BadAddress` 提前到 `vm_load_string(path)` 之前，使 NULL argv 的 EFAULT 先于坏 filename；注释 issue-325 及与 issue-323/issue-321 同类。`envp==NULL` 仍继承环境（issue-243）。更新 `executor-memory` execve 条、表格与最近更新；新增 `issue-325.json`。",
+  "files_changed": ["kernel/src/syscall/task/execve.rs", "auto-evolve/memory/executor-memory.md", "auto-evolve/issue-pool/issue-325.json"],
+  "description": "**`kernel/src/syscall/task/execve.rs`** **`sys_execve`** **（** **约** **28–37** **行** **）** **顺序** **：** **`vm_load_string(path)?`** **→** **`if argv.is_null()`** **→** **`BadAddress`** **→** **`vm_load_until_nul(argv)`** **。** **当** **调用** **同时** **存在** **不可** **读** **用户** **`pathname`** **与** **`argv == NULL`** **时** **，** **本** **实现** **固定** **先** **在** **路径** **串** **上** **失败** **为** **`BadAddress`** **；** **Linux** **`execve`** **入口** **对** **`argv`** **/`envp`** **的** **探测** **常** **较早** **，** **可能** **先** **对** **NULL** **`argv`** **返回** **`EFAULT`** **。** **与** **issue-323** **`openat`** **/** **issue-321** **`signalfd4`** **类** **「** **用户** **串** **/** **指针** **校验** **先后** **」** **可** **对照** **。**\n\n**建议** **：** **查阅** **Linux** **`fs/exec.c`** **`do_execveat_common`** **/`bprm_execve`** **，** **将** **`argv.is_null()`** **（** **及** **必要** **时** **`envp`** **相关** **）** **提前** **到** **`vm_load_string(path)`** **之前** **，** **或** **注释** **说明** **有意** **先** **解析** **`filename`** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["execve"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/execve.rs:22-37"],
+    "related_files": [],
+    "key_insight": "execve path vs argv NULL EFAULT order"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：坏 path + NULL argv 对照 Linux 返回顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游 `execve` 错误优先级一致，或注释说明差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "先拒绝 `argv == NULL`（及与 Linux 一致的 `envp` 约束），再 `vm_load_string(path)`；或补充注释。",
+  "references": ["man 2 execve", "kernel/src/syscall/task/execve.rs", "issue-323", "issue-321"]
+}

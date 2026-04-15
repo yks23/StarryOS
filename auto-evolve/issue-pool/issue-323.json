@@ -1,0 +1,27 @@
+{
+  "id": "issue-323",
+  "title": "`openat(2)`：`sys_openat` 先 `vm_load_string(path)`（用户路径，可能 EFAULT）再 `validate_open_flags`，与 Linux `do_sys_open`/`build_open_flags` 链上先解析/拒绝非法 `flags` 组合再拷贝路径时，「坏 `path` 指针」与「非法 `O_PATH`/开放 `flags` 组合」的 `EFAULT`/`EINVAL` 优先级可能不完全一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T18:05:00Z",
+  "severity": "low",
+  "fix_summary": "将 `validate_open_flags(flags)` 提前到 `vm_load_string(path)` 之前，对齐 Linux `build_open_flags` 先于路径 `getname`；`EINVAL` 先于坏 `pathname` 的 `BadAddress`。注释 issue-323 及 issue-318/issue-305 同类。更新 `executor-memory` openat 条、表格与最近更新；新增 `issue-323.json`。",
+  "files_changed": ["kernel/src/syscall/fs/fd_ops.rs", "auto-evolve/memory/executor-memory.md", "auto-evolve/issue-pool/issue-323.json"],
+  "description": "**`kernel/src/syscall/fs/fd_ops.rs`** **`sys_openat`** **（** **约** **191–205** **行** **）** **顺序** **：** **`vm_load_string(path)?`** **→** **`validate_open_flags(flags as u32)?`** **→** **`flags_to_options`** **/** **`open`** **。** **当** **调用** **同时** **存在** **不可** **读** **用户** **`pathname`** **与** **非法** **`flags`** **（** **例如** **`O_PATH`** **与** **禁止** **位** **组合** **；** **参见** **issue-259** **语义** **）** **时** **，** **本** **实现** **固定** **先** **在** **路径** **拷贝** **上** **失败** **为** **`BadAddress`** **（** **EFAULT** **类** **）** **；** **Linux** **常见** **实现** **在** **进入** **路径** **`getname`/`copy_from_user`** **前** **已** **在** **`build_open_flags`** **等** **处** **拒绝** **部分** **非法** **`flags`** **→** **`EINVAL`** **。** **与** **issue-318** **`truncate`** **/** **issue-305** **`memfd_create`** **类** **「** **用户** **串** **/** **标量** **校验** **顺序** **」** **可** **对照** **。**\n\n**建议** **：** **对照** **Linux** **`do_sys_openat2`**/**`build_open_flags`** **入口** **，** **将** **`validate_open_flags`** **（** **或** **等价** **`flags`** **规范化** **）** **提前** **到** **`vm_load_string`** **之前** **（** **若** **可** **在不** **触** **路径** **的** **前提** **下** **完成** **）** **，** **或** **注释** **说明** **有意** **先** **解析** **路径** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["openat"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/fd_ops.rs:191-207"],
+    "related_files": [],
+    "key_insight": "openat path copy vs flags validation order"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：坏 path 指针 + 非法 open flags 对照 Linux 返回顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游 `openat`/open 错误优先级一致，或注释说明差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "按 Linux `build_open_flags` 顺序调整 `flags` 校验与 `vm_load_string` 的先后，或补充注释。",
+  "references": ["man 2 openat", "kernel/src/syscall/fs/fd_ops.rs", "issue-259", "issue-318", "issue-305"]
+}

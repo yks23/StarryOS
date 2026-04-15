@@ -1,11 +1,14 @@
 use core::ffi::c_int;
 
-use axerrno::AxResult;
+use axerrno::{AxError, AxResult};
 use bitflags::bitflags;
 use linux_raw_sys::general::{O_CLOEXEC, O_NONBLOCK};
 use starry_vm::VmMutPtr;
 
-use crate::file::{FileLike, Pipe, close_file_like};
+use crate::{
+    file::{FileLike, Pipe, close_file_like},
+    mm::UserPtr,
+};
 
 bitflags! {
     /// Flags for the `pipe2` syscall.
@@ -19,13 +22,11 @@ bitflags! {
 }
 
 pub fn sys_pipe2(fds: *mut [c_int; 2], flags: u32) -> AxResult<isize> {
-    let flags = {
-        let new_flags = PipeFlags::from_bits_truncate(flags);
-        if new_flags.bits() != flags {
-            warn!("sys_pipe2 <= unrecognized flags: {flags}");
-        }
-        new_flags
-    };
+    let flags = PipeFlags::from_bits(flags).ok_or(AxError::InvalidInput)?;
+
+    // Validate user `fds` before allocating the pipe or fd slots (issue-289; same class as
+    // issue-286 socketpair output ordering).
+    let _ = UserPtr::from(fds).get_as_mut()?;
 
     let cloexec = flags.contains(PipeFlags::CLOEXEC);
     let (read_end, write_end) = Pipe::new();
@@ -36,9 +37,16 @@ pub fn sys_pipe2(fds: *mut [c_int; 2], flags: u32) -> AxResult<isize> {
     let read_fd = read_end.add_to_fd_table(cloexec)?;
     let write_fd = write_end
         .add_to_fd_table(cloexec)
-        .inspect_err(|_| close_file_like(read_fd).unwrap())?;
+        .inspect_err(|_| {
+            let _ = close_file_like(read_fd);
+        })?;
 
-    fds.vm_write([read_fd, write_fd])?;
+    if let Err(e) = fds.vm_write([read_fd, write_fd]) {
+        // Linux pipe2: copy_to_user failure must not leave orphan fds (issue-148).
+        let _ = close_file_like(write_fd);
+        let _ = close_file_like(read_fd);
+        return Err(e.into());
+    }
 
     debug!(
         "sys_pipe2 <= fds: {:?}, flags: {:?}",

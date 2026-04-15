@@ -1,0 +1,39 @@
+{
+  "id": "issue-174",
+  "title": "sys_recvmsg 未回写 msghdr.msg_flags（MSG_TRUNC/MSG_CTRUNC 等），与 Linux recvmsg(2) 不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T12:00:00Z",
+  "severity": "medium",
+  "fix_summary": "**`recv_on_socket`** 在 **`sys_recvmsg`** 路径写 **`msg.msg_flags`**：**`MSG_TRUNC`** 由 **UDP/Unix dgram** 在 **`read < 报文长`** 时经 **`RecvOptions.msg_trunc`**（**`*mut bool`**）置位；**`MSG_CTRUNC`** 在 **cmsg** 未完全写入用户 **`msg_control`**、**`push` 失败**、或**无 control 缓冲但收到 cmsg** 时置位。**`recvfrom`** 仍不传 **`msg_flags`**。",
+  "files_changed": [
+    "kernel/src/syscall/net/io.rs",
+    "vendor/axnet-ng/src/socket.rs",
+    "vendor/axnet-ng/src/udp.rs",
+    "vendor/axnet-ng/src/unix/dgram.rs"
+  ],
+  "description": "**`sys_recvmsg`**（`kernel/src/syscall/net/io.rs`）在 **`recv_on_socket`** 返回前**从未**更新用户态 **`msghdr::msg_flags`**。**Linux `recvmsg(2)`** 在成功返回时写入 **`msg_flags`**，常见位包括 **`MSG_TRUNC`**（数据报/包大于提供的 **`iov`** 时已截断）、**`MSG_CTRUNC`**（辅助数据被截断）、以及部分协议下的 **`MSG_EOR`** 等。**`vendor/axnet-ng`** 中 **UDP/Unix dgram**在缓冲区不足时仅 **`dst.write` 部分字节**并 **`warn!`**，**`recv`** 返回值在无 **`RecvFlags::TRUNCATE`** 时为实际写入长度；应用若仅看返回值可能误以为未丢数据，而 **Linux** 可通过 **`msg_flags & MSG_TRUNC`** 检测。**`CMsgBuilder::push` 失败**（**`Ok(false)`**或空间不足）时辅助数据被静默截断，亦应对齐 **`MSG_CTRUNC`** 语义。**Starry** 当前 **`msg_flags` 保持用户传入的旧值或垃圾**，依赖 **`recvmsg` 输出标志** 的程序（安全审计、网络栈自检、部分 IPC）行为与 **Linux** 不一致。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["recvmsg"],
+  "source_context": {
+    "primary_files": [
+      "kernel/src/syscall/net/io.rs:160-217",
+      "kernel/src/syscall/net/io.rs:243-262"
+    ],
+    "related_files": [
+      "vendor/axnet-ng/src/udp.rs:268-277",
+      "vendor/axnet-ng/src/unix/dgram.rs:252-268",
+      "kernel/src/syscall/net/cmsg.rs:77-112"
+    ],
+    "key_insight": "`recv_on_socket` 只写地址/cmsg/返回值，不写 `msg.msg_flags`"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "**UDP**：对端发送大于 **`recvmsg` iov 总长** 的数据报，检查返回 **`msg_flags`** 是否含 **`MSG_TRUNC`**（**Linux** 有，**Starry** 预期缺失）。**Unix域数据报** 同理。辅助数据缓冲区过小时检查 **`MSG_CTRUNC`**。",
+    "expected_output_contains": "",
+    "pass_criteria": "截断场景下 **`msg_flags`** 与 **Linux** 一致或文档化差异；**禁止**静默保留未初始化/陈旧标志。",
+    "last_result": "`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` 通过（2026-04-12）。"
+  },
+  "suggested_fix": "在 **`recv_on_socket`** / **`sys_recvmsg`** 出口：根据 **`socket.recv` 返回值与实际报文长度**（或 **`RecvFlags::TRUNCATE` 路径**）置 **`MSG_TRUNC`**；**`CMsgBuilder`** 未写完所有内核 **`cmsg`** 时置 **`MSG_CTRUNC`**；按需透传 **`RecvOptions` 层** 可提供的 **`MSG_EOR`** 等。注意与 **`recvfrom`**（无 **`msg_flags`**）的区分。",
+  "references": ["man 2 recvmsg", "Linux MSG_TRUNC"]
+}

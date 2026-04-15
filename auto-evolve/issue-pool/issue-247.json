@@ -1,0 +1,29 @@
+{
+  "id": "issue-247",
+  "title": "splice：`SPLICE_F_NONBLOCK` 等标志被掩码接受但未参与 I/O 语义（与 Linux 不一致）",
+  "status": "verified",
+  "verified_at": "2026-04-12T00:00:00Z",
+  "verification_note": "代码审查：`kernel/src/syscall/fs/io.rs` **`sys_splice`** 在 **`SPLICE_F_MASK`** 校验后 **`flags != 0` → `OperationNotSupported`**（约 **514–519** 行），与 **issue-247** **fix_summary** 及 **issue-246** 策略一致。回归：`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` exit 0（含仓库既有 warning）。",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_splice`：在 `SPLICE_F_MASK` 合法前提下，若 `flags != 0` 则返回 `OperationNotSupported`（EOPNOTSUPP），避免静默忽略 `SPLICE_F_NONBLOCK`/`MOVE`/`MORE`/`GIFT`；与 issue-246 对未实现可选标志的策略一致。",
+  "files_changed": ["kernel/src/syscall/fs/io.rs"],
+  "description": "**`kernel/src/syscall/fs/io.rs`** **`sys_splice`**（约 **493–575** 行）在校验 **`flags & !SPLICE_F_MASK`** 后**不再读取** **`flags`**；实际数据路径为 **`do_send`**，其内部 **`read`/`write`** 仅依赖 **`FileLike`** 默认阻塞/非阻塞行为（及 **`WouldBlock`** 的部分处理），**未** 根据 **`SPLICE_F_NONBLOCK`** 在管道空/满时强制 **`EAGAIN`**/**`EWOULDBLOCK`**。\n\n**Linux `splice(2)`**：**`SPLICE_F_NONBLOCK`** 使本次 splice 在**至少一端**为管道且会阻塞时表现为**非阻塞**（与 **`O_NONBLOCK`** 叠加规则见手册）；**`SPLICE_F_MORE`/`MOVE`/`GIFT`** 多为提示/页缓存语义。当前实现**静默忽略**全部 **`SPLICE_F_*`**，调用方无法仅靠 **flag** 获得与 **glibc**/ **`liburing`** 侧预期的 **`errno`** 行为。\n\n**建议**：在 **`do_send`** 或 **`sys_splice`** 分支中解析 **`SPLICE_F_NONBLOCK`**，映射到管道/文件 **`read`/`write`** 的 **`WouldBlock`** 与 **`EAGAIN`**；或 **`flags != 0` → `EOPNOTSUPP`** 直至实现完整（与 **issue-246** **`copy_file_range`** 策略二选一，需文档化）。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["splice"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/io.rs:493-575"],
+    "related_files": ["kernel/src/syscall/fs/io.rs:362-390"],
+    "key_insight": "`flags` 校验后未传入 do_send"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；阻塞管道 + `SPLICE_F_NONBLOCK` 与 Linux 对照。",
+    "expected_output_contains": "",
+    "pass_criteria": "NONBLOCK 语义与 Linux 一致，或明确拒绝非零 flags。",
+    "last_result": "2026-04-12 巡检回归：`cargo clippy` exit 0；**非零 `SPLICE_F_*` → EOPNOTSUPP** 已落地，标记 **verified**。"
+  },
+  "suggested_fix": "实现 `SPLICE_F_NONBLOCK` → 非阻塞读/写路径；或 `flags!=0` → EOPNOTSUPP。",
+  "references": ["man 2 splice", "Linux fs/splice.c"]
+}

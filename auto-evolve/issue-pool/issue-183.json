@@ -1,0 +1,27 @@
+{
+  "id": "issue-183",
+  "title": "recvmsg：`SCM_RIGHTS` 写回用户 control缓冲区时，`zip`+`chunks_exact_mut` 可静默丢弃未安装的 `FileLike`",
+  "status": "resolved",
+  "created_at": "2026-04-13T12:00:00Z",
+  "severity": "high",
+  "fix_summary": "**`CMsgBuilder::remaining`** 供写回前判断；**`SCM_RIGHTS`** 在 **`push` 闭包**内按 **`min(总数, data可容纳 fd数)`** 安装，**剩余 `FileLike` 显式 `drop`**；若 **`fds.len()*4 > body_cap`** 置 **`cmsg_trunc`→`MSG_CTRUNC`**。若连 **`cmsghdr` 都放不下则 `drop(fds)` 并 **`MSG_CTRUNC`**，避免把 **`fds` 移入可能未被调用的 `FnOnce`（`push` 早退 `Ok(false)`）。",
+  "files_changed": ["kernel/src/syscall/net/io.rs", "kernel/src/syscall/net/cmsg.rs"],
+  "description": "**`kernel/src/syscall/net/io.rs`** 中 **`recv_on_socket`** 将内核收到的 **`CMsg::Rights { fds }`** 写回用户 **`msg_control`** 时，闭包内使用 **`fds.into_iter().zip(data.chunks_exact_mut(size_of::<i32>()))`** 逐 **`add_file_like`** 写入。**当 `fds` 个数大于缓冲区可容纳的 `i32` 槽位数时**，**`zip` 提前结束**，剩余 **`FileLike`** 随迭代器被 **drop**，**既未安装到进程 fd 表**，也可能与 **Unix域 SCM_RIGHTS** 语义不一致。**`CMsgBuilder::push` 仍返回成功**，**`msg_flags` 未必置 `MSG_CTRUNC`**（取决于外层是否误判为「已完整写出」）。**Linux** 在 ancillary 数据被截断时会 **`MSG_CTRUNC`**；此处属于 **静默丢 fd / 资源与语义双风险**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["recvmsg"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/io.rs:197-221"],
+    "related_files": ["kernel/src/syscall/net/cmsg.rs"],
+    "key_insight": "`zip` 截断导致剩余 `Arc<dyn FileLike>` drop，未对齐 Linux截断语义"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "Unix 域 **`recvmsg`**：对端发送 **`SCM_RIGHTS`** 含 **N** 个 fd，用户侧 **`msg_controllen` 仅够 **K<N** 个 fd 的 `cmsghdr`+payload；对比 **Linux** 的 **`MSG_CTRUNC`**、安装 fd 个数与 **Starry** 行为（是否丢 fd、是否置位）。",
+    "expected_output_contains": "",
+    "pass_criteria": "截断路径显式 **`MSG_CTRUNC`** 或拒绝；禁止在 **Ok** 路径静默 **drop** 未交付的 rights。",
+    "last_result": "`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` 通过（未跑 Unix 域对照测试）。"
+  },
+  "suggested_fix": "写回前校验 **`fds.len() * size_of::<i32>() <= body_capacity`**，不足则 **`MSG_CTRUNC`/`push` 失败**并避免消费多余 rights（或按 Linux 规则整包丢弃）；必要时在 **`axnet` 层**区分「完整 ancillary」与截断。",
+  "references": ["man 7 unix", "man 2 recvmsg"]
+}

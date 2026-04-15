@@ -1,0 +1,27 @@
+{
+  "id": "issue-218",
+  "title": "sys_sysinfo：`loads` 恒为 `[0,0,0]`，与 Linux 1/5/15 分钟负载语义不符",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_sysinfo` 的 `loads[0..3]` 按 Linux `SI_LOAD_SHIFT` 定点格式填充：对 `tasks()` 中 `Running`/`Ready` 计数得到瞬时负载（除以 `SYSINFO_LOAD_NCPUS=1`），再经 1/5/15 分钟时间常数的 EWMA（**`sys_sysinfo`** 调用时推进）；首访初始化三槽为同一样本。",
+  "files_changed": ["kernel/src/syscall/sys.rs"],
+  "description": "**`kernel/src/syscall/sys.rs`** **`sys_sysinfo`**（约 **159–181** 行）在填充 **`struct sysinfo`** 时将 **`kinfo.loads`** 固定为 **`[0, 0, 0]`**（约 **168** 行）。Linux **`sysinfo(2)`** 约定 **`loads[0..3]`** 为 **1/5/15 分钟**平均负载（通常以 **`1 << SI_LOAD_SHIFT`** 定点数表示，见 **`include/uapi/linux/sysinfo.h`**）；用户态 **`sysinfo()`** 包装及 **`getloadavg(3)`** 依赖该字段。\n\n当前实现已填充 **`uptime`**、**`totalram`/`freeram`**、**`procs`** 等（与 **issue-027**「内存/uptime」类问题正交或部分重叠），但 **`loads` 全零**会导致依赖负载的应用/脚本误判系统空闲。**更稳妥**：从调度/runqueue 导出近似负载，或文档化为 stub 并在 **`mem_unit`/字段**上与 **glibc** 预期对齐。\n\n本条仅 **`syscall` 语义**；与 **issue-028**（**execve** 多线程）无关。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["sysinfo"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/sys.rs:159-182"],
+    "related_files": [],
+    "key_insight": "`loads` 未接线；`uptime`/RAM 已部分填充"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "对照 **`man 2 sysinfo`**、**`SI_LOAD_SHIFT`**；可选用户态读取 **`loads`** 与 **`/proc/loadavg`** 对比（若环境有 proc）。",
+    "expected_output_contains": "",
+    "pass_criteria": "`loads` 与 Linux 定点负载语义一致，或明确拒绝/文档化并返回可检测的 stub 标记。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos：通过（exit 0）"
+  },
+  "suggested_fix": "接入 **runqueue/scheduler** 统计或最小 **EWMA** 近似；若长期不实现，在 **issue 池/README** 标注与 **issue-027** 的关系。",
+  "references": ["man 2 sysinfo", "issue-027"]
+}

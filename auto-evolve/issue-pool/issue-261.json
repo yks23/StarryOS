@@ -1,0 +1,27 @@
+{
+  "id": "issue-261",
+  "title": "listen：TCP 对负 `backlog` 返回 EINVAL，Linux 将其按无符号与 `somaxconn` 比较后截断",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`axnet-ng` `tcp_listen_syn_queue_cap`：按 Linux `__sys_listen_socket` 将 `backlog` 作 `(unsigned int)` 再与 `SOMAXCONN` 取 min，负值不再 `EINVAL`；`SocketOps::listen` 文档同步。",
+  "files_changed": ["vendor/axnet-ng/src/tcp.rs", "vendor/axnet-ng/src/socket.rs"],
+  "description": "**`kernel/src/syscall/net/socket.rs`** **`sys_listen`**（约 **116–121** 行）将 **`backlog`** 原样交给 **`Socket::from_fd(fd)?.listen(backlog)?`**。\n\n**`vendor/axnet-ng/src/tcp.rs`** **`tcp_listen_syn_queue_cap`**（约 **40–47** 行）注释称「Linux **`listen(2)`：负 `backlog` → `EINVAL`**」，并在 **`backlog < 0`** 时 **`return Err(InvalidInput)`**。\n\n**Linux `net/socket.c` `__sys_listen_socket`**（当前主线）：**`if ((unsigned int)backlog > somaxconn) backlog = somaxconn;`** — **未** 对负 **`backlog`** 单独 **`EINVAL`**；负值经 **`(unsigned int)`** 转为很大的无符号数，再与 **`somaxconn`** 比较后被 **钳到 `somaxconn`**（与 **`man 2 listen`**「Linux 不校验 **`backlog`** 符号」的常见描述一致）。\n\n**当前**：**TCP** 上 **`listen(fd, -1)`** 等在 **Starry** 为 **`EINVAL`**，在 **Linux** 多为 **成功** 且队列上限为 **`somaxconn`**。**`AF_UNIX` stream** 路径 **`UnixSocket::listen`** 忽略 **`backlog`** 仍 **`Ok(())`**，与 **Linux** 更接近。\n\n**建议**：在 **`tcp_listen_syn_queue_cap`** 将 **`backlog < 0`** 按 Linux 处理为 **`somaxconn`**（或与 **`(unsigned int)backlog`** 比较逻辑一致），或显式文档化「负 **`backlog`** 拒绝」与 Linux 分叉。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["listen"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/socket.rs:116-121", "vendor/axnet-ng/src/tcp.rs:40-47"],
+    "related_files": [],
+    "key_insight": "负 backlog：EINVAL vs 无符号比较后截断"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；已绑定 TCP 套接字上 `listen(fd, -1)` 与 Linux 对照。",
+    "expected_output_contains": "",
+    "pass_criteria": "负 backlog 行为与 Linux `__sys_listen_socket` 一致或文档化差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0）"
+  },
+  "suggested_fix": "对齐 Linux：`(backlog as u32).min(somaxconn as u32)` 等；或删除错误的 EINVAL 注释。",
+  "references": ["man 2 listen", "Linux net/socket.c __sys_listen_socket", "vendor/axnet-ng/src/tcp.rs"]
+}

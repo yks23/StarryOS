@@ -1,0 +1,27 @@
+{
+  "id": "issue-241",
+  "title": "socket/socketpair：`AF_UNIX` 时 `proto != 0` 未拒绝，Linux 为 EPROTONOSUPPORT",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`sys_socket`**/**`sys_socketpair`**：**`AF_UNIX` 且 `proto != 0` → `LinuxError::EPROTONOSUPPORT`**，与 **`unix_create`/`unix_socketpair`** 及 **`AF_INET`** **`proto`** 校验风格一致。",
+  "files_changed": ["kernel/src/syscall/net/socket.rs"],
+  "description": "**`kernel/src/syscall/net/socket.rs`** **`sys_socket`**（约 **40–81** 行）在 **`domain == AF_UNIX`** 的分支上**未** 校验第三参 **`proto`**；**`sys_socketpair`**（约 **176–225** 行）同样在 **`AF_UNIX`** 路径上忽略 **`proto`**。\n\n**Linux `unix_create`/`unix_socketpair`**：**Unix 域** 套接字 **`protocol` 必须为 0**；非零 **`→ -EPROTONOSUPPORT`**（或等价 **`EINVAL`**，依路径）。当前 **`socket(AF_UNIX, SOCK_STREAM, 1)`** / **`socketpair(AF_UNIX, SOCK_STREAM, 1, fds)`** 会**静默成功**，与 **Linux** 不一致。\n\n**建议**：在 **`AF_UNIX`** 分支入口 **`if proto != 0 { return Err(LinuxError::EPROTONOSUPPORT.into()); }`**（或与 **`sys_socket`** 现有 **`AF_INET`** **`proto`** 校验风格对齐）。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["socket", "socketpair"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/socket.rs:40-81", "kernel/src/syscall/net/socket.rs:176-188"],
+    "related_files": [],
+    "key_insight": "AF_INET 校验 proto；AF_UNIX 未校验"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；`socket(AF_UNIX, SOCK_STREAM, 1)`。",
+    "expected_output_contains": "",
+    "pass_criteria": "`AF_UNIX` 且 `proto != 0` → EPROTONOSUPPORT（与 Linux 一致）。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos：通过（exit 0）"
+  },
+  "suggested_fix": "`domain == AF_UNIX && proto != 0` → `EPROTONOSUPPORT`。",
+  "references": ["man 2 socket", "man 2 socketpair", "Linux net/unix/af_unix.c"]
+}

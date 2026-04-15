@@ -1,0 +1,30 @@
+{
+  "id": "issue-182",
+  "title": "fcntl F_DUPFD/F_DUPFD_CLOEXEC：忽略第三参 arg（新 fd 下限），与 Linux 不一致",
+  "status": "resolved",
+  "created_at": "2026-04-13T04:00:00Z",
+  "severity": "medium",
+  "fix_summary": "新增 **`add_file_like_at_least`**：自 **`min_fd`** 起找首个空槽 **`FlattenObjects::add_at`**；**`min_fd >= AX_FILE_LIMIT`** 或 **`arg` 作为 `c_int` 为负** → **`EINVAL`**；**`RLIMIT_NOFILE`** 已满或无可用槽 → **`EMFILE`**。**`F_DUPFD`/`F_DUPFD_CLOEXEC`** 传入 **`arg`**；**`sys_dup`** 仍用下限 **0**。",
+  "files_changed": ["kernel/src/file/mod.rs", "kernel/src/syscall/fs/fd_ops.rs"],
+  "description": "**`sys_fcntl`**（`kernel/src/syscall/fs/fd_ops.rs`）对 **`F_DUPFD`** 与 **`F_DUPFD_CLOEXEC`** 调用 **`dup_fd(fd, cloexec)`**，而 **`dup_fd`** 仅 **`get_file_like` + `add_file_like`**，**从未使用**第三参数 **`arg`**（用户态 **`unsigned long`/`int`**）。**Linux `fcntl(2)`**：**`F_DUPFD`** / **`F_DUPFD_CLOEXEC`** 的 **`arg`** 为新描述符的**编号下限**——内核选择 **≥ `arg`** 的最小未使用 fd（并满足 **`RLIMIT_NOFILE`** 等）。**Starry** 由 **`FlattenObjects::add`** 按内部策略分配 fd，**可能小于**调用方要求的 **`arg`**，破坏依赖 **`fcntl(fd, F_DUPFD, base)`** 预留 fd 区间或与 **`pipe`/`socket`**、**glibc** 内部约定协同的程序。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["fcntl"],
+  "source_context": {
+    "primary_files": [
+      "kernel/src/syscall/fs/fd_ops.rs:189-193",
+      "kernel/src/syscall/fs/fd_ops.rs:242-244"
+    ],
+    "related_files": ["kernel/src/file/mod.rs:264-271"],
+    "key_insight": "`F_DUPFD` 分支未把 `arg` 传入 `dup_fd`/`add_file_like`"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "打开若干低号 fd 后 **`fcntl(fd, F_DUPFD, 16)`**，检查返回 fd 是否 **≥ 16**；与 **Linux** 对比。",
+    "expected_output_contains": "",
+    "pass_criteria": "新 fd **≥ `arg`** 且未占用；**`arg` 非法**（负、超上限）时 **`EINVAL`** 与 **Linux** 一致。",
+    "last_result": "`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` 通过（未跑对照测试）。"
+  },
+  "suggested_fix": "扩展 **`add_file_like`** 或新增 **`add_file_like_at_least(f, cloexec, min_fd)`**：自 **`max(min_fd, 0)`** 起查找第一个空槽 **`add_at`**；若超出 **`RLIMIT_NOFILE`**/**`AX_FILE_LIMIT`**则 **`EMFILE`/`EINVAL`**。**`F_DUPFD_CLOEXEC`** 仅 **`cloexec` 标志**不同。",
+  "references": ["man 2 fcntl", "Linux __get_unused_fd_flags"]
+}

@@ -1,0 +1,32 @@
+{
+  "id": "issue-373",
+  "title": "`preadv2(2)`/`pwritev2(2)`：`check_rwf_flags(flags)` 先于 `File::from_fd(fd)`，无效 `fd` 与非法/未实现 `RWF_*` 同时存在时可能先返回 `EINVAL`/`EOPNOTSUPP` 而非 `EBADF`，与 Linux `fget` 优先及同文件 `pread64`/`pwrite64` 顺序不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "resolved_at": "2026-04-13T03:00:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/fs/io.rs`** **`sys_preadv2`** **`/`** **`sys_pwritev2`** **（** **约** **323–357** **行** **）** **：** **`check_rwf_flags(flags)`** **在** **`File::from_fd(fd)?`** **之前** **执行** **。** **`check_rwf_flags`** **对** **掩码** **外** **位** **返回** **`InvalidInput`** **，** **对** **非零** **且** **在** **掩码** **内** **的** **`RWF_*`** **（** **当前** **实现** **未** **落地** **）** **返回** **`OperationNotSupported`** **。** **若** **用户** **同时** **传入** **无效** **`fd`** **与** **会** **触发** **上述** **错误** **的** **`flags`** **，** **Starry** **先** **报告** **标志** **相关** **错误** **，** **而非** **`BadFileDescriptor`** **。** **同** **文件** **`sys_pread64`/`sys_pwrite64`** **（** **issue-314** **主题** **）** **为** **`from_fd`** **先于** **`offset<0`** **，** **与** **Linux** **常见** **`fget`/`fd`** **解析** **优先** **于** **参数** **/`RWF_*`** **分层** **一致** **。** **`preadv`/`pwritev`** **调用** **`preadv2`/`pwritev2`** **且** **`flags=0`** **时** **无** **此** **交叉** **。**\n\n**建议** **：** **`File::from_fd(fd)?`** **（** **或** **与** **`sendfile`/`splice`** **同类** **的** **`get_file_like`** **）** **先于** **`check_rwf_flags`** **；** **`iov`/`offset`** **等** **校验** **顺序** **可** **再** **对照** **Linux** **`do_preadv`** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["preadv2", "pwritev2"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/io.rs:312-357"],
+    "related_files": ["kernel/src/syscall/fs/io.rs:266-291"],
+    "key_insight": "rwf_flags before fd lookup; EBADF vs EINVAL/EOPNOTSUPP ordering"
+  },
+  "fix_summary": "**`sys_preadv2`/`sys_pwritev2`**：**`File::from_fd(fd)?`** **先于** **`check_rwf_flags`** **；** **注释** **对齐** **`do_preadv`** **/`fget`** **与** **issue-314** **。** **issue-373**。**",
+  "files_changed": [
+    "kernel/src/syscall/fs/io.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-373.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：用户态 `preadv2` 关闭的 fd + 非零 `flags`（或未知 `RWF_*` 位）对照 Linux `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "与 Linux 及同文件 `pread64` 的 fd/参数错误分层一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "将 `File::from_fd(fd)?` 提前到 `check_rwf_flags` 之前（并保持与 `iov`/offset 校验的合理顺序）。",
+  "references": ["man 2 preadv2", "kernel/src/syscall/fs/io.rs"]
+}

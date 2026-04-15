@@ -1,8 +1,6 @@
 use axhal::uspace::{ExceptionKind, ReturnReason, UserContext};
 use axtask::TaskInner;
-use starry_process::Pid;
 use starry_signal::{SignalInfo, Signo};
-use starry_vm::{VmMutPtr, VmPtr};
 
 use super::{
     AsThread, TimerState, check_signals, raise_signal_fatal, set_timer_state, unblock_next_signal,
@@ -10,14 +8,12 @@ use super::{
 use crate::syscall::handle_syscall;
 
 /// Create a new user task.
-pub fn new_user_task(name: &str, mut uctx: UserContext, set_child_tid: usize) -> TaskInner {
+///
+/// `CLONE_CHILD_SETTID` is handled in `CloneArgs::do_clone` before `spawn_task` (issue-413).
+pub fn new_user_task(name: &str, mut uctx: UserContext) -> TaskInner {
     TaskInner::new(
         move || {
             let curr = axtask::current();
-
-            if let Some(tid) = (set_child_tid as *mut Pid).nullable() {
-                tid.vm_write(curr.id().as_u64() as Pid).ok();
-            }
 
             info!("Enter user space: ip={:#x}, sp={:#x}", uctx.ip(), uctx.sp());
 
@@ -30,7 +26,7 @@ pub fn new_user_task(name: &str, mut uctx: UserContext, set_child_tid: usize) ->
                 match reason {
                     ReturnReason::Syscall => handle_syscall(&mut uctx),
                     ReturnReason::PageFault(addr, flags) => {
-                        if !thr.proc_data.aspace.lock().handle_page_fault(addr, flags) {
+                        if !thr.proc_data.aspace.write().handle_page_fault(addr, flags) {
                             info!(
                                 "{:?}: segmentation fault at {:#x} {:?}",
                                 thr.proc_data.proc, addr, flags

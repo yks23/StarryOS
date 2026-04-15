@@ -4,17 +4,81 @@ use core::{
     task::Context,
 };
 
-use axerrno::{AxError, AxResult};
+use axerrno::{AxError, AxResult, LinuxError};
 use axfs::{FS_CONTEXT, FileFlags, OpenOptions};
+use axfs_ng_vfs::NodeType;
 use axio::{Seek, SeekFrom};
 use axpoll::{IoEvents, Pollable};
-use axtask::current;
-use linux_raw_sys::general::__kernel_off_t;
+use linux_raw_sys::general::{
+    __kernel_off_t, FALLOC_FL_COLLAPSE_RANGE, FALLOC_FL_INSERT_RANGE, FALLOC_FL_KEEP_SIZE,
+    FALLOC_FL_NO_HIDE_STALE, FALLOC_FL_PUNCH_HOLE, FALLOC_FL_UNSHARE_RANGE,
+    FALLOC_FL_WRITE_ZEROES, FALLOC_FL_ZERO_RANGE, RWF_APPEND, RWF_DSYNC, RWF_HIPRI, RWF_NOWAIT,
+    RWF_SYNC, SPLICE_F_GIFT, SPLICE_F_MORE, SPLICE_F_MOVE, SPLICE_F_NONBLOCK,
+};
+
+/// Linux `splice(2)` flags; unknown bits must be rejected with EINVAL.
+const SPLICE_F_MASK: u32 = SPLICE_F_MOVE | SPLICE_F_NONBLOCK | SPLICE_F_MORE | SPLICE_F_GIFT;
+
+/// Linux `copy_file_range(2)` flags (`uapi/linux/fs.h`); unknown bits → EINVAL.
+const COPY_FILE_RANGE_COMPRESS: u32 = 1 << 0;
+const COPY_FILE_RANGE_DEDUPE: u32 = 1 << 2;
+const COPY_FILE_RANGE_MASK: u32 = COPY_FILE_RANGE_COMPRESS | COPY_FILE_RANGE_DEDUPE;
+
+/// Linux `preadv2(2)` / `pwritev2(2)` `RWF_*` (`uapi/linux/fs.h`, via `linux_raw_sys::general`);
+/// unknown bits → EINVAL; defined bits not yet honored → EOPNOTSUPP (issue-248).
+const RWF_MASK: u32 = RWF_HIPRI | RWF_DSYNC | RWF_SYNC | RWF_NOWAIT | RWF_APPEND;
+
+/// Linux `POSIX_FADV_*` through `POSIX_FADV_WIPEONFORK` (`uapi/linux/fadvise.h`, values 0..=7).
+/// Larger `advice` values are EINVAL until extended in the uapi.
+const POSIX_FADV_MAX: u32 = 7;
+
+/// Linux `fallocate(2)` `FALLOC_FL_*` bits (`uapi/linux/fs.h` / `linux_raw_sys`); unknown bits → EINVAL.
+/// `FALLOC_FL_ALLOCATE_RANGE` is **0** (default); non-zero modes are not implemented yet (issue-225).
+const FALLOC_FL_KNOWN_MASK: u32 = FALLOC_FL_KEEP_SIZE
+    | FALLOC_FL_PUNCH_HOLE
+    | FALLOC_FL_NO_HIDE_STALE
+    | FALLOC_FL_COLLAPSE_RANGE
+    | FALLOC_FL_ZERO_RANGE
+    | FALLOC_FL_INSERT_RANGE
+    | FALLOC_FL_UNSHARE_RANGE
+    | FALLOC_FL_WRITE_ZEROES;
+
+/// `lseek(2)` / `llseek` — POSIX `SEEK_*` (`whence`); not always exposed next to `SEEK_SET` in all libc headers.
+const SEEK_SET: c_int = 0;
+const SEEK_CUR: c_int = 1;
+const SEEK_END: c_int = 2;
+const SEEK_DATA: c_int = 3;
+const SEEK_HOLE: c_int = 4;
+
+/// Linux `SEEK_DATA` / `SEEK_HOLE` for a **dense** file (no tracked internal holes).
+///
+/// Starry does not yet expose per-file extent/hole maps (e.g. after `FALLOC_FL_PUNCH_HOLE`);
+/// we treat `[0, size)` as data and `[size, ∞)` as hole, matching Linux for non-sparse files.
+fn lseek_data_hole_dense(f: &File, offset: __kernel_off_t, seek_data: bool) -> AxResult<u64> {
+    let size = f.inner().location().metadata()?.size;
+    let off = offset;
+    if off < 0 {
+        return Err(AxError::InvalidInput);
+    }
+    let off_u = off as u64;
+    if seek_data {
+        if off_u < size {
+            Ok(off_u)
+        } else if off_u == size {
+            Err(LinuxError::ENXIO.into())
+        } else {
+            Err(AxError::InvalidInput)
+        }
+    } else if off_u < size {
+        Ok(size)
+    } else {
+        Ok(off_u)
+    }
+}
 use starry_vm::{VmMutPtr, VmPtr};
-use syscalls::Sysno;
 
 use crate::{
-    file::{File, FileLike, Pipe, get_file_like},
+    file::{File, FileLike, MemfdCreatedFile, Pipe, get_file_like},
     mm::{IoVec, IoVectorBuf, UserConstPtr, VmBytes, VmBytesMut},
 };
 
@@ -30,16 +94,6 @@ impl Pollable for DummyFd {
     }
 
     fn register(&self, _context: &mut Context<'_>, _events: IoEvents) {}
-}
-
-pub fn sys_dummy_fd(sysno: Sysno) -> AxResult<isize> {
-    if current().name().starts_with("qemu-") {
-        // We need to be honest to qemu, since it can automatically fallback to
-        // other strategies.
-        return Err(AxError::Unsupported);
-    }
-    warn!("Dummy fd created: {sysno}");
-    DummyFd.add_to_fd_table(false).map(|fd| fd as isize)
 }
 
 /// Read data from the file indicated by `fd`.
@@ -74,22 +128,40 @@ pub fn sys_writev(fd: i32, iov: *const IoVec, iovcnt: usize) -> AxResult<isize> 
 
 pub fn sys_lseek(fd: c_int, offset: __kernel_off_t, whence: c_int) -> AxResult<isize> {
     debug!("sys_lseek <= {fd} {offset} {whence}");
+    let f = File::from_fd(fd)?;
+    if whence == SEEK_DATA || whence == SEEK_HOLE {
+        let pos = lseek_data_hole_dense(&f, offset, whence == SEEK_DATA)?;
+        let off = f.inner().seek(SeekFrom::Start(pos))?;
+        return Ok(off as _);
+    }
+    // Linux: SEEK_SET with negative offset → EINVAL (avoid `offset as u64` wrap, issue-272).
+    if whence == SEEK_SET && offset < 0 {
+        return Err(AxError::InvalidInput);
+    }
     let pos = match whence {
-        0 => SeekFrom::Start(offset as _),
-        1 => SeekFrom::Current(offset as _),
-        2 => SeekFrom::End(offset as _),
+        SEEK_SET => SeekFrom::Start(offset as _),
+        SEEK_CUR => SeekFrom::Current(offset as _),
+        SEEK_END => SeekFrom::End(offset as _),
         _ => return Err(AxError::InvalidInput),
     };
-    let off = File::from_fd(fd)?.inner().seek(pos)?;
+    let off = f.inner().seek(pos)?;
     Ok(off as _)
 }
 
 pub fn sys_truncate(path: UserConstPtr<c_char>, length: __kernel_off_t) -> AxResult<isize> {
+    // Resolve user `path` before `length` so **EFAULT** (bad pointer) precedes **EINVAL** for
+    // negative `length` when both apply (Linux `do_truncate`/`user_path_at_empty` order; issue-318).
+    // `ftruncate` is different: **fd** before `length` (issue-316).
     let path = path.get_as_str()?;
-    debug!("sys_truncate <= {path:?} {length}");
+    // Linux rejects empty pathname with EINVAL before open (issue-406; issue-393 theme; path/length
+    // order issue-318).
+    if path.is_empty() {
+        return Err(AxError::InvalidInput);
+    }
     if length < 0 {
         return Err(AxError::InvalidInput);
     }
+    debug!("sys_truncate <= {path:?} {length}");
     let file = OpenOptions::new()
         .write(true)
         .open(&FS_CONTEXT.lock(), path)?
@@ -100,11 +172,18 @@ pub fn sys_truncate(path: UserConstPtr<c_char>, length: __kernel_off_t) -> AxRes
 
 pub fn sys_ftruncate(fd: c_int, length: __kernel_off_t) -> AxResult<isize> {
     debug!("sys_ftruncate <= {fd} {length}");
+    // Resolve `fd` before `length` so **EBADF** precedes **EINVAL** for negative `length` when both
+    // apply (Linux `ksys_ftruncate`/`vfs_ftruncate`; issue-316, issue-313 theme).
     let f = File::from_fd(fd)?;
+    if length < 0 {
+        return Err(AxError::InvalidInput);
+    }
     f.inner().access(FileFlags::WRITE)?.set_len(length as _)?;
     Ok(0)
 }
 
+/// Default `mode == 0` extends file length to `max(current, offset + len)` (space reservation).
+/// Other `FALLOC_FL_*` combinations (punch hole, zero range, …) need sparse/VFS support → `EOPNOTSUPP`.
 pub fn sys_fallocate(
     fd: c_int,
     mode: u32,
@@ -112,28 +191,52 @@ pub fn sys_fallocate(
     len: __kernel_off_t,
 ) -> AxResult<isize> {
     debug!("sys_fallocate <= fd: {fd}, mode: {mode}, offset: {offset}, len: {len}");
-    if mode != 0 {
+    // Resolve `fd` before `mode`/`offset`/`len` so **EBADF** precedes **EINVAL**/**EOPNOTSUPP** when
+    // both an invalid fd and bad parameters are present (Linux `fdget`/`__sys_fallocate`; issue-313).
+    let f = File::from_fd(fd)?;
+    if mode & !FALLOC_FL_KNOWN_MASK != 0 {
         return Err(AxError::InvalidInput);
     }
-    let f = File::from_fd(fd)?;
+    if mode != 0 {
+        return Err(AxError::OperationNotSupported);
+    }
+    if offset < 0 || len < 0 {
+        return Err(AxError::InvalidInput);
+    }
+    let offset_u = offset as u64;
+    let len_u = len as u64;
+    let Some(end) = offset_u.checked_add(len_u) else {
+        return Err(AxError::InvalidInput);
+    };
+
     let inner = f.inner();
     let file = inner.access(FileFlags::WRITE)?;
-    file.set_len(file.location().len()?.max(offset as u64 + len as u64))?;
+    file.set_len(file.location().len()?.max(end))?;
     Ok(0)
+}
+
+/// Linux `vfs_fsync`: only regular-file-like descriptors; pipe/socket/etc. → `EINVAL`.
+fn fsync_fd(fd: c_int, data_only: bool) -> AxResult<isize> {
+    let f = get_file_like(fd)?;
+    if let Some(file) = f.downcast_ref::<File>() {
+        file.inner().sync(data_only)?;
+        return Ok(0);
+    }
+    if let Some(m) = f.downcast_ref::<MemfdCreatedFile>() {
+        m.inner_file().inner().sync(data_only)?;
+        return Ok(0);
+    }
+    Err(AxError::InvalidInput)
 }
 
 pub fn sys_fsync(fd: c_int) -> AxResult<isize> {
     debug!("sys_fsync <= {fd}");
-    let f = File::from_fd(fd)?;
-    f.inner().sync(false)?;
-    Ok(0)
+    fsync_fd(fd, false)
 }
 
 pub fn sys_fdatasync(fd: c_int) -> AxResult<isize> {
     debug!("sys_fdatasync <= {fd}");
-    let f = File::from_fd(fd)?;
-    f.inner().sync(true)?;
-    Ok(0)
+    fsync_fd(fd, true)
 }
 
 pub fn sys_fadvise64(
@@ -143,10 +246,25 @@ pub fn sys_fadvise64(
     advice: u32,
 ) -> AxResult<isize> {
     debug!("sys_fadvise64 <= fd: {fd}, offset: {offset}, len: {len}, advice: {advice}");
-    if Pipe::from_fd(fd).is_ok() {
-        return Err(AxError::BrokenPipe);
+    let f = get_file_like(fd)?;
+    if f.downcast_ref::<Pipe>().is_some() {
+        // Linux: fadvise on non-seekable fd (pipe, etc.) → ESPIPE, not EPIPE (broken pipe).
+        return Err(LinuxError::ESPIPE.into());
     }
-    if advice > 5 {
+    if f.downcast_ref::<File>().is_none() && f.downcast_ref::<MemfdCreatedFile>().is_none() {
+        // Linux `vfs_fadvise`: regular-file-like only; socket/timerfd/epoll/… → EINVAL (issue-290).
+        return Err(AxError::InvalidInput);
+    }
+    if advice > POSIX_FADV_MAX {
+        return Err(AxError::InvalidInput);
+    }
+    // Stub: no VFS hook yet, but reject invalid intervals like Linux `vfs_fadvise` (EINVAL).
+    if offset < 0 || len < 0 {
+        return Err(AxError::InvalidInput);
+    }
+    let offset_u = offset as u64;
+    let len_u = len as u64;
+    if offset_u.checked_add(len_u).is_none() {
         return Err(AxError::InvalidInput);
     }
     Ok(0)
@@ -167,10 +285,15 @@ pub fn sys_pwrite64(
     len: usize,
     offset: __kernel_off_t,
 ) -> AxResult<isize> {
+    // Same order as `sys_pread64` / Linux `do_pwrite64`: **EBADF** before **EINVAL** for negative
+    // `offset` when both bad `fd` and bad `offset` apply (issue-314; issue-313 theme).
+    let f = File::from_fd(fd)?;
+    if offset < 0 {
+        return Err(AxError::InvalidInput);
+    }
     if len == 0 {
         return Ok(0);
     }
-    let f = File::from_fd(fd)?;
     let write = f.inner().write_at(VmBytes::new(buf, len), offset as _)?;
     Ok(write as _)
 }
@@ -193,15 +316,32 @@ pub fn sys_pwritev(
     sys_pwritev2(fd, iov, iovcnt, offset, 0)
 }
 
+/// `preadv2`/`pwritev2` `flags` (`RWF_*`): reject unknown bits; defined semantics not implemented yet.
+fn check_rwf_flags(flags: u32) -> AxResult<()> {
+    if flags & !RWF_MASK != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    if flags != 0 {
+        return Err(AxError::OperationNotSupported);
+    }
+    Ok(())
+}
+
 pub fn sys_preadv2(
     fd: c_int,
     iov: *const IoVec,
     iovcnt: usize,
     offset: __kernel_off_t,
-    _flags: u32,
+    flags: u32,
 ) -> AxResult<isize> {
-    debug!("sys_preadv2 <= fd: {fd}, iovcnt: {iovcnt}, offset: {offset}, flags: {_flags}");
+    debug!("sys_preadv2 <= fd: {fd}, iovcnt: {iovcnt}, offset: {offset}, flags: {flags}");
+    // Linux `do_preadv`: `fget` before `RWF_*` / iov validation — **EBADF** before **EINVAL** when
+    // both bad `fd` and bad `flags` apply (issue-373; same theme as `pread64`/`pwrite64` issue-314).
     let f = File::from_fd(fd)?;
+    check_rwf_flags(flags)?;
+    if offset < 0 {
+        return Err(AxError::InvalidInput);
+    }
     f.inner()
         .read_at(IoVectorBuf::new(iov, iovcnt)?.into_io(), offset as _)
         .map(|n| n as _)
@@ -212,12 +352,17 @@ pub fn sys_pwritev2(
     iov: *const IoVec,
     iovcnt: usize,
     offset: __kernel_off_t,
-    _flags: u32,
+    flags: u32,
 ) -> AxResult<isize> {
-    debug!("sys_pwritev2 <= fd: {fd}, iovcnt: {iovcnt}, offset: {offset}, flags: {_flags}");
+    debug!("sys_pwritev2 <= fd: {fd}, iovcnt: {iovcnt}, offset: {offset}, flags: {flags}");
+    // Same `fget` / `RWF_*` order as `sys_preadv2` (issue-373).
     let f = File::from_fd(fd)?;
+    check_rwf_flags(flags)?;
+    if offset < 0 {
+        return Err(AxError::InvalidInput);
+    }
     f.inner()
-        .read_at(IoVectorBuf::new(iov, iovcnt)?.into_io(), offset as _)
+        .write_at(IoVectorBuf::new(iov, iovcnt)?.into_io(), offset as _)
         .map(|n| n as _)
 }
 
@@ -300,11 +445,20 @@ pub fn sys_sendfile(out_fd: c_int, in_fd: c_int, offset: *mut u64, len: usize) -
         len
     );
 
+    // Linux do_sendfile: fget both fds before rejecting same descriptor (EBADF before EINVAL when
+    // both fds are invalid; issue-326; same class as issue-317/issue-322). Same-numeric-fd → EINVAL
+    // (issue-235).
+    get_file_like(in_fd)?;
+    get_file_like(out_fd)?;
+    if in_fd == out_fd {
+        return Err(AxError::InvalidInput);
+    }
+
     let src = if !offset.is_null() {
-        if offset.vm_read()? > u32::MAX as u64 {
-            return Err(AxError::InvalidInput);
-        }
-        SendFile::Offset(File::from_fd(in_fd)?, offset)
+        // LP64: user `offset` is `loff_t*` / updated `u64` — no 4GiB cap (issue-220); `read_at`/`write_at`
+        // enforce any file-size limits.
+        let file = File::from_fd(in_fd)?;
+        SendFile::Offset(file, offset)
     } else {
         SendFile::Direct(get_file_like(in_fd)?)
     };
@@ -320,7 +474,7 @@ pub fn sys_copy_file_range(
     fd_out: c_int,
     off_out: *mut u64,
     len: usize,
-    _flags: u32,
+    flags: u32,
 ) -> AxResult<isize> {
     debug!(
         "sys_copy_file_range <= fd_in: {}, off_in: {}, fd_out: {}, off_out: {}, len: {}, flags: {}",
@@ -329,21 +483,58 @@ pub fn sys_copy_file_range(
         fd_out,
         !off_out.is_null(),
         len,
-        _flags
+        flags
     );
 
-    // TODO: check flags
-    // TODO: check both regular files
-    // TODO: check same file and overlap
+    // Resolve fds before `flags` so **EBADF** precedes **EINVAL**/**EOPNOTSUPP** when both bad
+    // fds and bad `flags` apply (Linux `__sys_copy_file_range`; issue-315, issue-313 theme).
+    let f_in = File::from_fd(fd_in)?;
+    let f_out = File::from_fd(fd_out)?;
+
+    if flags & !COPY_FILE_RANGE_MASK != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    // `COPY_FILE_RANGE_COMPRESS` / `COPY_FILE_RANGE_DEDUPE` require fs support; do not fall back to
+    // plain read/write and pretend success (issue-246).
+    if flags != 0 {
+        return Err(AxError::OperationNotSupported);
+    }
+
+    let mi = f_in.inner().location().metadata()?;
+    let mo = f_out.inner().location().metadata()?;
+    if mi.node_type != NodeType::RegularFile || mo.node_type != NodeType::RegularFile {
+        return Err(AxError::InvalidInput);
+    }
+    if (fd_in == fd_out || (mi.inode == mo.inode && mi.device == mo.device)) && len > 0 {
+        let in_start = if off_in.is_null() {
+            f_in.inner().seek(SeekFrom::Current(0))?
+        } else {
+            off_in.vm_read()?
+        };
+        let out_start = if off_out.is_null() {
+            f_out.inner().seek(SeekFrom::Current(0))?
+        } else {
+            off_out.vm_read()?
+        };
+        let in_end = in_start
+            .checked_add(len as u64)
+            .ok_or(AxError::InvalidInput)?;
+        let out_end = out_start
+            .checked_add(len as u64)
+            .ok_or(AxError::InvalidInput)?;
+        if in_start < out_end && out_start < in_end {
+            return Err(AxError::InvalidInput);
+        }
+    }
 
     let src = if !off_in.is_null() {
-        SendFile::Offset(File::from_fd(fd_in)?, off_in)
+        SendFile::Offset(f_in.clone(), off_in)
     } else {
         SendFile::Direct(get_file_like(fd_in)?)
     };
 
     let dst = if !off_out.is_null() {
-        SendFile::Offset(File::from_fd(fd_out)?, off_out)
+        SendFile::Offset(f_out.clone(), off_out)
     } else {
         SendFile::Direct(get_file_like(fd_out)?)
     };
@@ -357,7 +548,7 @@ pub fn sys_splice(
     fd_out: c_int,
     off_out: *mut i64,
     len: usize,
-    _flags: u32,
+    flags: u32,
 ) -> AxResult<isize> {
     debug!(
         "sys_splice <= fd_in: {}, off_in: {}, fd_out: {}, off_out: {}, len: {}, flags: {}",
@@ -366,20 +557,52 @@ pub fn sys_splice(
         fd_out,
         !off_out.is_null(),
         len,
-        _flags
+        flags
     );
 
-    let mut has_pipe = false;
+    // Linux `splice(2)` / `do_splice`: input and output must not be the same file descriptor → EINVAL.
+    if fd_in == fd_out {
+        return Err(AxError::InvalidInput);
+    }
+
+    // Resolve fds before `flags` so **EBADF** precedes **EINVAL**/**EOPNOTSUPP** when both bad fds and
+    // bad `flags` apply (Linux `do_splice`/`fdget`; issue-317, issue-315 theme).
+    let _ = get_file_like(fd_in)?;
+    let _ = get_file_like(fd_out)?;
 
     if DummyFd::from_fd(fd_in).is_ok() || DummyFd::from_fd(fd_out).is_ok() {
         return Err(AxError::BadFileDescriptor);
     }
 
+    if flags & !SPLICE_F_MASK != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    // `SPLICE_F_NONBLOCK`/`MOVE`/`MORE`/`GIFT` are not honored by `do_send` (no EAGAIN from flags
+    // alone); reject non-zero flags until splice implements them (issue-247), like optional
+    // `copy_file_range` flags (issue-246).
+    if flags != 0 {
+        return Err(AxError::OperationNotSupported);
+    }
+
+    // Linux `do_splice` (`fs/splice.c`): `if (!len) return 0;` before pipe vs non-pipe routing — avoid
+    // `EINVAL` when neither end is a pipe but `len == 0` (issue-377).
+    if len == 0 {
+        return Ok(0);
+    }
+
+    let mut has_pipe = false;
+
     let src = if !off_in.is_null() {
+        // Linux `do_splice`: `*_off` must not be used with a pipe end — EINVAL, not EPIPE-style
+        // errors from `File::from_fd` / `BrokenPipe` (issue-379).
+        if Pipe::from_fd(fd_in).is_ok() {
+            return Err(AxError::InvalidInput);
+        }
+        let file = File::from_fd(fd_in)?;
         if off_in.vm_read()? < 0 {
             return Err(AxError::InvalidInput);
         }
-        SendFile::Offset(File::from_fd(fd_in)?, off_in.cast())
+        SendFile::Offset(file, off_in.cast())
     } else {
         if let Ok(src) = Pipe::from_fd(fd_in) {
             if !src.is_read() {
@@ -396,10 +619,14 @@ pub fn sys_splice(
     };
 
     let dst = if !off_out.is_null() {
+        if Pipe::from_fd(fd_out).is_ok() {
+            return Err(AxError::InvalidInput);
+        }
+        let file = File::from_fd(fd_out)?;
         if off_out.vm_read()? < 0 {
             return Err(AxError::InvalidInput);
         }
-        SendFile::Offset(File::from_fd(fd_out)?, off_out.cast())
+        SendFile::Offset(file, off_out.cast())
     } else {
         if let Ok(dst) = Pipe::from_fd(fd_out) {
             if !dst.is_write() {

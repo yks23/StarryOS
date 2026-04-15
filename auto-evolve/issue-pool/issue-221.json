@@ -1,0 +1,27 @@
+{
+  "id": "issue-221",
+  "title": "getdents64：`DirBuffer::write_entry` 仍标 FIXME，`d_reclen` 与超长记录、`d_off` 截断未与 Linux uapi 对齐说明",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`DirBuffer::write_entry`：`d_name` 长度 ≤ **`NAME_MAX`**；**`d_reclen`** 用 **`u16::try_from(len)`**，失败 **`EINVAL`**（经 **`fatal`**）；**`d_off`** 用 **`i64::try_from(offset)`**（VFS cookie）；**`FIXME`** 改为 **`SAFETY`** 不变量说明。",
+  "files_changed": ["kernel/src/syscall/fs/ctl.rs"],
+  "description": "**`kernel/src/syscall/fs/ctl.rs`** **`DirBuffer::write_entry`**（约 **138–166** 行）在 **`FIXME: safety`** 注释下使用 **`unsafe`**：向内核态 **`Vec<u8>`** 写入 **`linux_dirent64`** 头字段与变长 **`d_name`**，再累计 **`self.offset`**。\n\n风险与缺口：\n1. **Linux `linux_dirent64.d_reclen`** 为 **`u16`**；当前 **`len = NAME_OFFSET + name.len() + 1`** 再对齐后赋给 **`d_reclen: len as _`**。若 **`len > u16::MAX`**（极端长文件名或异常 **`name`**），会发生**静默截断**，用户态看到的 **`d_reclen`** 与实际记录长度不一致。\n2. **`d_off`** 来自 VFS 回调的 **`offset as i64`**（约 **185** 行）：**`u64`→`i64`** 在超大 **cookie** 场景下与 Linux **`getdents64`/`telldir`** 的 **64 位偏移**语义是否一致需对照（通常目录项 **cookie** 远小于 **`i64::MAX`**，但缺少显式文档或饱和处理）。\n3. **`FIXME`** 未关闭，表明作者认为 **`unsafe` 块**仍欠形式化安全论证（与 **`vm_write_slice`** 整缓冲写出路径的衔接）。\n\n**建议**：对 **`name`** 长度施加与 **`NAME_MAX`** / **`linux_dirent64`** 布局一致的上界；**`d_reclen`** 赋值前检测 **`len <= u16::MAX`** 否则 **`EINVAL`**；将 **`FIXME`** 改为可验证的不变量说明或封装为安全 API。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["getdents64"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/ctl.rs:120-196"],
+    "related_files": [],
+    "key_insight": "d_reclen u16 与 len、FIXME 与 d_off 转型"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选构造边界长度目录项。",
+    "expected_output_contains": "",
+    "pass_criteria": "超长 `d_reclen` 拒绝或分片；`FIXME` 消除或文档化不变量；`d_off` 与 Linux 一致或有意识限制。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos：通过（exit 0）"
+  },
+  "suggested_fix": "`d_reclen` 用 `u16::try_from(len)`；`name` 上限与 VFS 合同；审查 `offset`→`d_off` 类型。",
+  "references": ["man 2 getdents64", "Linux `struct linux_dirent64`"]
+}

@@ -1,0 +1,32 @@
+{
+  "id": "issue-364",
+  "title": "`select(2)`/`pselect6(2)`：`do_select` 仍用 `block_on(future::timeout(..., poll_io(...)))` 且无 `interruptible`；`block_on` 外层 `Err(_)` 一律映射为 `Ok(0)`，与 Linux 在信号打断可中断睡眠时返回 `-EINTR` 的语义不对齐（同主题见已修复的 `ppoll`/`do_poll`，issue-355）",
+  "status": "resolved",
+  "created_at": "2026-04-12T18:35:00Z",
+  "resolved_at": "2026-04-14T00:00:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/io_mpx/select.rs`** **`do_select`** **（** **约** **158–193** **行** **）** **：** **`with_blocked_signals`** **内** **`match block_on(future::timeout(timeout, poll_io(...))) { Ok(r) => r, Err(_) => Ok(0) }`** **。** **`future::timeout`** **的** **外层** **`Err`** **在** **带** **信号** **的** **可** **中断** **等待** **中** **可** **对应** **除** **纯** **超时** **以外** **的** **唤醒** **；** **当前** **与** **`ppoll`** **修复** **前** **类似** **，** **未** **经** **`interruptible`** **分层** **。** **失败** **分支** **统一** **返回** **`Ok(0)`** **会** **让** **调用方** **以为** **「** **零** **fd** **就绪** **」** **，** **而非** **`-EINTR`** **，** **与** **`Linux`** **`core_sys_select`** **/`poll_schedule_timeout`** **在** **被** **信号** **中断** **时** **的** **行为** **不一致** **。**\n\n**建议** **：** **对齐** **`poll.rs`** **`do_poll`** **（** **issue-355** **）** **：** **`interruptible`** **`+`** **与** **`Option<Duration>`** **一致的** **超时** **封装** **（** **如** **`timeout_at`** **）** **；** **区分** **超时** **（** **聚合** **就绪** **计数** **`/`** **空** **集** **）** **与** **`Interrupted`** **→** **`AxError::Interrupted`** **。** **并** **核对** **`flush_output_fd_sets`** **在** **`EINTR`** **路径** **是否** **应保持** **用户** **`fd_set`** **不变** **（** **Linux** **语义** **）** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["select", "pselect6"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/io_mpx/select.rs:158-207"],
+    "related_files": ["kernel/src/syscall/io_mpx/poll.rs"],
+    "key_insight": "do_select timeout Err branch vs signal/EINTR; no interruptible"
+  },
+  "fix_summary": "**`do_select`**：与 **`do_poll`**/**issue-355** 一致，**`block_on`(`interruptible`(`future::timeout_at`(`poll_io`)))`**；**`Ok(Ok(Ok(n)))`** 成功、**`Ok(Err(Elapsed))`** 清内核 **`fd_set`** **返** **`Ok(0)`**、**`Err(Interrupted)`** → **`AxError::Interrupted`（EINTR）**；删 **`Err(_) => Ok(0)`**。**`do_select` 超时** 参数 **`Option<TimeValue>`**（与 **`sys_*` `try_into_time_value`** 一致）。**`flush_output_fd_sets`** 仍仅 **`poll_result.is_ok()`**（**EINTR** **不写** **用户** **`fd_set`**）。**issue-364**。",
+  "files_changed": [
+    "kernel/src/syscall/io_mpx/select.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-364.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：阻塞 `select` 期间发信号对照 Linux `errno`/`SA_RESTART`。",
+    "expected_output_contains": "",
+    "pass_criteria": "信号中断返回 EINTR 或与 Linux 一致；超时与中断可区分。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "参照 `do_poll`：使用 `interruptible` + 超时 future，分层 `Ok`/`Elapsed`/`Interrupted`，避免 `Err(_) => Ok(0)` 吞掉 EINTR。",
+  "references": ["man 2 select", "man 2 pselect6", "kernel/src/syscall/io_mpx/select.rs", "kernel/src/syscall/io_mpx/poll.rs"]
+}

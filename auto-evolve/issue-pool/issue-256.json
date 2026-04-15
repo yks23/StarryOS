@@ -1,0 +1,27 @@
+{
+  "id": "issue-256",
+  "title": "getsockname/getpeername：`addr==NULL` 时仍走 `write_to_user`，与 Linux「不填地址即成功」不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_getsockname`/`sys_getpeername`：`addr.is_null()` 时仅校验 `local_addr`/`peer_addr` 后 `Ok(0)`，不读 `addrlen`、不写用户地址；非 NULL 时保持先 `addrlen` 再取地址再 `write_to_user`。",
+  "files_changed": ["kernel/src/syscall/net/name.rs"],
+  "description": "**`kernel/src/syscall/net/name.rs`** **`sys_getsockname`** / **`sys_getpeername`**（约 **11–38** 行）：在取得 **`local_addr`/`peer_addr`** 后**始终**调用 **`SocketAddrExt::write_to_user(addr, alen)`**（经 **`fill_addr`** 向用户 **`addr`** 写入）。\n\n**Linux `getsockname(2)` / `getpeername(2)`**：若 **`addr == NULL`**，内核**不**将地址复制到用户空间，**成功返回 0**（常用于仅探测地址长度或其它场景下省略缓冲区）；**不**对 **NULL** 目标做 **`copy_to_user`**。\n\n**当前**：**`addr` 为 NULL** 时仍执行 **`fill_addr` → `UserPtr` 可写切片`**，易映射为 **EFAULT**，与 Linux **成功返回** 分叉；**`recvfrom`** 路径（**`kernel/src/syscall/net/io.rs`** **`recv_on_socket`**）已对 **`!addr.is_null()`** 分支化，**name** 侧应对齐。\n\n**建议**：若 **`addr.is_null()`**，跳过 **`write_to_user`** 并 **`Ok(0)`**；**`addrlen`** 是否在 **`addr==NULL`** 时仍须校验/更新需对照 Linux **`move_addr_to_user`** 与具体架构 **`sys_*` 包装**（通常 **`uaddr==NULL`** 时不写 **`*addrlen`**）。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["getsockname", "getpeername"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/name.rs:11-38"],
+    "related_files": ["kernel/src/syscall/net/addr.rs:44-56", "kernel/src/syscall/net/io.rs:199-220"],
+    "key_insight": "name 未区分 addr NULL；recvfrom 已区分"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；用户态 `getsockname(fd, NULL, &len)` / `getpeername` 与 Linux 对照。",
+    "expected_output_contains": "",
+    "pass_criteria": "`addr==NULL` 时返回 0 且不 EFAULT（与 Linux）。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0）"
+  },
+  "suggested_fix": "`addr.is_null()` 时跳过 `write_to_user`；必要时对齐 `addrlen` 更新语义。",
+  "references": ["man 2 getsockname", "man 2 getpeername", "Linux net/socket.c"]
+}

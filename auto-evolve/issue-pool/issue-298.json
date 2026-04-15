@@ -1,0 +1,27 @@
+{
+  "id": "issue-298",
+  "title": "`pipe(2)` legacy 仅 `x86_64` 分发；`mod.rs` `pipe` 段仅有标题注释，缺少与 `io_mpx` `poll`/`select` 同级的 ABI 旁注",
+  "status": "resolved",
+  "created_at": "2026-04-13T14:05:00Z",
+  "severity": "low",
+  "fix_summary": "在 `mod.rs` 中 `Sysno::pipe` 的 `#[cfg(target_arch = \"x86_64\")]` 前增加与 poll/select 同风格注释：riscv 常无独立 `__NR_pipe`/`Sysno::pipe`，libc `pipe(2)` 经 `pipe2`/`__NR_pipe2` → `sys_pipe2`（flags=0，与上方 `Sysno::pipe2` 同处理器）。`executor-memory` 将 poll条末泛提的 pipe 句展开为 pipe/pipe2 路由说明（issue-298）。",
+  "files_changed": ["kernel/src/syscall/mod.rs", "auto-evolve/memory/executor-memory.md"],
+  "description": "**`kernel/src/syscall/mod.rs`** **`pipe`** **段** **（** **约** **289–292** **行** **）** **`Sysno::pipe2`** **全** **目标** **；** **`Sysno::pipe`** **置于** **`#[cfg(target_arch = \"x86_64\")]`** **并** **委托** **`sys_pipe2(..., 0)`** **。** **与** **`poll`/`select`** **同类** **：** **非** **x86** **ABI** **上** **`syscalls::Sysno`** **常** **无** **独立** **`pipe`** **（** **仅** **`pipe2`** **）** **；** **glibc/musl** **`pipe(2)`** **多** **实现** **为** **`pipe2`** **或** **等价** **路由** **。**\n\n**`executor-memory`** **在** **poll/ppoll** **条** **末** **泛** **提** **「** **`pipe(2)`** **legacy** **号** **同理** **仅** **x86** **有** **`Sysno::pipe`** **」** **；** **`mod.rs`** **该** **段** **仅** **有** **`// pipe`** **二字** **，** **无** **`io_mpx`** **段** **中** **`poll`/`select`** **那样** **的** **多** **行** **`__NR_*`/`Sysno`** **/****libc** **关系** **说明** **，** **与** **issue-295** **/** **issue-291** **注释** **风格** **不** **对称** **。**\n\n**建议**：在 **`Sysno::pipe`** **`#[cfg]`** **前** **补充** **简短** **ABI** **注释** **（** **或** **将** **executor** **中** **该** **句** **展开** **为** **`mod.rs`** **旁注** **）** **，** **明确** **`riscv64`** **等** **上** **`pipe(2)`** **用户态** **与** **`pipe2`** **的** **关系** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["pipe", "pipe2"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/mod.rs:289-292"],
+    "related_files": ["auto-evolve/memory/executor-memory.md"],
+    "key_insight": "pipe legacy 仅 x86_64；mod.rs 无 poll/select 风格 ABI 注释，executor 仅有泛提"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 `syscalls` riscv64 `Sysno` 与 musl `pipe`。",
+    "expected_output_contains": "",
+    "pass_criteria": "`mod.rs` 或 executor 对 legacy `pipe` 与 `pipe2` 的关系有与 `poll`/`select` 段同级说明，或经评审认为无需补充。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `Sysno::pipe` 的 `#[cfg(x86_64)]` 前增加与 `poll`/`select` 段风格一致的 ABI/路由说明注释。",
+  "references": ["man 2 pipe", "man 2 pipe2", "kernel/src/syscall/mod.rs", "issue-291", "issue-295"]
+}

@@ -1,0 +1,32 @@
+{
+  "id": "issue-366",
+  "title": "`rt_sigtimedwait(2)`：`sys_rt_sigtimedwait` 在 `poll_fn` 返回 `Poll::Ready(None)`（`check_signals` 为真但未从等待集合取出信号）时直接 `return Ok(0)`，将「被其它信号/处理路径打断」当作成功且返回信号号 0；Linux 在此类可中断路径上通常返回 `-1` 且 `errno=EINTR`，与 issue-338 所审的 `set`/`sigsetsize` 顺序问题不同",
+  "status": "resolved",
+  "created_at": "2026-04-12T21:05:00Z",
+  "resolved_at": "2026-04-14T00:00:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/signal.rs`** **`sys_rt_sigtimedwait`** **（** **约** **405–425** **行** **）** **：** **`poll_fn`** **先** **`dequeue_signal(&set)`** **，** **否则** **`else if check_signals(...)`** **`→`** **`Poll::Ready(None)`** **。** **随后** **`let Some(sig) = sig else { return Ok(0) }`** **。** **`Ok(0)`** **表示** **系统** **调用** **成功** **且** **返回** **值** **为** **0** **，** **等价** **于** **声称** **收到** **信号** **号** **0** **（** **与** **`siginfo` 写入** **无关** **）** **。** **Linux** **`rt_sigtimedwait`** **在** **被** **信号** **中断** **且** **未** **交付** **等待** **集合** **内** **信号** **时** **，** **典型** **为** **`-EINTR`** **（** **见** **`man 2 rt_sigtimedwait`** **）** **。** **Starry** **与** **上游** **`errno`/成功** **语义** **可能** **分歧** **。**\n\n**建议** **：** **在** **`None`** **分支** **恢复** **`old_blocked`** **并** **`return Err(AxError::Interrupted)`** **（** **或** **与** **`sigtimedwait`** **helper** **对齐** **的** **等价** **）** **；** **并** **核对** **`uctx.set_retval(-EINTR)`** **与** **实际** **返回** **路径** **是否** **一致** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["rt_sigtimedwait"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/signal.rs:371-432"],
+    "related_files": [],
+    "key_insight": "rt_sigtimedwait Ready(None) returns Ok(0) vs Linux EINTR"
+  },
+  "fix_summary": "sys_rt_sigtimedwait：block_on 后 sig 为 None（Poll::Ready(None)）路径先 signal.set_blocked(old_blocked)，再 return Err(AxError::Interrupted)，勿 Ok(0)。issue-366（与 issue-338 参数顺序无关）。",
+  "files_changed": [
+    "kernel/src/syscall/signal.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-366.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：阻塞 `rt_sigtimedwait` 时用非等待集信号打断对照 Linux `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "与 Linux 对中断/超时/成功交付的返回分层一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "`Poll::Ready(None)` 路径返回 `Err(Interrupted)` 或文档化为何返回 0。",
+  "references": ["man 2 rt_sigtimedwait", "kernel/signal.c", "kernel/src/syscall/signal.rs"]
+}

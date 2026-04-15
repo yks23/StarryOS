@@ -1,0 +1,27 @@
+{
+  "id": "issue-324",
+  "title": "`close_range(2)`：`sys_close_range` 先校验 `first`/`last` 区间（`first < 0` 或 `last < first` → `EINVAL`）再 `CloseRangeFlags::from_bits(flags)`，与 Linux `__sys_close_range` 先 `flags & ~CLOSE_RANGE_MASK` 再参数范围时，「非法 `flags`」与「非法 `fd` 区间」的 `EINVAL` 优先级可能不完全一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T20:05:00Z",
+  "severity": "low",
+  "fix_summary": "将 `CloseRangeFlags::from_bits(flags)` 提前到 `first`/`last` 区间检验之前，对齐 Linux `__sys_close_range` 先拒绝保留 flags 外位再校验区间；注释 issue-324 及与 issue-323/issue-317 同类。更新 `executor-memory` close_range 条、表格与最近更新；新增 `issue-324.json`。",
+  "files_changed": ["kernel/src/syscall/fs/fd_ops.rs", "auto-evolve/memory/executor-memory.md", "auto-evolve/issue-pool/issue-324.json"],
+  "description": "**`kernel/src/syscall/fs/fd_ops.rs`** **`sys_close_range`** **（** **约** **236–240** **行** **）** **顺序** **：** **`if first < 0 || last < first { return Err(InvalidInput) }`** **→** **`CloseRangeFlags::from_bits(flags)`** **。** **当** **调用** **同时** **存在** **未知** **`flags`** **位** **（** **非** **`CLOSE_RANGE_UNSHARE`/`CLOSE_RANGE_CLOEXEC`** **组合** **）** **与** **`last < first`** **等** **区间** **错误** **时** **，** **本** **实现** **固定** **先** **因** **区间** **返回** **`EINVAL`** **；** **Linux** **`close_range(2)`** **路径** **多** **先** **拒绝** **保留** **`flags`** **外** **的** **位** **。** **与** **issue-323** **`openat`** **/** **issue-317** **类** **「** **标量** **/** **掩码** **校验** **与** **其它** **参数** **顺序** **」** **同类** **。**\n\n**建议** **：** **对照** **Linux** **`__sys_close_range`** **，** **将** **`flags`** **掩码** **校验** **提前** **到** **`first`/`last`** **一致性** **检查** **之前** **，** **或** **注释** **说明** **有意** **先** **拒绝** **非法** **区间** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["close_range"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/fd_ops.rs:236-268"],
+    "related_files": [],
+    "key_insight": "close_range flags vs fd range EINVAL order"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：非法 flags + `last < first` 对照 Linux 返回顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游 `close_range` 错误优先级一致，或注释说明差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "先 `flags & !CLOSE_RANGE_MASK`（或等价 `from_bits`），再校验 `first`/`last`；与 Linux `__sys_close_range` 对齐。",
+  "references": ["man 2 close_range", "kernel/src/syscall/fs/fd_ops.rs", "issue-323", "issue-317"]
+}

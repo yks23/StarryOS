@@ -1,0 +1,27 @@
+{
+  "id": "issue-227",
+  "title": "shmat：无效 `shmid` 使用 `unwrap()`，应返回 EINVAL 而非内核 panic",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "high",
+  "fix_summary": "`sys_shmat`：`get_inner_by_shmid(shmid)` 由 **`unwrap()`** 改为 **`ok_or(AxError::InvalidInput)?`**，与 **`sys_shmctl`/`sys_shmdt`** 一致；无效或已回收 **`shmid`** 返回 **`EINVAL`**，不 panic（issue-227）。",
+  "files_changed": ["kernel/src/syscall/ipc/shm.rs"],
+  "description": "**`kernel/src/syscall/ipc/shm.rs`** **`sys_shmat`**（约 **435–447** 行）在解析 **`shmid`** 时：\n\n```rust\nlet shm_inner = {\n    let shm_manager = SHM_MANAGER.lock();\n    shm_manager.get_inner_by_shmid(shmid).unwrap()\n};\n```\n\n当 **`shmid`** 不存在或已被回收时，**`get_inner_by_shmid`** 返回 **`None`**，**`unwrap()`** 导致 **内核 panic**。\n\n**Linux `shmat(2)`**：无效标识符应返回 **`EINVAL`**（或 **`EIDRM`** 等），**不得**因用户传入错误 **`shmid`** 而 **panic**。\n\n同文件 **`sys_shmdt`**（约 **593–597** 行）已对 **`get_inner_by_shmid`** 使用 **`ok_or(AxError::InvalidInput)?`**，**`sys_shmat`** 应对齐。\n\n**建议**：将 **`unwrap()`** 改为 **`ok_or(AxError::InvalidInput)?`**（或与 **`sys_shmget`**/**`sys_shmctl`** 一致的 **`LinuxError`** 映射），并视需要区分 **已 `IPC_RMID` 且无附着** 等情形。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["shmat"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/ipc/shm.rs:444-447"],
+    "related_files": ["kernel/src/syscall/ipc/shm.rs:593-597"],
+    "key_insight": "`sys_shmat` 对无效 shmid unwrap；`sys_shmdt` 已 ok_or"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；用户态 `shmat(-1, …)` 或不存在之 `shmid`。",
+    "expected_output_contains": "",
+    "pass_criteria": "无效 `shmid` 返回 errno，不 panic。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos：通过（exit 0）"
+  },
+  "suggested_fix": "`get_inner_by_shmid(shmid).ok_or(AxError::InvalidInput)?`（或映射为 `LinuxError::EINVAL`）。",
+  "references": ["man 2 shmat", "Linux `ipc/shm.c` `do_shmat`"]
+}

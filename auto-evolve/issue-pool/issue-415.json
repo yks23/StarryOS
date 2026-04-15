@@ -1,0 +1,27 @@
+{
+  "id": "issue-415",
+  "title": "`clone3(2)`/`do_clone`：`exit_signal` 为 `u64` 却以 `as u8` 传入 `Signo::from_repr`，大号值折叠后与 Linux `valid_signal`/`EINVAL` 不一致",
+  "status": "resolved",
+  "created_at": "2026-04-13T00:15:00Z",
+  "severity": "low",
+  "description": "`kernel/src/syscall/task/clone.rs` **`CloneArgs::do_clone`**（**约** **158–161** **行** **）** **：**\n\n```rust\nlet exit_signal = if exit_signal > 0 {\n    Some(Signo::from_repr(exit_signal as u8).ok_or(AxError::InvalidInput)?)\n} else {\n    None\n};\n```\n\n此处 **`exit_signal`** **类型** **为** **`u64`** **（** **`clone3`** **`Clone3Args.exit_signal`** **经** **`TryFrom`** **传入** **；** **legacy** **`sys_clone`** **仅** **低** **8** **位** **子集** **正交** **）** **。** **`exit_signal as u8`** **按** **低** **8** **位** **截断** **：** **例如** **`257`** **→** **`1`** **，** **`from_repr(1)`** **可** **解析** **为** **SIGHUP** **，** **进程** **退出** **时** **向** **父** **进程** **投递** **的** **信号** **与** **调用方** **在** **`clone_args`** **中** **填写** **的** **编号** **不符** **。** **Linux** **`clone3`** **路径** **对** **`exit_signal`** **作** **有效** **信号** **校验** **（** **如** **`valid_signal`** **）** **，** **越界** **为** **`-EINVAL`** **，** **不会** **把** **256+k** **折叠** **成** **k** **。**\n\n**与** **issue-414** **`parse_signo`** **`signo as u8`** **同类** **截断** **，** **但** **入口** **为** **`clone`/`clone3`** **退出** **信号** **字段** **，** **非** **`rt_sigaction`/`kill`** **。**\n\n建议：**在** **`from_repr`** **前** **拒绝** **高位** **：** **`exit_signal != exit_signal as u8 as u64`** **`→`** **`InvalidInput`** **；** **并** **与** **Linux** **`_NSIG`** **对齐** **增加** **上界** **或** **复用** **统一** **`signo`** **校验** **辅助** **函数** **（** **可与** **issue-414** **一并** **收敛** **）** **。** **注释** **引用** **issue-415** **/** **issue-414** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["clone", "clone3"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/clone.rs:158-161"],
+    "related_files": ["kernel/src/syscall/task/clone3.rs:18-68", "kernel/src/syscall/signal.rs:155-157"],
+    "key_insight": "`clone3`的 `exit_signal` 为完整 `u64`；`as u8` 与 Linux `valid_signal` 语义不一致；legacy `clone` `flags&0xff` 子集仍应拒绝 `0` 与非法 `Signo`"
+  },
+  "fix_summary": "`do_clone`：`exit_signal != 0` 时经 **`parse_signo_u64`**（`u32::try_from` + **`parse_signo`**，issue-414）解析，禁止 `257→SIGHUP` 及 `>SIGRTMAX`；**`signal.rs`** 导出 **`parse_signo`**/**`parse_signo_u64`**；**`clone.rs`** 移除 **`as u8`**。issue-415。",
+  "files_changed": ["kernel/src/syscall/signal.rs", "kernel/src/syscall/task/clone.rs"],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：`clone3` 设 `exit_signal=257` 等对照 Linux `EINVAL` 与 Starry 行为。",
+    "expected_output_contains": "",
+    "pass_criteria": "凡 Linux 拒绝的越界 `exit_signal` 均返回 `EINVAL`；不得误映射为低位信号。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过"
+  },
+  "suggested_fix": "在 `do_clone` 中校验 `exit_signal`：先 `exit_signal ==0 || exit_signal == (exit_signal as u8 as u64)`，再 `Signo::from_repr` 或共享 `parse_signo`/扩展版；与 issue-414 统一更佳。",
+  "references": ["man 2 clone3", "kernel/fork.c", "kernel/src/syscall/task/clone.rs", "kernel/src/syscall/task/clone3.rs", "issue-238", "issue-376", "issue-414"]
+}

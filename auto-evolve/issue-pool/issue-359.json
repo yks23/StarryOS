@@ -1,0 +1,32 @@
+{
+  "id": "issue-359",
+  "title": "`eventfd(2)`：`EFD_SEMAPHORE` 模式下 `EventFd::read` 成功时向用户缓冲写入 `fetch_update` 返回的旧计数全值；Linux/man 7 eventfd 规定应写入 8 字节值 `1`（再减 1），与 glibc/用户态期望不一致",
+  "status": "resolved",
+  "created_at": "2026-04-13T23:50:00Z",
+  "resolved_at": "2026-04-13T00:00:00Z",
+  "severity": "medium",
+  "description": "**`kernel/src/file/event.rs`** **`EventFd::read`** **（** **约** **41–56** **行** **）** **：** **`fetch_update`** **成功** **后** **`dst.write(&count.to_ne_bytes())`** **，** **其中** **`count`** **为** **原子** **更新** **前** **的** **旧** **值** **。** **在** **`self.semaphore == true`** **（** **`syscall/fs/event.rs`** **`sys_eventfd2`** **`EFD_SEMAPHORE`** **）** **时** **，** **Linux** **`eventfd_read`** **/`man 7 eventfd`** **规定** **读** **成功** **返回** **的** **8** **字节** **为** **`1`** **，** **同时** **计数** **减** **`1`** **。** **Starry** **写入** **旧** **计数** **（** **可能** **`>1`** **）** **，** **破坏** **与** **上游** **及** **依赖** **「** **信号量** **读** **恒** **为** **`1`** **」** **的** **程序** **兼容** **。**\n\n**建议** **：** **`semaphore`** **分支** **成功** **路径** **写** **`1u64.to_ne_bytes()`** **（** **或** **等价** **）** **；** **非** **信号量** **模式** **保持** **写** **旧** **全** **值** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["eventfd2"],
+  "source_context": {
+    "primary_files": ["kernel/src/file/event.rs:41-56"],
+    "related_files": ["kernel/src/syscall/fs/event.rs:20-27"],
+    "key_insight": "EFD_SEMAPHORE read returns 1 not old counter (Linux)"
+  },
+  "fix_summary": "`EventFd::read`：`fetch_update` 成功后，**`EFD_SEMAPHORE`** **时** **向** **用户** **写** **`8` 字节 `1`**；**非** **信号量** **模式** **仍** **写** **更新** **前** **旧** **计** **数**（**`man 7 eventfd`** / `eventfd_read`）。",
+  "files_changed": [
+    "kernel/src/file/event.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-359.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：用户态 `eventfd(2, EFD_SEMAPHORE)` 写 5 再读，对照 Linux 输出 8 字节 1。",
+    "expected_output_contains": "",
+    "pass_criteria": "信号量模式读返回值 8 字节为 1 或与 Linux 文档化一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "`semaphore` 为真时在 `Ok` 分支写 `1u64` 而非 `count`（旧值）。",
+  "references": ["man 7 eventfd", "kernel/fs/eventfd.c", "kernel/src/file/event.rs"]
+}

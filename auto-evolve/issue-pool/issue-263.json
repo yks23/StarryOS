@@ -1,0 +1,27 @@
+{
+  "id": "issue-263",
+  "title": "clock_nanosleep：仅接受 `CLOCK_REALTIME`/`CLOCK_MONOTONIC`，Linux 还支持 `CLOCK_BOOTTIME`/`CLOCK_TAI`/CPU 时钟等",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_clock_nanosleep` 扩展 `clock_id`：`CLOCK_BOOTTIME`、`CLOCK_MONOTONIC_RAW`、`CLOCK_MONOTONIC_COARSE` 与 `CLOCK_MONOTONIC` 同用 `axhal::time::monotonic_time` + `sleep_impl`，与 `sys_clock_gettime` 及 issue-250 HAL 单调时间线一致；`CLOCK_TAI`、CPU 时钟等仍 `EINVAL`。",
+  "files_changed": ["kernel/src/syscall/task/schedule.rs"],
+  "description": "**`kernel/src/syscall/task/schedule.rs`** **`sys_clock_nanosleep`**（约 **125–174** 行）在 **`match clock_id as u32`** 中仅处理 **`CLOCK_REALTIME`** 与 **`CLOCK_MONOTONIC`**；其余 **`clock_id`** 记录 **`warn!`** 并返回 **`AxError::InvalidInput`**（**EINVAL**）。\n\n**Linux `clock_nanosleep(2)`**（及内核 **`hrtimer_nanosleep`** 路径）：除实时/单调时钟外，还支持 **`CLOCK_BOOTTIME`**、**`CLOCK_TAI`**（视内核版本）、**`CLOCK_PROCESS_CPUTIME_ID`**/**`CLOCK_THREAD_CPUTIME_ID`** 及 **`pthread_getcpuclockid`** 等可休眠 CPU 时钟（见手册 **NOTES**/内核 **`common_nsleep`** 允许的时钟集合）。在 **glibc** 程序中，对 **`CLOCK_BOOTTIME`** 等调用 **`clock_nanosleep`** 在 **Linux** 上通常 **成功**，在 **Starry** 上为 **EINVAL**。\n\n**本仓库对照**：**`sys_clock_gettime`** 已支持较宽的 **`clock_id`** 集合（含 **`CLOCK_BOOTTIME`**、粗粒度时钟、CPU 时钟等，见 **`kernel/src/syscall/time.rs`**），与 **`clock_nanosleep`** 可接受集合 **不一致**，跨 API 移植用户态定时逻辑时易出现 **行为分叉**。\n\n**建议**：按优先级（1）将 **`CLOCK_BOOTTIME`** 映射到与 **`clock_gettime`** 相同的 HAL 读数并复用 **`sleep_impl(monotonic_time, …)`**（与 issue-250 文档「无挂起时间」一致时与 **`CLOCK_MONOTONIC`** 等价）；（2）或显式在 **`starry` 手册/兼容性说明** 中列出 **不支持的 `clock_id`**，避免 silent 与 Linux 差异。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["clock_nanosleep"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/schedule.rs:125-174"],
+    "related_files": ["kernel/src/syscall/time.rs:30-106", "kernel/src/syscall/mod.rs"],
+    "key_insight": "clock_nanosleep 支持的 clock 集合远窄于 Linux 与本地 clock_gettime"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；用户态对 `clock_nanosleep(CLOCK_BOOTTIME, …)` 与 Linux 对照。",
+    "expected_output_contains": "",
+    "pass_criteria": "与 Linux 支持的 clock 集合对齐，或文档化不支持列表。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有 dead_code/clippy 警告）"
+  },
+  "suggested_fix": "扩展 `match`：至少 `CLOCK_BOOTTIME` → 与 `clock_gettime` 同源时间线 + 现有 sleep 实现；其余时钟按 Linux 能力分阶段支持或 EINVAL+文档。",
+  "references": ["man 2 clock_nanosleep", "Linux kernel posix_cpu_nsleep", "kernel/src/syscall/task/schedule.rs"]
+}

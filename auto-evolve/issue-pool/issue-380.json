@@ -1,0 +1,27 @@
+{
+  "id": "issue-380",
+  "title": "`sched_setscheduler(2)`：`param == NULL` 时 `sys_sched_setscheduler` 返回 `InvalidInput`（EINVAL），与 Linux `copy_from_user(sched_param)` 路径的 `EFAULT` 可能不一致",
+  "status": "resolved",
+  "created_at": "2026-04-14T18:00:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/task/schedule.rs`** **`sys_sched_setscheduler`** **（** **约** **244–256** **行** **）** **：** **`param.cast::<SchedParam>().nullable()`** **为** **None** **（** **用户** **`param` 为** **NULL** **）** **时** **直接** **`return Err(AxError::InvalidInput)`** **，** **注释** **写** **「** **NULL param → EINVAL above** **」** **。** **Linux** **在** **从** **用户** **空间** **读取** **`struct sched_param`** **时** **，** **无效** **/`NULL` 指针** **通常** **对应** **`copy_from_user`** **失败** **→** **`EFAULT`** **，** **与** **单纯** **`EINVAL`** **（** **非法** **参数** **值** **）** **分层** **可能** **不同** **。** **与** **issue-306** **`sched_getaffinity`** **`user_mask`** **NULL** **、** **issue-336** **`sched_setaffinity`** **`cpusetsize`** **顺序** **主题** **可** **对照** **。**\n\n**建议** **：** **对照** **内核** **`sched_setscheduler`** **/`copy_from_user`** **顺序** **；** **若** **上游** **对** **`NULL`** **`param`** **为** **`EFAULT`** **：** **`param.is_null()`** **`→`** **`BadAddress`** **，** **并** **与** **`sched_resolve_task`** **/`ESRCH`** **的** **相对** **顺序** **与** **Linux** **一致** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["sched_setscheduler"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/schedule.rs:244-256"],
+    "related_files": [],
+    "key_insight": "`sched_resolve_task`（ESRCH）先于 NULL `param` → `BadAddress`（EFAULT），对齐 Linux `copy_from_user` 路径"
+  },
+  "fix_summary": "`sys_sched_setscheduler`：先 `sched_resolve_task`/`try_as_thread`，再对 `param.is_null()` 返回 `BadAddress`（EFAULT），替代原先先于任务解析的 `InvalidInput`（EINVAL）。",
+  "files_changed": ["kernel/src/syscall/task/schedule.rs"],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：`sched_setscheduler(pid, policy, NULL)` 对照 Linux `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "与 Linux 在 NULL `param` 下的 errno 分层一致，或文档化选择 EINVAL。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（仅有既有 dead_code/clippy 警告）"
+  },
+  "suggested_fix": "若对齐 Linux：对 `param == NULL` 返回 `BadAddress`（EFAULT），并核对与 `sched_resolve_task` 的顺序。",
+  "references": ["man 2 sched_setscheduler", "kernel/src/syscall/task/schedule.rs"]
+}

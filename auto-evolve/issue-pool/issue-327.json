@@ -1,0 +1,27 @@
+{
+  "id": "issue-327",
+  "title": "`prlimit64(2)`：`sys_prlimit64` 在 `get_process_data(pid)` 之前校验 `resource >= RLIM_NLIMITS` → `EINVAL`，与 Linux `do_prlimit` 先解析目标 `task`/`pid`（`ESRCH`/`EPERM` 等）再校验 `resource` 时，「无效 `resource`」与「不存在/无权限 `pid`」的 `EINVAL`/`ESRCH`/`EPERM` 优先级可能不完全一致",
+  "status": "resolved",
+  "created_at": "2026-04-13T12:05:00Z",
+  "severity": "low",
+  "fix_summary": "将 `get_process_data(pid)?` 与 `may_peer_process_by_cred` 提前到 `resource >= RLIM_NLIMITS` 之前，使 `NoSuchProcess`/`EPERM` 先于越界 resource 的 `EINVAL`；注释 issue-327。更新 `executor-memory` prlimit64 条、表格与最近更新；新增 `issue-327.json`。",
+  "files_changed": ["kernel/src/syscall/resources.rs", "auto-evolve/memory/executor-memory.md", "auto-evolve/issue-pool/issue-327.json"],
+  "description": "**`kernel/src/syscall/resources.rs`** **`sys_prlimit64`** **（** **约** **22–36** **行** **）** **顺序** **：** **`resource >= RLIM_NLIMITS`** **→** **`InvalidInput`** **，** **再** **`get_process_data(pid)?`** **，** **再** **`may_peer_process_by_cred`** **。** **当** **调用** **同时** **存在** **越界** **`resource`** **与** **无效** **`pid`** **（** **或** **跨** **凭证** **访问** **）** **时** **，** **本** **实现** **固定** **先** **因** **`resource`** **返回** **`EINVAL`** **；** **Linux** **常见** **`do_prlimit`** **路径** **先** **`find_task_by_vpid`/`security_task_getrlimit`** **等** **，** **可能** **先** **`ESRCH`** **/** **`EPERM`** **。** **issue-273** **曾** **覆盖** **跨** **`pid`** **权限** **语义** **；** **未** **单独** **约定** **相对** **`resource`** **的** **顺序** **。**\n\n**建议** **：** **对照** **Linux** **`kernel/sys.c`** **`do_prlimit`** **，** **将** **`get_process_data`** **/`pid`** **解析** **（** **及** **必要** **凭证** **门控** **）** **提前** **到** **`resource`** **边界** **检查** **之前** **，** **或** **注释** **说明** **有意** **先** **拒绝** **非法** **`resource`** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["prlimit64"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/resources.rs:22-72"],
+    "related_files": [],
+    "key_insight": "prlimit64 resource vs pid lookup order"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：越界 resource + 无效 pid 对照 Linux 返回顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游 `prlimit64` 错误优先级一致，或注释说明差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "先 `get_process_data(pid)?`（或等价 task 查找），再 `resource` 边界与 `new_limit` 校验；与 Linux `do_prlimit` 对齐。",
+  "references": ["man 2 prlimit64", "kernel/src/syscall/resources.rs", "issue-273", "issue-141"]
+}

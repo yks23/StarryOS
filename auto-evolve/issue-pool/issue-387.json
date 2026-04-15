@@ -1,0 +1,27 @@
+{
+  "id": "issue-387",
+  "title": "`open_tree(2)`：`sys_open_tree` 忽略 `flags`，未知 `OPEN_TREE_*` 位未在 `get_as_str` 前拒绝为 `EINVAL`",
+  "status": "resolved",
+  "created_at": "2026-04-13T12:35:00Z",
+  "severity": "low",
+  "description": "`kernel/src/syscall/fs/mount.rs` `sys_open_tree`（约 151–157 行）：形参 `_flags: u32` 未使用。Linux `open_tree(2)` 仅允许定义的 `OPEN_TREE_*` 掩码（如 `OPEN_TREE_CLONE`、`OPEN_TREE_CLOEXEC`、`OPEN_TREE_ITERATIVE` 等，随内核版本扩展）；**保留位** 应 **`EINVAL`**。\n\n当前路径：`dfd != AT_FDCWD` 时 **`from_fd`**（**`EBADF`**）→ **`filename.get_as_str()`** → 桩 **`Unsupported`**。**从未** 因非法 **`flags`** 失败，与同文件 **`sys_fsopen`**（issue-386 **verified**）及 **`openat`** **flags-first** 主题不一致。\n\n建议：定义与内核 `uapi/linux/mount.h` 对齐的常量及 **`OPEN_TREE_KNOWN_FLAGS`**（或按 Starry 子集收紧）；在 **`get_as_str`** **之前**（在 **`from_fd`** **之后**，以保持 **`EBADF`** 优先）对 **`flags & !KNOWN != 0`** → **`InvalidInput`**。若仅实现桩且暂不暴露迭代挂载等语义，也应在注释中说明掩码与 Linux 的对应关系。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["open_tree"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/mount.rs:150-158"],
+    "related_files": ["kernel/src/syscall/fs/mount.rs:119-137"],
+    "key_insight": "EBADF（`from_fd`）先于非法 `OPEN_TREE_*`；非法掩码先于路径 `EFAULT`"
+  },
+  "fix_summary": "`sys_open_tree`：`OPEN_TREE_CLONE`/`ITERATIVE` + `O_CLOEXEC`（`OPEN_TREE_CLOEXEC`）组成 `OPEN_TREE_KNOWN_FLAGS`；在 `from_fd` 之后、`get_as_str` 之前对未知位返回 `InvalidInput`（issue-387）。",
+  "files_changed": ["kernel/src/syscall/fs/mount.rs"],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：非法 `OPEN_TREE_*` 位 + 合法路径名对照 Linux `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "未知 `flags` 返回 EINVAL（`InvalidInput`），且 EBADF 仍优先于非法 flags（当 `dfd` 无效时）。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（仓库既有警告）"
+  },
+  "suggested_fix": "校验 `OPEN_TREE_*` 掩码后再读 `filename`；与 issue-386 `fsopen` 模式对称（保留 `from_fd` 先于 flags 以维持 EBADF 分层）。",
+  "references": ["man 2 open_tree", "kernel/src/syscall/fs/mount.rs", "issue-386", "issue-323"]
+}

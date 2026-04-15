@@ -1,0 +1,27 @@
+{
+  "id": "issue-269",
+  "title": "sendto/sendmsg：`SENDMSG_FLAGS_MASK` 仍含 `MSG_ERRQUEUE`，Linux `send(2)` 不接受该位（与 recv 错误队列语义混用）",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "从 `SENDMSG_FLAGS_MASK` 移除 `MSG_ERRQUEUE`（与 `recvmsg` 错误队列语义同源，Linux `send` 路径 EINVAL）；注释与 issue-266 并列。",
+  "files_changed": ["kernel/src/syscall/net/io.rs"],
+  "description": "**`kernel/src/syscall/net/io.rs`** 在 **issue-266** 已从 **`SENDMSG_FLAGS_MASK`** 去掉 **`MSG_WAITALL`/`MSG_TRUNC`**，但 **掩码仍含** **`MSG_ERRQUEUE`**（约 **41** 行，与 **`RECVMSG_FLAGS_MASK`** 中的 **错误队列** 语义同源）。\n\n**Linux `send(2)`**：**`MSG_ERRQUEUE`** 用于从 **socket 错误队列** **收取** **带外** **控制信息**（与 **`recvmsg`**/**`recvmmsg`** 配合），**不是** **普通 `send`** 的合法 **`flags`**；用户态对 **`send`/`sendto`/`sendmsg`** 传入该位时，内核 **`sock_sendmsg`** 路径通常返回 **`-EINVAL`**。\n\n**当前**：**`send(fd, buf, n, MSG_ERRQUEUE)`** 在 **Starry** 仍通过 **`flags & !SENDMSG_FLAGS_MASK`** 校验并进入 **`SendFlags::from_bits_truncate`**，**`axnet`** 对 **`ERRQUEUE` 位** 未必 **显式拒绝**，行为可能与 **Linux** **`EINVAL`** **分叉**。\n\n**建议**：从 **`SENDMSG_FLAGS_MASK`** **移除** **`MSG_ERRQUEUE`**（及按需复核 **`MSG_PROBE`/`MSG_FIN`/`MSG_SYN`/`MSG_RST`** 等 **是否** 应对 **`send`** **开放**）；或对 **`flags & MSG_ERRQUEUE`** **单独** **`InvalidInput`**。\n\n**关联**：**issue-266**（**`MSG_WAITALL`/`MSG_TRUNC`**）；本 issue 覆盖 **掩码内** **剩余** **recv/内核专用** **语义位**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["sendto", "sendmsg"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/io.rs:30-44"],
+    "related_files": ["kernel/src/syscall/net/io.rs:15-28"],
+    "key_insight": "send 掩码含 MSG_ERRQUEUE，Linux send EINVAL"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；`send(sock, buf, n, MSG_ERRQUEUE)` 与 Linux 对照。",
+    "expected_output_contains": "",
+    "pass_criteria": "send 拒绝 MSG_ERRQUEUE 或与 Linux 一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "从 SENDMSG_FLAGS_MASK 移除 MSG_ERRQUEUE，或对 ERRQUEUE 单独 EINVAL。",
+  "references": ["man 2 send", "man 7 socket", "kernel/src/syscall/net/io.rs"]
+}

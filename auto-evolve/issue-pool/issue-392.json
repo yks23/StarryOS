@@ -1,0 +1,27 @@
+{
+  "id": "issue-392",
+  "title": "`chdir(2)`：空路径 `path==\"\"` 未在 `resolve` 前拒绝为 `EINVAL`",
+  "status": "resolved",
+  "created_at": "2026-04-18T00:05:00Z",
+  "severity": "low",
+  "description": "`kernel/src/syscall/fs/ctl.rs` **`sys_chdir`**（约 66–73 行）：**`vm_load_string(path)?`** 后直接 **`fs.resolve(path)`** 与 **`set_current_dir`**，**无** **`path.is_empty()`** 校验。\n\n与同文件已修复的 **`sys_chroot`**（issue-391 **verified**）对称：Linux 对 **空路径名** 的 **`chdir(2)`** 通常返回 **`EINVAL`**（在依赖 VFS 的 **`ENOENT`** 等之前），避免 **`resolve(\"\")`** 的**实现定义**行为导致 **cwd** 与 Linux 不一致。\n\n建议：**`vm_load_string`** **之后**、**`resolve`** **之前** **`path.is_empty()`** **`→`** **`InvalidInput`**，并加注释引用 issue-392 / issue-391。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["chdir"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/ctl.rs:66-74"],
+    "related_files": ["kernel/src/syscall/fs/ctl.rs:89-105"],
+    "key_insight": "与 `sys_chroot` 空路径早退一致；`resolve` 前 `is_empty()` → `InvalidInput`"
+  },
+  "fix_summary": "`sys_chdir`：`vm_load_string` 后、`resolve` 前对 `path.is_empty()` 返回 `InvalidInput`（与 `sys_chroot` issue-391 对称，issue-392）。",
+  "files_changed": ["kernel/src/syscall/fs/ctl.rs"],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：`chdir(\"\")` 对照 Linux `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "空路径返回 EINVAL（`InvalidInput`）。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（仓库既有警告）"
+  },
+  "suggested_fix": "复制 `sys_chroot` 的 `path.is_empty()` 早退模式。",
+  "references": ["man 2 chdir", "kernel/src/syscall/fs/ctl.rs", "issue-391", "issue-297"]
+}

@@ -1,0 +1,31 @@
+{
+  "id": "issue-193",
+  "title": "umask：`sys_umask` 未按 Linux 将 mask 限制为 `S_IRWXUGO`（0o777），高位置位影响 `open`/`mkdir` 有效 mode",
+  "status": "resolved",
+  "created_at": "2026-04-14T12:00:00Z",
+  "severity": "medium",
+  "fix_summary": "在 **`ProcessData`** 增加 **`UMASK_PERM_MASK`（`0o777`，Linux `S_IRWXUGO`）**：**`replace_umask`** 以 **`mask & 0o777`** 写入原子变量，并返回 **`old & 0o777`**；**`set_umask`**（**`clone`** 等）同样存储截断值。**`sys_umask`** 仍调用 **`replace_umask`**，**`open`/`mkdir`** 的 **`mode & !umask()`** 与 Linux 一致。**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过。",
+  "files_changed": [
+    "kernel/src/task/mod.rs",
+    "auto-evolve/issue-pool/issue-193.json",
+    "auto-evolve/memory/executor-memory.md"
+  ],
+  "description": "**`kernel/src/syscall/task/ctl.rs`** **`sys_umask(mask: u32)`** 将 **`mask`** 原样 **`swap`** 进 **`ProcessData::umask`**（**`task/mod.rs`**）。**Linux `umask(2)`**（**`SYSCALL_DEFINE1(umask, ...)`**）通常将 **`mask & S_IRWXUGO`（0o777）** 存入 **`fs->umask`**，返回值亦为**旧掩码经同样截断**后的值；**高位及其他非权限位不参与**文件创建掩码。**Starry** 在 **`sys_openat`**、**`sys_mkdirat`** 等路径使用 **`mode & !proc_data.umask()`**（如 **`fd_ops.rs:123`**、**`fs/ctl.rs:106`**）。若用户态传入 **`umask(0xFFFFFFFF)`** 等，**`!umask`** 与 **Linux** 下 **`!(umask & 0o777)`** 不同，**`mode & !umask`** 得到的有效权限与 **Linux** 偏离，属可观测的 **syscall 语义差异**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["umask", "openat", "mkdirat"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/ctl.rs:90-93", "kernel/src/task/mod.rs:553-565"],
+    "related_files": ["kernel/src/syscall/fs/fd_ops.rs:118-124", "kernel/src/syscall/fs/ctl.rs:98-107"],
+    "key_insight": "全32 位 umask 参与 `mode & !umask`；Linux 仅 0o777"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "在 **Starry** 与 **Linux** 上：**`umask(0xFFFF)`** 或 **`0xFFFFFFFF`** 后 **`open(..., O_CREAT, 0666)`**，比较 **`fstat` 得到的 mode**；并比较 **`umask()`返回值**是否仅含 **`0o777`** 有效位。",
+    "expected_output_contains": "",
+    "pass_criteria": "**`replace_umask`/`sys_umask`** 对 **`mask` 与返回值**按 **`0o777`**（或 **`S_IRWXUGO`**）截断，与 **Linux** 一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（2026-04-12）"
+  },
+  "suggested_fix": "在 **`sys_umask`**（或 **`replace_umask`**）内使用 **`mask & 0o777`** 作为存储与返回的旧值来源；必要时核对 **`__kernel_mode_t`** 与 **musl/glibc** 对 **unsigned** 的扩展行为。",
+  "references": ["man 2 umask", "Linux fs/open.c umask syscall"]
+}

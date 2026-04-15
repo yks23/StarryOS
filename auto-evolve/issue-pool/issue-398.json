@@ -1,0 +1,27 @@
+{
+  "id": "issue-398",
+  "title": "`link(2)`/`linkat(2)`：空路径 `new_path==\"\"` 未在 `resolve_nonexistent` 前拒绝为 `EINVAL`",
+  "status": "resolved",
+  "created_at": "2026-04-12T22:05:00Z",
+  "severity": "low",
+  "description": "`kernel/src/syscall/fs/ctl.rs` **`sys_linkat`**（约 255–307 行）：在 **`flags`** 校验与 **`old_path`**（**可** **`NULL`+`AT_EMPTY_PATH`**）解析后 **`vm_load_string(new_path)?`**，继而 **`Directory::from_fd(new_dirfd)`** / **`resolve_at`** / **`dirfd_for_path_resolution(new_dirfd, new_path)`** / **`resolve_nonexistent`**，**无** **`new_path.is_empty()`** **`→`** **`InvalidInput`** 早退。\n\nLinux **`linkat(2)`** 对 **空新路径名** 通常 **`EINVAL`**，与同文件 **`symlinkat`**/**`renameat2`** 等 **issue-397** **verified**/**issue-396** **verified** 空路径主题一致。**`old_path`** 在 **`AT_EMPTY_PATH`** 下可为 **`None`**，**勿** 与 **`new_path`** 混淆；**非** **`AT_EMPTY_PATH`** **且** **`old_path`** 为 **`Some(\"\")`** 的语义可另审，本 issue 聚焦 **`new_path`**。\n\n建议：**`vm_load_string(new_path)?`** **之后**、**`debug!`** **之前** **`new_path.is_empty()`** **`→`** **`InvalidInput`**，注释引用 issue-398 及 **issue-397**/**issue-393**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["link", "linkat"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/ctl.rs:255-307"],
+    "related_files": ["kernel/src/syscall/fs/ctl.rs:309-312"],
+    "key_insight": "`vm_load_string(new_path)` 后、`resolve_nonexistent` 前 `new_path.is_empty()` → `InvalidInput`（EINVAL）"
+  },
+  "fix_summary": "`sys_linkat`：在 `vm_load_string(new_path)` 之后、`Directory::from_fd(new_dirfd)` 与 `debug!` 之前对 `new_path.is_empty()` 返回 `InvalidInput`，对齐 Linux `linkat(2)` 空新路径 EINVAL，及 issue-397/393 空路径主题。",
+  "files_changed": ["kernel/src/syscall/fs/ctl.rs"],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：`linkat(AT_FDCWD, \"a\", AT_FDCWD, \"\", 0)` 对照 Linux `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "`new_path` 为空时返回 EINVAL（`InvalidInput`）。",
+    "last_result": "通过：`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`（exit 0；既有 dead_code/clippy 警告未因本改动引入）"
+  },
+  "suggested_fix": "在 `sys_linkat` 中于 `debug!` 前增加 `if new_path.is_empty() { return Err(InvalidInput); }`，对齐 `sys_symlinkat`（issue-397）。",
+  "references": ["man 2 linkat", "kernel/src/syscall/fs/ctl.rs", "issue-397", "issue-396", "issue-393", "issue-297"]
+}

@@ -1,0 +1,32 @@
+{
+  "id": "issue-369",
+  "title": "`msgrcv(2)` `MSG_COPY`：`get_message_by_index`/`get_total_message_count` 按 `BTreeMap` 的 `mtype` 键序串联各类型 `Vec` 作为全局下标，与 Linux 单队列 `m_list` FIFO 顺序下第 `n` 条消息的语义不对齐",
+  "status": "resolved",
+  "created_at": "2026-04-12T22:05:00Z",
+  "resolved_at": "2026-04-12T23:30:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/ipc/msg.rs`** **`MessageQueue::get_message_by_index`** **（** **约** **225–237** **行** **）** **：** **遍历** **`self.messages.values()`** **，** **即** **按** **消息** **类型** **`mtype`** **升序** **依次** **拼接** **各** **`Vec<Message>`** **。** **Linux** **`struct msg_queue`** **中** **所有** **`msg_msg`** **挂在** **单** **链表** **`q_messages`** **上** **，** **`MSG_COPY`** **的** **下标** **`msgtyp`** **表示** **该** **FIFO** **队列** **中** **第** **`n`** **条** **消息** **（** **与** **`mtype`** **键** **序** **无关** **）** **。** **当** **队列** **中** **存在** **多种** **`mtype`** **且** **到达** **顺序** **与** **类型** **排序** **不一致** **时** **，** **同一** **全局** **索引** **`n`** **在** **Starry** **与** **Linux** **可能** **指向** **不同** **物理** **消息** **，** **`MSG_COPY`** **/`get_total_message_count`** **与** **对照** **测试** **会** **分歧** **。**\n\n**建议** **：** **维护** **与** **Linux** **`q_messages`** **一致** **的** **全局** **FIFO** **顺序** **（** **如** **额外** **`VecDeque`** **或** **侵入** **式** **链表** **）** **；** **`get_message_by_index`/`get_total_message_count`** **基于** **该** **顺序** **。** **顺带** **核对** **`MSG_COPY`** **下** **`msgtyp < 0`** **时** **与** **Linux** **`EINVAL`/`ENOMSG`** **的** ** errno** **分层** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["msgrcv"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/ipc/msg.rs:220-237", "kernel/src/syscall/ipc/msg.rs:623-636"],
+    "related_files": [],
+    "key_insight": "MSG_COPY index uses mtype-sorted iteration vs Linux FIFO q_messages"
+  },
+  "fix_summary": "**`MessageQueue`**：新增 **`fifo_order: VecDeque<(mtype, vec_index)>`**，**`enqueue_message`** **入队** **时** **`push_back`**；**`remove_message_by_type_and_index`** **删除** **后** **`update_fifo_after_remove`**（**移除** **对应** **FIFO** **项** **并** **左移** **同** **`mtype`** **更大** **下标**）。**`get_total_message_count`/`get_message_by_index`** **基于** **FIFO**。**`MSG_COPY`**：**`msgtyp < 0`** **→** **`EINVAL`**（**对齐** **Linux**）。",
+  "files_changed": [
+    "kernel/src/syscall/ipc/msg.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-369.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：同一队列先 `msgsnd` 较大 `mtype` 再 `msgsnd` 较小 `mtype`，`msgrcv(..., MSG_COPY|IPC_NOWAIT)` 取 `n=0`/`1` 对照 Linux 与 Starry 是否指向同一条。",
+    "expected_output_contains": "",
+    "pass_criteria": "`MSG_COPY` 全局下标与 Linux FIFO 顺序一致，或文档化偏差。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "为队列内全部消息维护单一 FIFO 顺序；`get_message_by_index(n)` 取该顺序第 `n` 条；`get_total_message_count` 与之一致。",
+  "references": ["man 2 msgrcv", "kernel/ipc/msg.c", "kernel/src/syscall/ipc/msg.rs"]
+}

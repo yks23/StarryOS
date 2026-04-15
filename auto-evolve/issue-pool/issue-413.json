@@ -1,0 +1,31 @@
+{
+  "id": "issue-413",
+  "title": "`clone(2)`/`clone3(2)` `CLONE_CHILD_SETTID`：子线程 TID 写入推迟到首次用户态循环且 `vm_write` 失败被 `.ok()` 吞掉，与 Linux `clone` 返回前 `put_user`/`-EFAULT` 语义不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T22:35:00Z",
+  "severity": "low",
+  "description": "`kernel/src/task/user.rs` **`new_user_task`** **闭包** **（** **约** **18–20** **行** **）** **：** **带** **`CLONE_CHILD_SETTID`** **时** **`set_child_tid != 0`** **，** **在** **子** **任务** **第一次** **被** **调度** **进** **用户** **循环** **时** **才** **执行** **`(set_child_tid as *mut Pid).nullable()`** **`→`** **`tid.vm_write(curr.id().as_u64() as Pid).ok()`** **。**\n\n**问题** **：** **（** **1** **）** **Linux** **在** **`clone`** **系统** **调用** **返回** **父** **进程** **之前** **即** **向** **`child_tidptr`** **完成** **`put_user`** **（** **失败** **`→`** **`-EFAULT`** **，** **整个** **`clone`** **失败** **，** **子** **进程** **不可** **见** **）** **；** **Starry** **则** **父** **侧** **`clone`/`clone3`** **已** **`Ok(tid)`** **返回** **后** **方** **尝试** **写入** **，** **失败** **亦** **被** **忽略** **。** **（** **2** **）** **其他** **CPU** **或** **父** **线程** **可能** **在** **`child_tidptr`** **被** **写入** **前** **观测** **到** **已** **运行** **的** **子** **线程** **，** **与** **Linux** **可见性** **顺序** **不同** **。**\n\n**对照** **：** **同** **文件** **路径** **下** **`syscall/task/clone.rs`** **`PARENT_SETTID`** **`/`** **`CLONE_PIDFD`** **在** **`spawn`** **前** **对** **用户** **指针** **`vm_write`** **且** **错误** **传播** **（** **约** **184–278** **行** **）** **。** **`clone3`** **经** **`CloneArgs::do_clone`** **复用** **该** **路径** **（** **`clone3.rs`** **）** **。**\n\n建议：**在** **`do_clone`** **成功** **创建** **`new_task`** **且** **已知** **`tid`** **后** **、** **`spawn_task`** **之前** **或** **紧接** **之后** **（** **内核** **仍** **持** **有** **正确** **地址** **空间** **上下文** **时** **）** **，** **对** **`CHILD_SETTID`** **执行** **与** **`PARENT_SETTID`** **同类** **的** **`vm_write`** **并** **传播** **`EFAULT`** **`/`** **`BadAddress`** **；** **或** **在** **子** **`aspace`** **下** **探测** **`/`** **写入** **；** **删除** **`user.rs`** **中** **`.ok()`** **吞** **错** **。** **注释** **引用** **issue-413** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["clone", "clone3"],
+  "source_context": {
+    "primary_files": ["kernel/src/task/user.rs:13-20"],
+    "related_files": ["kernel/src/syscall/task/clone.rs:172-187", "kernel/src/syscall/task/clone3.rs"],
+    "key_insight": "`CHILD_SETTID` 写 TID 须在 `clone` 成功返回前完成且失败应使 `clone` 失败；`PARENT_SETTID`/`pidfd` 已同步 `vm_write`"
+  },
+  "fix_summary": "`CLONE_CHILD_SETTID`：在 `do_clone` 内、`spawn_task` 之前，经子任务 `new_proc_data.aspace.write` 写入 TID，错误向上传播（对齐 Linux `put_user`/EFAULT）；移除 `new_user_task` 首次用户循环中的延迟 `.ok()` 写入。",
+  "files_changed": [
+    "kernel/src/syscall/task/clone.rs",
+    "kernel/src/task/user.rs",
+    "kernel/src/entry.rs"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：`clone(..., CLONE_CHILD_SETTID, invalid_tidptr)` 对照 Linux `-EFAULT` 与 Starry 父进程返回值。",
+    "expected_output_contains": "",
+    "pass_criteria": "非法/不可写 `child_tidptr` 使 `clone`/`clone3` 失败并返回 EFAULT；成功路径在返回前子 TID 已写入。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过"
+  },
+  "suggested_fix": "将 `CHILD_SETTID` 的 `vm_write` 移入 `CloneArgs::do_clone`（或等价路径），与 `PARENT_SETTID` 对称处理错误；从 `new_user_task` 首跑路径移除 `.ok()` 延迟写。",
+  "references": ["man 2 clone", "kernel/src/task/user.rs", "kernel/src/syscall/task/clone.rs", "issue-238", "issue-376"]
+}

@@ -1,0 +1,27 @@
+{
+  "id": "issue-300",
+  "title": "`file ops` 段 `chown`/`lchown`/`chmod`/`readlink`/`utime`/`utimes` 等 legacy 仅 `x86_64`；无与 `fs ctl` issue-297 同级的 `*at`/utimens 路由概括注释",
+  "status": "resolved",
+  "created_at": "2026-04-13T18:05:00Z",
+  "severity": "low",
+  "fix_summary": "在 `mod.rs` 中 `// file ops` 后、`Sysno::chown` 前增加与 issue-297 `fs ctl` 同风格的概括注释：chown/lchown/chmod/readlink/utime/utimes 仅 x86 系 Sysno 有号；riscv/aarch64 libc 经 `fchownat`/`fchmodat*`/`readlinkat`/`utimensat`（`AT_FDCWD` 等）落到下方 `sys_*`。`executor-memory` 在 legacy `mkdir`/… 条后新增 `chown`/… 对应 `*at`/utimens 条（issue-300）。",
+  "files_changed": ["kernel/src/syscall/mod.rs", "auto-evolve/memory/executor-memory.md"],
+  "description": "**`kernel/src/syscall/mod.rs`** **`// file ops`** **段** **（** **约** **87** **行** **起** **）** **`Sysno::chown`** **、** **`lchown`** **、** **`chmod`** **、** **`readlink`** **、** **`utime`** **、** **`utimes`** **等** **置于** **`#[cfg(target_arch = \"x86_64\")]`** **；** **`fchownat`** **、** **`fchmodat`/`fchmodat2`** **、** **`readlinkat`** **、** **`utimensat`** **等** **无** **此** **限制** **。** **与** **issue-297** **`fs ctl`** **legacy** **/** **`*at`** **模式** **同类** **：** **riscv64**/**aarch64** **`syscalls::Sysno`** **常** **无** **独立** **`chown`/`chmod`/…** **legacy** **号** **；** **libc** **多** **经** **`fchownat`/`fchmodat*`/`readlinkat`/`utimensat`（`AT_FDCWD`）** **等** **落到** **已** **实现** **的** **`sys_*`** **。**\n\n**`fs ctl`** **段** **已在** **`mkdir`** **前** **有** **issue-297** **概括** **注释** **；** **`file ops`** **段** **仅** **有** **`// file ops`** **标题** **，** **无** **同级** **说明** **，** **读者** **易** **误判** **riscv** **遗漏** **`chown`/`chmod`** **等** **。**\n\n**建议**：在 **`Sysno::chown`** **`#[cfg]`** **前** **或** **`// file ops`** **后** **增加** **一段** **与** **issue-297** **风格** **一致** **的** **概括** **注释** **（** **或** **在** **`executor-memory`** **中** **与** **legacy** **`mkdir`/…** **条** **并列** **扩展** **）** **，** **列出** **`chown`/`lchown`/`chmod`/`readlink`/`utime`/`utimes`** **与** **对应** **`*at`/时间** **syscall** **的** **关系** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["chown", "lchown", "fchown", "fchownat", "chmod", "fchmod", "fchmodat", "readlink", "readlinkat", "utime", "utimes", "utimensat"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/mod.rs:87-126"],
+    "related_files": ["auto-evolve/memory/executor-memory.md"],
+    "key_insight": "file ops 多 legacy 仅 x86_64；无 fs ctl 式 issue-297 概括旁注"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 musl `chown`/`chmod`/`readlink`/`utime` 与 `*at` 实现。",
+    "expected_output_contains": "",
+    "pass_criteria": "`mod.rs` 或 executor 对 `file ops` legacy 与 `*at`/utimens 路由有明确概括说明，或经评审认为无需补充。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `// file ops` 段首部增加与 `fs ctl` issue-297 同风格的 legacy→*at 路由注释，或扩展 executor-memory对应列表。",
+  "references": ["man 2 chown", "man 2 fchownat", "kernel/src/syscall/mod.rs", "issue-297"]
+}

@@ -1,0 +1,31 @@
+{
+  "id": "issue-204",
+  "title": "setitimer：`vm_read_uninit`+`assume_init` 读用户 `itimerval`，`FIXME AnyBitPattern` 与 issue-201 同类",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`time.rs`**：新增 **`read_timeval_user`**、**`read_itimerval_user`**（**`addr_of!` + 字段 `vm_read`**）。**`sys_setitimer`** 用其替代整颗 **`itimerval`** 的 **`vm_read_uninit`/`assume_init`**，删除 **`FIXME`**；**`try_into_time_value`** 与 **`set_itimer`** 逻辑不变。**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过。",
+  "files_changed": [
+    "kernel/src/syscall/time.rs",
+    "auto-evolve/issue-pool/issue-204.json",
+    "auto-evolve/memory/executor-memory.md"
+  ],
+  "description": "**`kernel/src/syscall/time.rs`** **`sys_setitimer`** 在 **`new_value` 非空时使用 **`// FIXME: AnyBitPattern`** 与 **`unsafe { new_value.vm_read_uninit()?.assume_init() }`** 读整颗 **`linux_raw_sys::general::itimerval`**（约 **137–140** 行），随后才对 **`it_interval`/`it_value`** 调用 **`try_into_time_value`**。**`assume_init`** 要求 **`MaybeUninit`** 已由 **`vm_read_uninit`** 按 **uapi 布局**逐字节填满；若 **`timeval`/`itimerval`** 在 **`linux_raw_sys`** 升级中引入 **padding、对齐或新字段**，或读路径与 **`Pod`** 假设偏离，存在与 **issue-201（utimensat）**、**issue-202（capget）** 同类的 **可审计性/UB 风险**。**更稳妥**：对嵌套 **`timeval`** 拆 **`tv_sec`/`tv_usec`** 标量 **`vm_read`** 构造，或 **`zerocopy::FromBytes`** /显式字段构造后再 **`try_into_time_value`**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["setitimer"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/time.rs:129-165"],
+    "related_files": ["kernel/src/syscall/time.rs:118-127"],
+    "key_insight": "`sys_getitimer` 写回用 `vm_write`；`setitimer` 读入用 `assume_init`"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "静态审查 + **`linux_raw_sys` 版本升级**试编译；对照 **issue-201** 修复模式。",
+    "expected_output_contains": "",
+    "pass_criteria": "消除 **`assume_init`** 或证明 **`itimerval`/`timeval`** 全 **`Pod`** 且读路径与 **uapi** 逐字节一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（2026-04-12）"
+  },
+  "suggested_fix": "对 **`itimerval.it_interval`/`it_value`** 各读 **`tv_sec`/`tv_usec`**（或 **`read_unaligned`** 若需），组装 **`itimerval { ... }`**；删除 **`FIXME`**。",
+  "references": ["man 2 setitimer", "issue-201", "issue-033"]
+}

@@ -1,0 +1,31 @@
+{
+  "id": "issue-196",
+  "title": "renameat2：`RENAME_EXCHANGE` 以三次顺序 `rename` 实现，崩溃或断电窗口下与 Linux 原子交换不一致",
+  "status": "resolved",
+  "created_at": "2026-04-14T22:00:00Z",
+  "severity": "medium",
+  "fix_summary": "按 **pass_criteria** 文档化差异：**`sys_renameat2` `RENAME_EXCHANGE`** 分支与 **`renameat2_exchange`** 的 **`///` 文档**明确：成功路径命名与 Linux 一致，但实现为最多 **三次 `Location::rename` + `.starry_exchange_*`临时名**，**非 crash-atomic**；断电/崩溃中间态可能与 Linux **VFS 级交换** 不同；依赖与 Linux 相同故障语义的应用不应假定此处一致。去掉误导性的 **「same semantics as Linux」** 单行注释。**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过。",
+  "files_changed": [
+    "kernel/src/syscall/fs/ctl.rs",
+    "auto-evolve/issue-pool/issue-196.json",
+    "auto-evolve/memory/executor-memory.md"
+  ],
+  "description": "**`kernel/src/syscall/fs/ctl.rs`** **`renameat2_exchange`**（**`RENAME_EXCHANGE`**）通过临时名 **`tmp`** 执行最多 **三次 `Location::rename`**（同目录 **`old → tmp` → `new → old` → `tmp → new`**；跨目录类似）。注释写明 **「same semantics as Linux; three renames, not atomic vs crash」**。**Linux** 在支持的路径上力求 **单次/受锁保护** 的名称交换，崩溃后不会出现 **仅完成部分重命名** 的中间态（在 **同一挂载点** 上通常更强）。**Starry** 若在第一次与第三次 **`rename` 之间** 失败或主机崩溃，可能出现 **仅 `old` 被移到 `tmp`、`new` 未交换** 等不一致，**用户可见命名空间** 与 **Linux** 在故障模型下不等价；对依赖 **`RENAME_EXCHANGE`** 做 **无临时文件原子替换** 的应用（包管理器、编辑器）存在风险。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["renameat2"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/ctl.rs:653-702"],
+    "related_files": [],
+    "key_insight": "三步步进 rename；注释自认非 crash-atomic"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "在 **`RENAME_EXCHANGE`** 路径注入 **`rename` 间失败**（或模拟崩溃后检查 **VFS 名称图**）；与 **Linux** 同场景对照 **是否出现半交换**。",
+    "expected_output_contains": "",
+    "pass_criteria": "文档化 **「非原子」** 差异；或实现 **VFS 级单次交换/日志** 以逼近 **Linux** 故障语义。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（2026-04-12）"
+  },
+  "suggested_fix": "在手册/发行说明中明确 **不保证与 Linux 相同的 exchange 原子性**；长期可在 **axfs-ng** 增加 **`rename_exchange`** 原语或 **两阶段提交**。",
+  "references": ["man 2 renameat2", "Linux vfs_rename"]
+}

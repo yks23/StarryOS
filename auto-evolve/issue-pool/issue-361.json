@@ -1,0 +1,32 @@
+{
+  "id": "issue-361",
+  "title": "`waitpid(2)`：`sys_waitpid` 用 `report_stop = WUNTRACED || options.is_empty()`、`report_continued = WCONTINUED || options.is_empty()`；Linux `options==0` 仅等待**已终止**子进程，不因 `options` 为空而等价于 `WUNTRACED`/`WCONTINUED`",
+  "status": "resolved",
+  "created_at": "2026-04-14T12:10:00Z",
+  "resolved_at": "2026-04-14T00:00:00Z",
+  "severity": "medium",
+  "description": "**`kernel/src/syscall/task/wait.rs`** **`sys_waitpid`** **（** **约** **178–179** **行** **）** **：** **`options`** **为** **`0`** **（** **`WaitOptions::from_bits(0)`** **空** **标志** **）** **时** **`options.is_empty()`** **为** **真** **，** **从而** **`report_stop`** **与** **`report_continued`** **均为** **真** **。** **Linux** **`waitpid(2)`** **`options==0`** **仅** **回收** **/ ** **报告** **正常** **终止** **的** **子** **进程** **（** **与** **`WEXITED`** **默认** **语义** **一致** **）** **；** **需** **显式** **`WUNTRACED`** **`/`** **`WCONTINUED`** **才** **报告** **job** **control** **停止** **`/`** **`SIGCONT`** **继续** **。** **Starry** **在** **`options==0`** **时** **仍** **可能** **走** **`stop_wait_pending`** **`/`** **`continued_wait_pending`** **分支** **，** **与** **上游** **`errno`/状态** **码** **分层** **不一致** **。**\n\n**建议** **：** **删除** **`|| options.is_empty()`** **两处** **；** **或** **仅在** **显式** **`WUNTRACED`/`WCONTINUED`** **时** **置** **真** **，** **并** **核对** **`WEXITED`** **与** **默认** **`wait`** **语义** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["waitpid", "wait4"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/wait.rs:124-215"],
+    "related_files": [],
+    "key_insight": "waitpid options==0 must not imply WUNTRACED/WCONTINUED"
+  },
+  "fix_summary": "`sys_waitpid`：`report_stop`/`report_continued` 去掉 `options.is_empty()`，仅 **`WUNTRACED`**/**`WCONTINUED`** 为真；**`options==0`** 仅经僵尸分支回收终止子进程。**`wait4`** 同入口。**`executor-memory`** 更正作业控制/`waitpid` 条。",
+  "files_changed": [
+    "kernel/src/syscall/task/wait.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-361.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：子进程 `raise(SIGSTOP)` 后父进程 `waitpid(pid, NULL, 0)` 对照 Linux `errno`/阻塞行为。",
+    "expected_output_contains": "",
+    "pass_criteria": "`options==0` 仅匹配终止子进程，除非显式 `WUNTRACED`/`WCONTINUED`。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "将 `report_stop`/`report_continued` 仅与对应标志位绑定，勿用 `options.is_empty()` 扩大语义。",
+  "references": ["man 2 waitpid", "kernel/src/syscall/task/wait.rs"]
+}

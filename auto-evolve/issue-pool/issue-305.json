@@ -1,0 +1,27 @@
+{
+  "id": "issue-305",
+  "title": "`memfd_create(2)`/`memfd_secret(2)`：`sys_memfd_create` 先 `validate_memfd_flags` 再 `name.get_as_str()`，非法 `flags` 与坏 `name` 用户指针组合时，错误码优先级可能与 Linux（用户名字符串拷贝与 `flags` 净化顺序）不完全一致",
+  "status": "resolved",
+  "created_at": "2026-04-13T12:10:00Z",
+  "severity": "low",
+  "fix_summary": "重排 `sys_memfd_create`：`name.get_as_str()` 先于 `validate_memfd_flags`，使坏 `name` 指针/名字的 EFAULT 或 IllegalBytes 优先于非法 `MFD_*` 的 EINVAL；注释引用 issue-303/issue-305。`executor-memory` memfd 条补充。",
+  "files_changed": ["kernel/src/syscall/fs/memfd.rs", "auto-evolve/memory/executor-memory.md"],
+  "description": "**`kernel/src/syscall/fs/memfd.rs`** **`sys_memfd_create`** **（** **`sys_memfd_secret`** **委托** **同一** **实现** **）** **顺序** **为** **`validate_memfd_flags(flags)?`** **→** **`name.get_as_str()?`** **。** **当** **同时** **存在** **非法** **`MFD_*`** **组合** **/** **保留** **位** **与** **不可** **访问** **的** **`name`** **指针** **时** **，** **本** **实现** **固定** **先** **返回** **`EINVAL`/`InvalidInput`** **（** **flags** **）** **，** **不会** **到达** **`get_as_str`** **的** **`EFAULT`** **。** **Linux** **`memfd_create`** **路径** **对** **`copy_from_user`** **名字** **与** **`flags`** **校验** **的** **先后** **可能** **不同** **，** **极端** **模糊** **测试** **下** **与** **上游** **错误** **优先级** **可能** **不一致** **。**\n\n**与** **issue-303** **`mount`** **「** **用户** **串** **/** **`EFAULT`** **相对** **非法** **标量** **/** **`EINVAL`** **」** **同类** **；** **若** **需** **与** **Linux** **逐** **条** **对齐** **，** **应对** **照** **内核** **`__do_sys_memfd_create`** **顺序** **或** **在** **注释** **中** **声明** **有意** **差异** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["memfd_create", "memfd_secret"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/memfd.rs:56-82"],
+    "related_files": ["kernel/src/syscall/fs/mount.rs"],
+    "key_insight": "memfd flags 校验先于 name 用户拷贝；与 Linux 顺序可能不同"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：非法 flags + 坏 name 指针，对照 Linux 返回顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游 `memfd_create` 错误优先级一致，或文档/注释明确说明差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "对照 Linux `memfd_create` 对用户 `name` 与 `flags` 的处理顺序，按需重排或补充注释（可引用 issue-303 模式）。",
+  "references": ["man 2 memfd_create", "kernel/src/syscall/fs/memfd.rs", "issue-303"]
+}

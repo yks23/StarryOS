@@ -1,0 +1,33 @@
+{
+  "id": "issue-371",
+  "title": "`getrusage(2)` `RUSAGE_SELF`：`sys_getrusage` 聚合线程 CPU 时在 `process.threads()` 上 `fold`，若某一 `tid` 的 `get_task(tid)` 失败则静默跳过该线程，与 Linux 对进程内全部线程求和/取 max 的统计语义可能不一致",
+  "status": "resolved",
+  "created_at": "2026-04-13T00:15:00Z",
+  "resolved_at": "2026-04-13T01:00:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/resources.rs`** **`sys_getrusage`** **`RUSAGE_SELF`** **分支** **（** **约** **146–162** **行** **）** **：** **`thr.proc_data.proc.threads()`** **迭代** **`tid`** **，`fold`** **中** **仅** **`get_task(tid).ok()`** **时** **才** **`collate(Rusage::from_thread(...))`** **，** **失败** **则** **保持** **`acc`** **。** **在** **`get_task`** **短暂** **失败** **（** **竞态** **、** **表** **不一致** **）** **或** **实现** **缺陷** **时** **，** **返回** **的** **`ru_utime`/`ru_stime`** **可能** **低于** **Linux** **对** **同** **一** **进程** **的** **聚合** **值** **，`getrusage`/`times`** **对照** **测试** **可能** **偏差** **。** **`RUSAGE_THREAD`** **单** **线程** **路径** **无** **此** **折叠** **问题** **。**\n\n**建议** **：** **`get_task` 失败** **时** **显式** **错误** **（** **如** **`Err`** **）** **或** **至少** **debug** **断言** **；** **或** **文档** **标明** **「** **仅** **统计** **可** **解析** **线程** **」** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["getrusage"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/resources.rs:129-183"],
+    "related_files": ["kernel/src/task/mod.rs"],
+    "key_insight": "RUSAGE_SELF fold skips get_task errors"
+  },
+  "fix_summary": "**`RUSAGE_SELF`**：**`thread_group_cpu_nanos_strict()`** **（** **含** **已** **退出** **线程** **`exited_threads_*`** **+** **每** **`tid` `get_task` 失败** **则** **`Err`** **）**；**`thread_group_cpu_nanos()`** **保留** **跳过** **策略** **供** **`times`/`wait`**。**`resources.rs`** **移除** **静默** **`fold`**。**issue-371**。**",
+  "files_changed": [
+    "kernel/src/syscall/resources.rs",
+    "kernel/src/task/mod.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-371.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：多线程进程下 `getrusage(RUSAGE_SELF)` 与 Linux 对照 `ru_utime`/`ru_stime`。",
+    "expected_output_contains": "",
+    "pass_criteria": "聚合与 Linux 一致，或明确文档化跳过策略。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "`get_task` 失败时返回内部错误或对 `tid` 列表使用不可失败路径。",
+  "references": ["man 2 getrusage", "kernel/src/syscall/resources.rs"]
+}

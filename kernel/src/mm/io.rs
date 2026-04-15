@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use core::mem::{self, MaybeUninit};
 
 use axerrno::{AxError, AxResult};
@@ -12,10 +13,11 @@ pub struct IoVec {
     pub iov_len: isize,
 }
 
-#[derive(Default)]
+/// Scatter/gather buffer: **`iovec` 描述在用户态**，构造时 **`vm_read` 整表快照** 到内核
+/// （对齐 Linux **`import_iovec`/`copy_iovec_from_user`** 的「单次 syscall 内固定描述」意图；
+/// **`iov_base` 仍为用户指针**，见 issue-199）。
 pub struct IoVectorBuf {
-    iovs: *const IoVec,
-    iovcnt: usize,
+    iovs: Vec<IoVec>,
     len: usize,
 }
 
@@ -24,15 +26,19 @@ impl IoVectorBuf {
         if iovcnt > 1024 {
             return Err(AxError::InvalidInput);
         }
-        let mut len = 0;
+        let mut out = Vec::with_capacity(iovcnt);
+        let mut len = 0usize;
         for i in 0..iovcnt {
             let iov = iovs.wrapping_add(i).vm_read()?;
             if iov.iov_len < 0 {
                 return Err(AxError::InvalidInput);
             }
-            len += iov.iov_len as usize;
+            len = len
+                .checked_add(iov.iov_len as usize)
+                .ok_or(AxError::InvalidInput)?;
+            out.push(iov);
         }
-        Ok(Self { iovs, iovcnt, len })
+        Ok(Self { iovs: out, len })
     }
 
     pub fn read_with(
@@ -40,12 +46,11 @@ impl IoVectorBuf {
         mut f: impl FnMut(*const u8, usize) -> AxResult<usize>,
     ) -> AxResult<usize> {
         let mut count = 0;
-        for i in 0..self.iovcnt {
-            let iov = self.iovs.wrapping_add(i).vm_read()?;
+        for iov in self.iovs {
             if iov.iov_len == 0 {
                 continue;
             }
-            let read = f(iov.iov_base, iov.iov_len as usize)?;
+            let read = f(iov.iov_base.cast_const(), iov.iov_len as usize)?;
             if read == 0 {
                 break;
             }
@@ -59,8 +64,7 @@ impl IoVectorBuf {
         mut f: impl FnMut(*mut u8, usize) -> AxResult<usize>,
     ) -> AxResult<usize> {
         let mut count = 0;
-        for i in 0..self.iovcnt {
-            let iov = self.iovs.wrapping_add(i).vm_read()?;
+        for iov in self.iovs {
             if iov.iov_len == 0 {
                 continue;
             }
@@ -90,8 +94,8 @@ pub struct IoVectorBufIo {
 
 impl IoVectorBufIo {
     fn skip_empty(&mut self) -> AxResult<()> {
-        while self.start < self.inner.iovcnt {
-            let iov = self.inner.iovs.wrapping_add(self.start).vm_read()?;
+        while self.start < self.inner.iovs.len() {
+            let iov = &self.inner.iovs[self.start];
             if iov.iov_len as usize > self.offset {
                 break;
             }
@@ -107,10 +111,10 @@ impl Read for IoVectorBufIo {
         let mut count = 0;
         loop {
             self.skip_empty()?;
-            if self.start >= self.inner.iovcnt {
+            if self.start >= self.inner.iovs.len() {
                 break;
             }
-            let iov = self.inner.iovs.wrapping_add(self.start).vm_read()?;
+            let iov = &self.inner.iovs[self.start];
             let len = (iov.iov_len as usize - self.offset).min(buf.len() - count);
             if len == 0 {
                 break;
@@ -131,10 +135,10 @@ impl Write for IoVectorBufIo {
         let mut count = 0;
         loop {
             self.skip_empty()?;
-            if self.start >= self.inner.iovcnt {
+            if self.start >= self.inner.iovs.len() {
                 break;
             }
-            let iov = self.inner.iovs.wrapping_add(self.start).vm_read()?;
+            let iov = &self.inner.iovs[self.start];
             let len = (iov.iov_len as usize - self.offset).min(buf.len() - count);
             if len == 0 {
                 break;

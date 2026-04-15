@@ -1,0 +1,27 @@
+{
+  "id": "issue-172",
+  "title": "clock_getres对已支持 clock 一律返回 1µs，与 Linux 上 COARSE/HZ 对齐分辨率不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`sys_clock_getres`** 按 **`clock_id`** 分支：**`CLOCK_*_COARSE`**报告 **`1 ms`**（与 Linux jiffies/粗粒度同阶）；**`REALTIME`/`MONOTONIC`/`RAW`/`BOOTTIME`/CPU 时间** 报告 **`1 ns`**（对齐常见 hrtimer 用户态读数）。",
+  "files_changed": ["kernel/src/syscall/time.rs"],
+  "description": "**`sys_clock_getres`**（`kernel/src/syscall/time.rs`）在 **`clock_id_supported`** 通过后，对非空 **`res`** 一律 **`vm_write(timespec::from_time_value(TimeValue::from_micros(1)))`**，即**固定 1µs**。**Linux** 上 **`CLOCK_REALTIME_COARSE`/`CLOCK_MONOTONIC_COARSE`** 等 **COARSE** 时钟及 **`tick`/HZ** 相关实现通常报告**更粗**的分辨率（常见 **1ms** 量级，视配置而定）；**`CLOCK_MONOTONIC`** 等也可能与 **vdso**/**hrtimer** 实际粒度不完全等同 **1µs**。**musl**/**glibc** 及部分应用用 **`clock_getres`** 校准 **`poll`/`select`/`nanosleep`** 步进；**Starry** 全返回 **1µs** 可能导致与 **Linux** 行为偏差（通常不致命，但与 **man 3 clock_getres**「报告内核/硬件粒度」的期望不符）。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["clock_getres"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/time.rs:57-66"],
+    "related_files": ["kernel/src/syscall/time.rs:16-27"],
+    "key_insight": "`TimeValue::from_micros(1)` 写死"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "在 **Linux** 与 **Starry** 上对 **`CLOCK_REALTIME`/`COARSE`/`MONOTONIC`/`COARSE`** 调用 **`clock_getres`**，比较 **`timespec`**。",
+    "expected_output_contains": "",
+    "pass_criteria": "与 **Linux** 同机/同配置下的分辨率**同阶**或文档化为 **Starry** 抽象粒度；**COARSE** 不宜与 **非 COARSE** 相同且均 **1µs** 若无依据。",
+    "last_result": "`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` 通过（2026-04-12）。"
+  },
+  "suggested_fix": "按 **`clock_id`** 分支返回 **`HZ` 推导值**、**`CONFIG_HZ`** 常量或 **`axhal` 时钟源** 实际粒度；**COARSE** 可对齐 **`tick`** 周期。",
+  "references": ["man 3 clock_getres", "Linux hrtimer resolution"]
+}

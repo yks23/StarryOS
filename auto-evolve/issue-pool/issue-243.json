@@ -1,0 +1,32 @@
+{
+  "id": "issue-243",
+  "title": "execve：`argv==NULL` 当作空参数表、`envp==NULL` 当作空环境，与 Linux 不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "medium",
+  "fix_summary": "**`argv==NULL` → `BadAddress`**。**`envp==NULL`** 从 **`ProcessData::environment`** 继承（新增 **`RwLock<Arc<Vec<String>>>`**，**`fork`** 复制，**`init`** 与 **`execve` 成功** 后更新）。",
+  "files_changed": [
+    "kernel/src/syscall/task/execve.rs",
+    "kernel/src/task/mod.rs",
+    "kernel/src/entry.rs",
+    "kernel/src/syscall/task/clone.rs"
+  ],
+  "description": "**`kernel/src/syscall/task/execve.rs`** **`sys_execve`**（约 **22–48** 行）：**`argv.is_null()`** 时构造 **空 `args`**；**`envp.is_null()`** 时构造 **空 `envs`**。\n\n**Linux `execve(2)`**：**`argv`** 须为指向 **以 NULL 结尾的指针数组** 的有效用户指针；**`argv == NULL`** 在 **`copy_strings`** 路径上为 **`EFAULT`**（**非**「零个参数」）。**`envp == NULL`** 时，新程序**继承调用进程的环境**（见手册 **DESCRIPTION**）；**非** 空环境列表，除非实现另有说明。\n\n当前行为会导致 **`execve(path, NULL, env)`** 与 **`execve(path, argv, NULL)`** 与 **Linux** 在 **errno**/**环境继承** 上不一致；依赖 **`/proc/self/environ`** 或 **`getenv`** 的 **exec** 链可能出错。\n\n**建议**：**`argv.is_null()` → `Err(AxError::BadAddress)`**（**EFAULT**）；**`envp.is_null()`** 时从 **`ProcessData`**/当前已保存的环境向量**克隆**传入 **`load_user_app`**（若无现成表示，需先定义与 **`execve` 前进程** 一致的环境来源）。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["execve"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/execve.rs:22-48"],
+    "related_files": ["kernel/src/mm/loader.rs"],
+    "key_insight": "NULL argv/envp 与 Linux 语义不同"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 man 2 execve。",
+    "expected_output_contains": "",
+    "pass_criteria": "`argv==NULL` → EFAULT；`envp==NULL` → 继承环境。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos：通过（exit 0）"
+  },
+  "suggested_fix": "拒绝 NULL argv；envp NULL 时复制当前进程环境。",
+  "references": ["man 2 execve", "Linux do_execveat_common"]
+}

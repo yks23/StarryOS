@@ -16,7 +16,7 @@ use strum::FromRepr;
 
 use crate::task::poll_timer;
 
-fn time_value_from_nanos(nanos: usize) -> TimeValue {
+pub(crate) fn time_value_from_nanos(nanos: usize) -> TimeValue {
     let secs = nanos as u64 / NANOS_PER_SEC;
     let nsecs = nanos as u64 - secs * NANOS_PER_SEC;
     TimeValue::new(secs, nsecs as u32)
@@ -80,29 +80,15 @@ struct ITimer {
 
 impl ITimer {
     pub fn new(interval_ns: usize, remained_ns: usize) -> Self {
-        let result = Self {
+        Self {
             interval_ns,
             remained_ns,
-        };
-        result.renew_timer();
-        result
-    }
-
-    pub fn update(&mut self, delta: usize) -> bool {
-        if self.remained_ns == 0 {
-            return false;
-        }
-        if self.remained_ns > delta {
-            self.remained_ns -= delta;
-            false
-        } else {
-            self.remained_ns = self.interval_ns;
-            self.renew_timer();
-            true
         }
     }
 
-    pub fn renew_timer(&self) {
+    /// Wake `alarm_task` so [`poll_timer`] runs near the next SIGALRM deadline.
+    /// Only used for [`ITimerType::Real`]; virtual/prof timers are advanced in [`TimeManager::poll`].
+    fn schedule_wall_alarm(&self) {
         if self.remained_ns > 0 {
             let deadline = wall_time() + Duration::from_nanos(self.remained_ns as u64);
             let mut guard = ALARM_LIST.lock();
@@ -115,6 +101,22 @@ impl ITimer {
             if should_wake {
                 EVENT_NEW_TIMER.notify(1);
             }
+        }
+    }
+
+    pub fn update(&mut self, delta: usize, schedule_wall_on_reload: bool) -> bool {
+        if self.remained_ns == 0 {
+            return false;
+        }
+        if self.remained_ns > delta {
+            self.remained_ns -= delta;
+            false
+        } else {
+            self.remained_ns = self.interval_ns;
+            if schedule_wall_on_reload && self.remained_ns > 0 {
+                self.schedule_wall_alarm();
+            }
+            true
         }
     }
 }
@@ -130,7 +132,8 @@ pub enum TimerState {
     Kernel,
 }
 
-// TODO(mivik): preempting does not change the timer state currently
+// TODO(mivik): preempting does not change the timer state currently; virtual/prof deltas
+// still assume the full monotonic gap while marked User/Kernel (no intra-kernel steal time).
 /// A manager for time-related operations.
 pub struct TimeManager {
     utime_ns: usize,
@@ -151,7 +154,9 @@ impl TimeManager {
         Self {
             utime_ns: 0,
             stime_ns: 0,
-            last_wall_ns: 0,
+            // Avoid a bogus first `delta` of ~entire monotonic uptime (would drain ITIMER_REAL
+            // and distort virtual/prof on the first syscall boundary).
+            last_wall_ns: monotonic_time_nanos() as usize,
             state: TimerState::None,
             itimers: Default::default(),
         }
@@ -162,6 +167,12 @@ impl TimeManager {
         let utime = time_value_from_nanos(self.utime_ns);
         let stime = time_value_from_nanos(self.stime_ns);
         (utime, stime)
+    }
+
+    /// Raw user/system CPU time in nanoseconds (for `times` / `wait` accounting).
+    #[inline]
+    pub fn cpu_nanos(&self) -> (usize, usize) {
+        (self.utime_ns, self.stime_ns)
     }
 
     /// Polls the time manager to update the timers and emit signals if
@@ -202,6 +213,9 @@ impl TimeManager {
             &mut self.itimers[ty as usize],
             ITimer::new(interval_ns, remained_ns),
         );
+        if ty == ITimerType::Real && remained_ns > 0 {
+            self.itimers[ty as usize].schedule_wall_alarm();
+        }
         (
             time_value_from_nanos(old.interval_ns),
             time_value_from_nanos(old.remained_ns),
@@ -218,7 +232,8 @@ impl TimeManager {
     }
 
     fn update_itimer(&mut self, ty: ITimerType, delta: usize, emitter: impl Fn(Signo)) {
-        if self.itimers[ty as usize].update(delta) {
+        let wall_on_reload = ty == ITimerType::Real;
+        if self.itimers[ty as usize].update(delta, wall_on_reload) {
             emitter(ty.signo());
         }
     }

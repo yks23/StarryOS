@@ -1,0 +1,32 @@
+{
+  "id": "issue-368",
+  "title": "`getpriority(2)`/`setpriority(2)`：`PRIO_PGRP` 分支在 `get_process_group(pgid)` 成功后，若 `processes()` 中无任何进程的 `pgid` 与该参数一致，`sys_getpriority` 仍用 `min_nice_among(...).unwrap_or(0)` 当作 nice 0（返回 20），`sys_setpriority` 仍 `Ok(0)`；同文件 `PRIO_USER` 分支在无可匹配进程时返回 `NoSuchProcess`（对齐 Linux `ESRCH`）",
+  "status": "resolved",
+  "created_at": "2026-04-12T23:00:00Z",
+  "resolved_at": "2026-04-14T00:00:00Z",
+  "severity": "low",
+  "description": "**`kernel/src/syscall/task/schedule.rs`** **`sys_getpriority`** **`/`** **`sys_setpriority`** **（** **约** **293–306** **行** **/** **343–355** **行** **）** **：** **`PRIO_PGRP`** **路径** **先** **`get_process_group(pgid)?`** **，** **再** **在** **`processes()`** **上** **过滤** **`p.proc.group().pgid() == pgid`** **。** **若** **过滤** **结果** **为空** **（** **表** **与** **进程** **枚举** **短暂** **不一致** **、** **或** **实现** **缺陷** **）** **：** **`getpriority`** **走** **`unwrap_or(0)`** **→** **等价** **于** **nice** **0** **的** **优先级** **20** **；** **`setpriority`** **不** **更新** **任何** **进程** **仍** **成功** **。** **同** **文件** **`PRIO_USER`** **分支** **对** **空** **集合** **显式** **`NoSuchProcess`** **（** **约** **314–319** **/** **363–371** **行** **）** **。** **Linux** **`getpriority`/`setpriority`** **在** **找不到** **符合** **`which`/`who`** **的** **进程** **时常** **返回** **`-1`** **`errno=ESRCH`** **。**\n\n**建议** **：** **`PRIO_PGRP`** **与** **`PRIO_USER`** **对称** **：** **`min_nice_among`** **为** **`None`** **或** **`setpriority`** **循环** **未** **命中** **任一** **进程** **时** **`return Err(AxError::NoSuchProcess)`** **；** **删除** **`unwrap_or(0)`** **默认** **nice** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["getpriority", "setpriority"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/schedule.rs:281-377"],
+    "related_files": [],
+    "key_insight": "PRIO_PGRP empty match vs PRIO_USER ESRCH; unwrap_or(0)"
+  },
+  "fix_summary": "**`sys_getpriority` `PRIO_PGRP`**：`min_nice_among` **`None`** → **`NoSuchProcess`**。**`sys_setpriority` `PRIO_PGRP`**：循环跟踪 **`any`**，**`!any`** → **`NoSuchProcess`**。**issue-368**（与 **`PRIO_USER`** **对称**）。",
+  "files_changed": [
+    "kernel/src/syscall/task/schedule.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-368.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：构造无成员的 pgid 路径对照 Linux `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "无可匹配进程时返回 ESRCH 或与 Linux 一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "`PRIO_PGRP`：`min_nice_among` → `Option` 与 `setpriority` 循环共用「是否命中」判断，空则 `NoSuchProcess`。",
+  "references": ["man 2 getpriority", "man 2 setpriority", "kernel/src/syscall/task/schedule.rs"]
+}

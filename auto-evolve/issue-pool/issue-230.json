@@ -1,0 +1,27 @@
+{
+  "id": "issue-230",
+  "title": "uname/sysinfo：输出指针未显式拒绝 NULL，与 getrusage 风格及 Linux EFAULT 预期不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`sys_uname`**/**`sys_sysinfo`**：输出指针 **`is_null()` → `AxError::BadAddress`**（**EFAULT**），与 **`sys_getrusage`** 显式风格及 Linux 一致。",
+  "files_changed": ["kernel/src/syscall/sys.rs"],
+  "description": "**`kernel/src/syscall/sys.rs`** **`sys_uname`** 与 **`sys_sysinfo`** 直接对输出指针 **`vm_write`**，未像 **`resources.rs`** **`sys_getrusage`**（**`usage.is_null()` → `BadAddress`**）那样在入口显式处理 **NULL**。\n\n**Linux `uname(2)` / `sysinfo(2)`**：用户缓冲为 **NULL** 时应返回 **`EFAULT`**。当前依赖 **`vm_write`** 对非法地址的统一错误码；行为可能正确，但与 **`getrusage`** 及 **`ipc` 若干 `IPC_STAT`** 路径的显式风格不一致，**错误顺序**（**EINVAL** vs **EFAULT**）也不如显式分支清晰。\n\n**建议**：对输出指针增加 **`is_null()`** 检查并返回 **`AxError::BadAddress`**（或与 Linux 映射一致的 **`EFAULT`**）。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["uname", "sysinfo"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/sys.rs:154-157", "kernel/src/syscall/sys.rs:225-248"],
+    "related_files": ["kernel/src/syscall/resources.rs:129-132"],
+    "key_insight": "getrusage 显式 NULL；uname/sysinfo 仅 vm_write"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；`uname(NULL)` / `sysinfo(NULL)`。",
+    "expected_output_contains": "",
+    "pass_criteria": "NULL 输出缓冲返回 EFAULT/BadAddress，或与 Linux 一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos：通过（exit 0）"
+  },
+  "suggested_fix": "`if name.is_null() { return Err(AxError::BadAddress); }`（`sysinfo` 同理）。",
+  "references": ["man 2 uname", "man 2 sysinfo"]
+}

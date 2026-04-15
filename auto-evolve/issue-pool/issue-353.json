@@ -1,0 +1,33 @@
+{
+  "id": "issue-353",
+  "title": "`riscv_flush_icache(2)`：`mod.rs` 未向 `sys_riscv_flush_icache` 传入 `start`/`end`/`flags`；实现仅 `fence.i` 本 hart，与 Linux 按区间及 `SYS_RISCV_FLUSH_ICACHE_LOCAL` 与默认（进程范围）分支的语义不一致",
+  "status": "resolved",
+  "created_at": "2026-04-13T01:30:00Z",
+  "resolved_at": "2026-04-13T00:00:00Z",
+  "severity": "medium",
+  "description": "**`kernel/src/syscall/mod.rs`** **`Sysno::riscv_flush_icache`** **（** **约** **568** **行** **）** **：** **`sys_riscv_flush_icache()`** **无** **参** **调用** **，** **丢弃** **`a0`/`a1`/`a2`** **。** **Linux** **`__riscv_flush_icache(start, end, flags)`** **（** **见** **man** **`riscv_flush_icache(2)`** **）** **按** **`[start,end)`** **区间** **与** **`flags`** **选择** **仅** **当前** **执行** **上下文** **（** **`SYS_RISCV_FLUSH_ICACHE_LOCAL`** **）** **或** **更** **广** **的** **进程** **内** **一致性** **（** **`flags==0`** **）** **。**\n\n**`kernel/src/syscall/sys.rs`** **`sys_riscv_flush_icache`** **（** **约** **371–374** **行** **）** **：** **无条件** **`riscv::asm::fence_i()`** **并** **`Ok(0)`** **，** **未** **解析** **用户** **区间** **，** **未** **区分** **`LOCAL`** **与** **默认** **全局** **路径** **。** **在** **多** **hart** **/`SMP`** **或** **与** **glibc/musl** **`__riscv_flush_icache`** **传** **参** **一致** **性** **上** **可能** **偏离** **Linux** **（** **例如** **`flags==0`** **时** **仅** **本地** **`fence.i`** **不足** **）** **。**\n\n**建议** **：** **`sys_riscv_flush_icache(start, end, flags)`** **从** **`uctx`** **取** **参** **；** **校验** **`flags`** **保留** **位** **→** **`EINVAL`** **；** **按** **Linux** **实现** **`LOCAL`** **/`0`** **分支** **（** **或** **文档** **化** **单** **hart** **近似** **与** **限制** **）** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["riscv_flush_icache"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/mod.rs:566-569", "kernel/src/syscall/sys.rs:370-374"],
+    "related_files": [],
+    "key_insight": "riscv_flush_icache ignores uctx args; fence.i only vs Linux range and LOCAL/global flags"
+  },
+  "fix_summary": "`mod.rs` 传入 `uctx.arg0/1/2` 为 `start`/`end`/`flags`；`sys_riscv_flush_icache`：`flags` 保留位 → `EINVAL`；`SYS_RISCV_FLUSH_ICACHE_LOCAL` 时校验 `start<=end`、非空 `[start,end)` 落在用户 VA（`check_access`）；`flags==0` 为进程级 flush（与 Linux 一致忽略区间）。两分支均 `fence.i` 作本 hart 指令流串行化；无 `flush_icache_mm`/跨 hart IPI，注释说明与 Linux SMP 差异（issue-353）。",
+  "files_changed": [
+    "kernel/src/syscall/mod.rs",
+    "kernel/src/syscall/sys.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-353.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；`riscv64` 下对照 man `riscv_flush_icache(2)` 与 `__riscv_flush_icache` 调用约定。",
+    "expected_output_contains": "",
+    "pass_criteria": "参数传入并实现与 Linux 一致的区间/`flags` 语义，或显式文档化单 hart 行为及差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "`mod.rs` 传入 `uctx.arg0/1/2`；`sys_riscv_flush_icache` 解析区间与 `SYS_RISCV_FLUSH_ICACHE_LOCAL`，必要时补 SMP/进程范围策略或 `EINVAL` 对保留 `flags`。",
+  "references": ["man 2 riscv_flush_icache", "kernel/src/syscall/mod.rs", "kernel/src/syscall/sys.rs"]
+}

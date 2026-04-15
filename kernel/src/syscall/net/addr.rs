@@ -42,6 +42,11 @@ unsafe fn cast_to_slice<T>(value: &T) -> &[u8] {
     unsafe { core::slice::from_raw_parts(value as *const T as *const u8, size_of::<T>()) }
 }
 fn fill_addr(addr: UserPtr<sockaddr>, addrlen: &mut socklen_t, data: &[u8]) -> AxResult<()> {
+    // Linux move_addr_to_user / getsockname: *addrlen must allow at least one byte of output;
+    // *addrlen == 0 is EINVAL, not "success with *addrlen updated to required size only".
+    if *addrlen == 0 {
+        return Err(AxError::InvalidInput);
+    }
     let len = (*addrlen as usize).min(data.len());
     addr.cast::<u8>()
         .get_as_mut_slice(len)?
@@ -76,7 +81,8 @@ impl SocketAddrExt for SocketAddr {
 
 impl SocketAddrExt for SocketAddrV4 {
     fn read_from_user(addr: UserConstPtr<sockaddr>, addrlen: socklen_t) -> AxResult<Self> {
-        if addrlen != size_of::<sockaddr_in>() as socklen_t {
+        // Linux accepts `addrlen >= sizeof(sockaddr_in)` and uses the leading struct bytes only.
+        if (addrlen as usize) < size_of::<sockaddr_in>() {
             return Err(AxError::InvalidInput);
         }
         let addr_in = addr.cast::<sockaddr_in>().get_as_ref()?;
@@ -109,7 +115,7 @@ impl SocketAddrExt for SocketAddrV4 {
 
 impl SocketAddrExt for SocketAddrV6 {
     fn read_from_user(addr: UserConstPtr<sockaddr>, addrlen: socklen_t) -> AxResult<Self> {
-        if addrlen != size_of::<sockaddr_in6>() as socklen_t {
+        if (addrlen as usize) < size_of::<sockaddr_in6>() {
             return Err(AxError::InvalidInput);
         }
         let addr_in6 = addr.cast::<sockaddr_in6>().get_as_ref()?;
@@ -212,7 +218,7 @@ pub struct sockaddr_vm {
 #[cfg(feature = "vsock")]
 impl SocketAddrExt for VsockAddr {
     fn read_from_user(addr: UserConstPtr<sockaddr>, addrlen: socklen_t) -> AxResult<Self> {
-        if addrlen != size_of::<sockaddr_vm>() as socklen_t {
+        if (addrlen as usize) < size_of::<sockaddr_vm>() {
             return Err(AxError::InvalidInput);
         }
 
@@ -263,6 +269,11 @@ impl SocketAddrExt for SocketAddrEx {
     }
 
     fn family(&self) -> u16 {
-        AF_INET as u16
+        match self {
+            SocketAddrEx::Ip(ip) => ip.family(),
+            SocketAddrEx::Unix(unix) => unix.family(),
+            #[cfg(feature = "vsock")]
+            SocketAddrEx::Vsock(v) => v.family(),
+        }
     }
 }

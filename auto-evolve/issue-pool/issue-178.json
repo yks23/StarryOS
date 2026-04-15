@@ -1,0 +1,30 @@
+{
+  "id": "issue-178",
+  "title": "close_range：CLOSE_RANGE_UNSHARE 分支 mem::take 后未写回 scope，且与 clone 的 FD 表复制模式不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T20:00:00Z",
+  "severity": "high",
+  "fix_summary": "`CLOSE_RANGE_UNSHARE`：在持 `proc_data.scope` 写锁下对当前 `FD_TABLE` 做 `read().clone()` 快照，再以 `Arc::new(RwLock::new(snapshot))` 写回 `scope` 槽位（等价于 `clone` 无 `CLONE_FILES` 的独立表），避免 `mem::take` 丢表；注释说明同槽位上不能对同一 `Arc` 先 `write` 再 `read` 做 `clone_from` 以免死锁。后续区间 close/CLOEXEC 仍经 `FD_TABLE.write()` 作用于新私有表。",
+  "files_changed": ["kernel/src/syscall/fs/fd_ops.rs"],
+  "description": "**`sys_close_range`**（`kernel/src/syscall/fs/fd_ops.rs`）在 **`flags` 含 `CLOSE_RANGE_UNSHARE`（`1<<1`）** 时：`FD_TABLE.scope_mut(&mut scope)` 后对槽位 **`mem::take`** 得到 **`old_files`**，再 **`old_files.write().clone_from(old_files.read().deref())`**（对**同一 **`Arc<RwLock<…>>`** 自拷贝**），块结束 **`old_files` 离开作用域被释放**。**未**将表装回 **`scope`**槽位（槽内已被 **`take` 换成默认值）。**Linux `close_range(2)` `CLOSE_RANGE_UNSHARE`**：为调用线程 **unshare 文件描述符表**（此后 **`close`/`dup`** 等不再影响共享同一表的其他任务/线程），语义上接近 **`unshare(CLONE_FILES)`**。**`clone(2)`** 路径在 **`!CLONE_FILES`** 时使用 **`FD_TABLE.scope_mut(&mut scope).write().clone_from(&FD_TABLE.read())`** 建立**独立副本**。**Starry** 当前实现既**未**从全局/当前有效表 **`clone_from(&FD_TABLE.read())`**，又可能在 **`take`/`drop`** 中与 **`scope_local::FD_TABLE`** 约定冲突，导致 **fd 表丢失、进程无 fd、或与 Linux unshare 语义不符**。随后 **`close_range` 仍对 `FD_TABLE.write()` 做区间关闭**，与 **unshare 后应对「新私有表」操作**的预期也可能不一致。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["close_range"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/fd_ops.rs:158-187"],
+    "related_files": [
+      "kernel/src/syscall/task/clone.rs:238-247",
+      "kernel/src/file/mod.rs:249-252"
+    ],
+    "key_insight": "`UNSHARE` 分支 `mem::take` + 自 `clone_from` + 丢弃 `old_files`，未对齐 `clone` 的 `clone_from(&FD_TABLE.read())`"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "多线程/子进程共享 fd 表场景下调用 **`close_range(..., CLOSE_RANGE_UNSHARE)`**，再 **`dup`/`close`** 验证是否仅影响当前线程；对比 **Linux** 与 **Starry** 的 **`/proc/self/fd`** 或 **`fcntl(F_GETFD)`** 可见性。",
+    "expected_output_contains": "",
+    "pass_criteria": "与 **Linux** 一致地完成 **fd table unshare**，**无**静默丢表或错误操作全局表；否则明确 **`EOPNOTSUPP`** 并禁用该 **flag**。",
+    "last_result": "`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` 通过（未跑多线程对比测试）。"
+  },
+  "suggested_fix": "按 **`clone` `!CLONE_FILES`** 方式：在 **`scope`** 内 **`write().clone_from(&FD_TABLE.read())`**（或等价复制 **`FlattenObjects<FileDescriptor>`**），**避免 **`mem::take` 后丢弃**；必要时在 unshare 之后再对**私有表**执行区间 **`close`/`FDCLOEXEC`**。",
+  "references": ["man 2 close_range", "Linux unshare_fd"]
+}

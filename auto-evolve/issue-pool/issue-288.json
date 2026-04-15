@@ -1,0 +1,27 @@
+{
+  "id": "issue-288",
+  "title": "gettimeofday：syscall 仅转发 `tv`（arg0），忽略 `tz`（arg1）；与 Linux 对非 NULL `struct timezone` 的兼容行为可能不一致",
+  "status": "resolved",
+  "created_at": "2026-04-13T03:00:00Z",
+  "severity": "low",
+  "fix_summary": "`Sysno::gettimeofday` 将 `uctx.arg1()` 传入 `sys_gettimeofday`。`sys_gettimeofday` 在 `tz != NULL` 时 `vm_write` 全零 `linux_raw_sys::general::timezone`（`tz_minuteswest`/`tz_dsttime`），与 Linux legacy 行为及 glibc 同时传 `tv`+`tz` 的用法对齐。",
+  "files_changed": ["kernel/src/syscall/mod.rs", "kernel/src/syscall/time.rs"],
+  "description": "**`kernel/src/syscall/mod.rs`** **`Sysno::gettimeofday`** **仅** **将** **`uctx.arg0()`** **传入** **`sys_gettimeofday`** **（** **约** **523** **行** **）** **，** **未** **读取** **`arg1`** **。** **`kernel/src/syscall/time.rs`** **`sys_gettimeofday`** **（** **约** **108–113** **行** **）** **仅** **处理** **`tv`** **指针** **：** `ts.nullable()` **+** **`vm_write`** **。**\n\n**Linux** **`gettimeofday(2)`** **（** **legacy** **）** **第二** **参数** **`struct timezone *tz`** **虽** **已** **废弃** **，** **但** **内核** **路径** **通常** **仍** **在** **`tz != NULL`** **时** **向** **用户** **写入** **零** **或** **固定** **结构** **（** **或** **在** **部分** **配置** **下** **返回** **错误** **）** **，** **以** **兼容** **旧** **glibc** **/****静态** **链接** **程序** **。** **glibc** **`gettimeofday`** **调用** **syscall** **时** **常** **同时** **传递** **`tv`** **与** **`tz`** **。** **Starry** **当前** **完全** **忽略** **`tz`** **，** **用户** **区** **`tz`** **指向** **的** **内存** **可能** **保持** **未** **初始化** **或** **陈旧** **值** **，** **与** **Linux** **行为** **可能** **分叉** **。**\n\n**建议**：在 **`sys_gettimeofday`** **中** **增加** **`tz: *mut timezone`** **（** **或** **从** **`uctx.arg1()`** **传入** **）** **；** **若** **`tz`** **非** **NULL** **则** **`vm_write`** **全** **零** **`struct timezone`** **（** **或** **与** **目标** **Linux** **版本** **行为** **逐条** **对齐** **）** **；** **或** **在** **ABI** **文档** **中** **明确** **「** **不支持** **`tz`** **、** **仅** **单参数** **」** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["gettimeofday"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/mod.rs:523", "kernel/src/syscall/time.rs:108-113"],
+    "related_files": [],
+    "key_insight": "dispatch 仅 arg0；tz 从未处理，与 Linux legacy 兼容可能不同"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 Linux `sys_gettimeofday` 对 `tz` 的处理；可选用户态用非 NULL `tz` 对比。",
+    "expected_output_contains": "",
+    "pass_criteria": "非 NULL `tz` 时与目标 Linux 写入/错误语义一致，或显式文档化不支持。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 syscall 分发与 `sys_gettimeofday` 中接收 `arg1`，对非 NULL `tz` 做与 Linux 一致的零填充或错误码。",
+  "references": ["man 2 gettimeofday", "kernel/src/syscall/time.rs", "kernel/src/syscall/mod.rs"]
+}

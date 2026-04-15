@@ -1,0 +1,27 @@
+{
+  "id": "issue-334",
+  "title": "`ppoll(2)`：`sys_ppoll` 先 `check_sigset_size(sigsetsize)` 再 `fds.get_as_mut_slice(nfds)`，与 Linux `do_sys_ppoll` 可能先校验 `ufds`/`nfds`（`EFAULT`/`EINVAL`）再 `copy_sigset_from_user`（`sigsetsize`）时，「非法 `sigsetsize`」与「无效 `fds`/`nfds`」的 `EINVAL`/`EFAULT` 优先级可能不完全一致",
+  "status": "resolved",
+  "created_at": "2026-04-14T00:05:00Z",
+  "severity": "low",
+  "fix_summary": "将 `fds.get_as_mut_slice(nfds)` 提前到 `check_sigset_size(sigsetsize)` 之前；注释 issue-334 及与 issue-333 同属 io_mpx 顺序。更新 `executor-memory` poll 条、表格与最近更新；新增 `issue-334.json`。",
+  "files_changed": ["kernel/src/syscall/io_mpx/poll.rs", "auto-evolve/memory/executor-memory.md", "auto-evolve/issue-pool/issue-334.json"],
+  "description": "**`kernel/src/syscall/io_mpx/poll.rs`** **`sys_ppoll`** **（** **约** **110–128** **行** **）** **顺序** **：** **`check_sigset_size(sigsetsize)?`** **→** **`fds.get_as_mut_slice(...)?`** **→** **`read_timespec_user(timeout)`** **等** **。** **当** **`sigsetsize`** **不等于** **`sizeof(sigset_t)`** **（** **`EINVAL`** **）** **且** **`fds`** **为** **无效** **用户** **指针** **（** **`EFAULT`** **）** **时** **，** **本** **实现** **固定** **先** **`EINVAL`** **；** **Linux** **常见** **在** **`copy_from_user(ufds)`** **/`compat` 路径** **上** **先** **因** **`fds`** **失败** **。** **与** **issue-333** **`select`/`pselect6`** **`timeout`/`nfds`** **同属** **`io_mpx`** **参数** **顺序** **类** **。**\n\n**建议** **：** **对照** **Linux** **`fs/select.c`** **`do_sys_ppoll`** **，** **将** **`fds`/`nfds`** **解析** **（** **或** **`EFAULT`** **语义** **）** **提前** **到** **`check_sigset_size`** **之前** **，** **或** **注释** **说明** **与** **上游** **差异** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["ppoll"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/io_mpx/poll.rs:110-128"],
+    "related_files": ["kernel/src/syscall/signal.rs"],
+    "key_insight": "ppoll sigsetsize EINVAL before fds slice EFAULT order"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：错误 `sigsetsize` + 坏 `fds` 指针对照 Linux 返回顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游 `ppoll` 校验顺序一致，或注释说明差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "先 `fds`/`nfds` 用户访问或等价校验，再 `check_sigset_size`；与 Linux `do_sys_ppoll` 对齐。",
+  "references": ["man 2 ppoll", "kernel/src/syscall/io_mpx/poll.rs", "issue-333"]
+}

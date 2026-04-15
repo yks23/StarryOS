@@ -1,0 +1,32 @@
+{
+  "id": "issue-363",
+  "title": "`shmctl(2)`：`sys_shmctl` 在 `IPC_STAT`（只读查询 `shmid_ds`）成功后仍无条件执行 `shm_inner.shmid_ds.shm_ctime = monotonic_time_nanos()`，每次 `IPC_STAT` 都会刷新 `shm_ctime`，与 Linux 仅在实际变更 segment 元数据时更新 `shm_ctime` 的可观察语义不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T16:05:00Z",
+  "resolved_at": "2026-04-14T00:00:00Z",
+  "severity": "medium",
+  "description": "**`kernel/src/syscall/ipc/shm.rs`** **`sys_shmctl`** **（** **约** **539–567** **行** **）** **：** **`IPC_STAT`** **分支** **仅** **将** **当前** **`shmid_ds`** **复制** **到** **用户** **缓冲** **，** **属** **只读** **查询** **。** **函数** **末尾** **（** **566** **行** **）** **对** **所有** **成功** **路径** **统一** **写入** **`shm_ctime`** **。** **Linux** **`shmctl(IPC_STAT)`** **不会** **因** **查询** **而** **修改** **`shm_ctime`** **；** **ctime** **在** **`IPC_SET`** **、** **`IPC_RMID`** **等** **实际** **变更** **时** **更新** **。** **Starry** **下** **重复** **`IPC_STAT`** **会** **单调** **推进** **`shm_ctime`** **，** **破坏** **`ipcs`** **/** **`shmctl`** **监控** **与** **与** **上游** **对照** **测试** **。**\n\n**建议** **：** **将** **`shm_ctime`** **更新** **限制** **在** **`IPC_SET`** **/** **`IPC_RMID`** **（** **及** **其它** **应** ** bump** **ctime** **的** **命令** **）** **；** **`IPC_STAT`** **成功** **返回** **前** **勿** **写** **`shm_ctime`** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["shmctl"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/ipc/shm.rs:539-567"],
+    "related_files": [],
+    "key_insight": "IPC_STAT should not refresh shm_ctime"
+  },
+  "fix_summary": "`sys_shmctl`：删除成功路径末尾无条件写 **`shm_ctime`**；仅在 **`cmd == IPC_SET || IPC_RMID`** 时 **`shm_ctime = monotonic_time_nanos()`**。**`IPC_STAT`** **只读** **不** **改** **ctime**（**issue-363**）。",
+  "files_changed": [
+    "kernel/src/syscall/ipc/shm.rs",
+    "auto-evolve/memory/executor-memory.md",
+    "auto-evolve/issue-pool/issue-363.json"
+  ],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：同一 `shmid` 连续两次 `shmctl(IPC_STAT)` 对照 Linux 与 Starry 的 `shm_ctime` 是否变化。",
+    "expected_output_contains": "",
+    "pass_criteria": "`IPC_STAT` 不改变 `shm_ctime`，或与 Linux 一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "按命令分支：仅在 `IPC_SET`/`IPC_RMID` 等需要时更新 `shm_ctime`，`IPC_STAT` 路径跳过。",
+  "references": ["man 2 shmctl", "kernel/ipc/shm.c", "kernel/src/syscall/ipc/shm.rs"]
+}

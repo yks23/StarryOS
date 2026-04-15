@@ -1,6 +1,6 @@
 use alloc::{collections::btree_map::BTreeMap, sync::Arc, vec::Vec};
 
-use axerrno::{AxError, AxResult};
+use axerrno::{AxError, AxResult, LinuxError};
 use axhal::{
     paging::{MappingFlags, PageSize},
     time::monotonic_time_nanos,
@@ -8,12 +8,12 @@ use axhal::{
 use axsync::Mutex;
 use axtask::current;
 use linux_raw_sys::{ctypes::c_ushort, general::*};
-use memory_addr::{PAGE_SIZE_4K, VirtAddr, VirtAddrRange};
+use memory_addr::{MemoryAddr, PAGE_SIZE_4K, VirtAddr, VirtAddrRange};
 use starry_process::Pid;
 
-use super::{IPC_PRIVATE, IPC_RMID, IPC_SET, IPC_STAT, IpcPerm, next_ipc_id};
+use super::{IPC_CREAT, IPC_EXCL, IPC_PRIVATE, IPC_RMID, IPC_SET, IPC_STAT, IpcPerm, next_ipc_id};
 use crate::{
-    mm::{Backend, SharedPages, UserPtr, nullable},
+    mm::{AddrSpace, Backend, SharedPages, UserPtr},
     task::AsThread,
 };
 
@@ -28,6 +28,21 @@ bitflags::bitflags! {
         /* take-over region on attach */
         const SHM_REMAP = 0o40000;
     }
+}
+
+/// Linux `SHMLBA` for this port: shared memory attach addresses align to a 4 KiB boundary.
+const SHMLBA: usize = PAGE_SIZE_4K;
+
+fn shmat_range_has_mapping(aspace: &AddrSpace, start: VirtAddr, len: usize) -> bool {
+    let end = start.as_usize().saturating_add(len);
+    let mut pos = memory_addr::align_down_4k(start.as_usize());
+    while pos < end {
+        if aspace.find_area(VirtAddr::from(pos)).is_some() {
+            return true;
+        }
+        pos = pos.saturating_add(PAGE_SIZE_4K);
+    }
+    false
 }
 
 /// Data structure describing a shared memory segment.
@@ -114,17 +129,21 @@ impl ShmInner {
         }
     }
 
-    /// Updates the pid of last shmop and checks if the size and mapping flags
-    /// match.
+    /// Updates the pid of last shmop for an existing key (`shmget` open path).
+    ///
+    /// Linux only returns `EINVAL` when the requested `size` is **greater** than
+    /// `shm_segsz`; `size == 0` means access-only (issue-381). Mode bits must still match.
     pub fn try_update(
         &mut self,
         size: usize,
         mapping_flags: MappingFlags,
         pid: Pid,
     ) -> AxResult<isize> {
-        if size as __kernel_size_t != self.shmid_ds.shm_segsz
-            || mapping_flags.bits() as __kernel_mode_t != self.shmid_ds.shm_perm.mode
-        {
+        let segsz = self.shmid_ds.shm_segsz as usize;
+        if size != 0 && size > segsz {
+            return Err(AxError::InvalidInput);
+        }
+        if mapping_flags.bits() as __kernel_mode_t != self.shmid_ds.shm_perm.mode {
             return Err(AxError::InvalidInput);
         }
         self.shmid_ds.shm_lpid = pid as i32;
@@ -372,11 +391,6 @@ impl ShmManager {
 pub static SHM_MANAGER: Mutex<ShmManager> = Mutex::new(ShmManager::new());
 
 pub fn sys_shmget(key: i32, size: usize, shmflg: usize) -> AxResult<isize> {
-    let page_num = memory_addr::align_up_4k(size) / PAGE_SIZE_4K;
-    if page_num == 0 {
-        return Err(AxError::InvalidInput);
-    }
-
     let mut mapping_flags = MappingFlags::from_name("USER").unwrap();
     if shmflg & 0o400 != 0 {
         mapping_flags.insert(MappingFlags::READ);
@@ -392,14 +406,30 @@ pub fn sys_shmget(key: i32, size: usize, shmflg: usize) -> AxResult<isize> {
     let mut shm_manager = SHM_MANAGER.lock();
 
     if key != IPC_PRIVATE {
-        // This process has already created a shared memory segment with the same key
         if let Some(shmid) = shm_manager.get_shmid_by_key(key) {
             let shm_inner = shm_manager
                 .get_inner_by_shmid(shmid)
                 .ok_or(AxError::InvalidInput)?;
             let mut shm_inner = shm_inner.lock();
+            // Linux `ipcget`: existing id + `IPC_CREAT | IPC_EXCL` → `EEXIST` (same theme as `msgget`,
+            // issue-382).
+            let flg = shmflg as i32;
+            if (flg & IPC_EXCL) != 0 && (flg & IPC_CREAT) != 0 {
+                return Err(AxError::from(LinuxError::EEXIST));
+            }
             return shm_inner.try_update(size, mapping_flags, cur_pid);
         }
+        // No segment for this key: require `IPC_CREAT`, else `ENOENT` (Linux `shmget`, issue-382).
+        if (shmflg as i32 & IPC_CREAT) == 0 {
+            return Err(AxError::from(LinuxError::ENOENT));
+        }
+    }
+
+    // New segment only: `size == 0` is EINVAL (Linux: new `shmget` must have positive size).
+    // Existing key path above allows `size == 0` as access-only (issue-381).
+    let page_num = memory_addr::align_up_4k(size) / PAGE_SIZE_4K;
+    if page_num == 0 {
+        return Err(AxError::InvalidInput);
     }
 
     // Create a new shm_inner
@@ -418,46 +448,77 @@ pub fn sys_shmget(key: i32, size: usize, shmflg: usize) -> AxResult<isize> {
 }
 
 pub fn sys_shmat(shmid: i32, addr: usize, shmflg: u32) -> AxResult<isize> {
+    // Resolve `shmid` before rejecting unknown `shmflg` bits so invalid segment id surfaces first
+    // (Linux `do_shmat` / `shm_lock` ordering; same theme as `sys_memfd_create` name vs `flags`,
+    // issue-305; issue-307).
     let shm_inner = {
         let shm_manager = SHM_MANAGER.lock();
-        shm_manager.get_inner_by_shmid(shmid).unwrap()
+        shm_manager
+            .get_inner_by_shmid(shmid)
+            .ok_or(AxError::InvalidInput)?
     };
+    const VALID_SHMAT_FLAGS: u32 = ShmAtFlags::SHM_RDONLY.bits()
+        | ShmAtFlags::SHM_RND.bits()
+        | ShmAtFlags::SHM_REMAP.bits();
+    if shmflg & !VALID_SHMAT_FLAGS != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    let shm_flg = ShmAtFlags::from_bits(shmflg).ok_or(AxError::InvalidInput)?;
+
     let mut shm_inner = shm_inner.lock();
     let mut mapping_flags = shm_inner.mapping_flags;
-    let shm_flg = ShmAtFlags::from_bits_truncate(shmflg);
 
     if shm_flg.contains(ShmAtFlags::SHM_RDONLY) {
         mapping_flags.remove(MappingFlags::WRITE);
     }
 
-    // TODO: solve shmflg: SHM_RND and SHM_REMAP
-
     let curr = current();
     let proc_data = &curr.as_thread().proc_data;
     let pid = proc_data.proc.pid();
-    let mut aspace = proc_data.aspace.lock();
+    let mut aspace = proc_data.aspace.write();
 
-    let start_aligned = memory_addr::align_down_4k(addr);
     let length = shm_inner.page_num * PAGE_SIZE_4K;
 
     // alloc the virtual address range
     assert!(shm_inner.get_addr_range(pid).is_none());
-    let start_addr = aspace
-        .find_free_area(
-            VirtAddr::from(start_aligned),
-            length,
-            VirtAddrRange::new(aspace.base(), aspace.end()),
-            PAGE_SIZE_4K,
-        )
-        .or_else(|| {
-            aspace.find_free_area(
-                aspace.base(),
+    let start_addr = if addr == 0 {
+        aspace
+            .find_free_area(
+                VirtAddr::from(0usize),
                 length,
                 VirtAddrRange::new(aspace.base(), aspace.end()),
                 PAGE_SIZE_4K,
             )
-        })
-        .ok_or(AxError::NoMemory)?;
+            .or_else(|| {
+                aspace.find_free_area(
+                    aspace.base(),
+                    length,
+                    VirtAddrRange::new(aspace.base(), aspace.end()),
+                    PAGE_SIZE_4K,
+                )
+            })
+            .ok_or(AxError::NoMemory)?
+    } else {
+        let eff = if shm_flg.contains(ShmAtFlags::SHM_RND) {
+            addr & !(SHMLBA - 1)
+        } else if !addr.is_multiple_of(SHMLBA) {
+            return Err(AxError::InvalidInput);
+        } else {
+            addr
+        };
+        let start = VirtAddr::from(eff);
+        if !aspace.contains_range(start, length) {
+            return Err(AxError::NoMemory);
+        }
+        if shmat_range_has_mapping(&aspace, start, length) {
+            if shm_flg.contains(ShmAtFlags::SHM_REMAP) {
+                aspace.unmap(start, length)?;
+            } else {
+                return Err(AxError::InvalidInput);
+            }
+        }
+        start
+    };
     let end_addr = VirtAddr::from(start_addr.as_usize() + length);
     let va_range = VirtAddrRange::new(start_addr, end_addr);
 
@@ -501,18 +562,27 @@ pub fn sys_shmctl(shmid: i32, cmd: u32, buf: UserPtr<ShmidDs>) -> AxResult<isize
 
     let cmd = cmd as i32;
     if cmd == IPC_SET {
-        shm_inner.shmid_ds = *buf.get_as_mut()?;
+        // Linux `shmctl(IPC_SET)`: apply only `shm_perm.uid` / `shm_perm.gid` / permission bits of
+        // `shm_perm.mode` from the user's `shmid_ds`. Kernel-owned fields (`shm_segsz`, `shm_nattch`,
+        // timestamps, `shm_cpid` / `shm_lpid`, etc.) must not be replaced from userland (issue-214).
+        let user = buf.get_as_mut()?;
+        shm_inner.shmid_ds.shm_perm.uid = user.shm_perm.uid;
+        shm_inner.shmid_ds.shm_perm.gid = user.shm_perm.gid;
+        shm_inner.shmid_ds.shm_perm.mode = user.shm_perm.mode & 0o777;
     } else if cmd == IPC_STAT {
-        if let Some(shmid_ds) = nullable!(buf.get_as_mut())? {
-            *shmid_ds = shm_inner.shmid_ds;
-        }
+        // Linux shmctl(IPC_STAT): buf must point to writable shmid_ds; NULL → EFAULT (issue-152).
+        *buf.get_as_mut()? = shm_inner.shmid_ds;
     } else if cmd == IPC_RMID {
         shm_inner.rmid = true;
     } else {
         return Err(AxError::InvalidInput);
     }
 
-    shm_inner.shmid_ds.shm_ctime = monotonic_time_nanos() as __kernel_time_t;
+    // Linux `shmctl`: `shm_ctime` is the time of last change by `IPC_SET`/`IPC_RMID`, not bumped by
+    // read-only `IPC_STAT` (issue-363).
+    if cmd == IPC_SET || cmd == IPC_RMID {
+        shm_inner.shmid_ds.shm_ctime = monotonic_time_nanos() as __kernel_time_t;
+    }
     Ok(0)
 }
 
@@ -531,7 +601,14 @@ pub fn sys_shmctl(shmid: i32, cmd: u32, buf: UserPtr<ShmidDs>) -> AxResult<isize
 // Note: all the below delete functions only delete the mapping between the
 // shm_id and the shm_inner,   but the shm_inner is not deleted or modifyed!
 pub fn sys_shmdt(shmaddr: usize) -> AxResult<isize> {
+    // Linux `shmdt(2)`: `shmaddr` must be the attach address from `shmat`; NULL/0 and unaligned → EINVAL.
+    if shmaddr == 0 {
+        return Err(AxError::InvalidInput);
+    }
     let shmaddr = VirtAddr::from(shmaddr);
+    if !shmaddr.is_aligned(PAGE_SIZE_4K) {
+        return Err(AxError::InvalidInput);
+    }
 
     let curr = current();
     let proc_data = &curr.as_thread().proc_data;
@@ -553,7 +630,7 @@ pub fn sys_shmdt(shmaddr: usize) -> AxResult<isize> {
     let mut shm_inner = shm_inner.lock();
     let va_range = shm_inner.get_addr_range(pid).ok_or(AxError::InvalidInput)?;
 
-    let mut aspace = proc_data.aspace.lock();
+    let mut aspace = proc_data.aspace.write();
     aspace.unmap(va_range.start, va_range.size())?;
 
     let mut shm_manager = SHM_MANAGER.lock();

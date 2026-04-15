@@ -1,0 +1,27 @@
+{
+  "id": "issue-281",
+  "title": "statfs/fstatfs：`buf == NULL` 时仍先 resolve 路径或 lookup fd，错误顺序可与 Linux 分叉",
+  "status": "resolved",
+  "created_at": "2026-04-12T23:58:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_statfs`：在 `vm_load_string`/`resolve` 之前若 `buf.is_null()` 则 `BadAddress`（EFAULT）。`sys_fstatfs`：在 `location_from_fd` 之前同样检查。避免 VFS 已成功而仅在 `vm_write` 失败时的错误顺序。",
+  "files_changed": ["kernel/src/syscall/fs/stat.rs"],
+  "description": "**`kernel/src/syscall/fs/stat.rs`** **`sys_statfs`**（约 **203–214** 行）先 **`vm_load_string(path)?`** **与** **`FS_CONTEXT.lock().resolve(path)?`** **得到** **`statfs`** **数据**，**最后** **`buf.vm_write(...)?`**。**若** **`buf`** **为** **NULL** **（** **或** **不可写** **）**，**失败** **发生** **在** **路径** **解析** **成功** **之后** **。**\n\n**`sys_fstatfs`**（约 **217–222** 行）同理：**先** **`location_from_fd(fd)?`** **与** **`statfs(&loc)?`**，**再** **`buf.vm_write`**。\n\n**Linux `statfs`/`fstatfs`** **常见** **路径** **在** **向** **用户** **拷贝** **`struct statfs`** **前** **对** **`buf`****做** **`access_ok`/`copy_to_user`** **探测** **；** **当** **`buf`** **非法** **时** **通常** **`EFAULT`** **，** **且** **与** **「** **路径** **不存在** **」** **等** **错误** **的** **先后** **顺序** **可能** **与** **「** **先** **完成** **vfs** **解析** **再** **发现** **`EFAULT`****」** **不同** **（** **具体** **以** **当前** **内核** **`user_access_begin`** **顺序** **为准** **）** **。** **当前** **Starry** **在** **`buf==NULL`** **时** **仍** **可能** **执行** **完整** **`resolve`** **/****`location_from_fd`** **与** **`stat()`** **工作** **，** **仅** **在** **最后** **`vm_write`** **失败** **，** **与** **依赖** **Linux** **式** **「** **先** **EFAULT** **」** **的** **测试** **或** **安全** **审计** **假设** **可能** **不一致** **。**\n\n**建议**：在 **`sys_statfs`** **中** **于** **`resolve`** **之前** **（** **或** **紧接** **`vm_load_string`** **之后** **）** **显式** **`if buf.is_null() { return Err(BadAddress); }`** **（** **或与** **`vm_write`** **失败** **码** **一致** **的** **用户** **指针** **校验** **）** **；** **`sys_fstatfs`** **在** **`location_from_fd`** **之前** **或** **之后** **尽早** **校验** **`buf`** **可写** **。** **若** **希望** **完全** **对齐** **某一** **Linux** **版本** **的** **错误** **顺序** **，** **需** **对照** **该** **版本** **`SYSCALL_DEFINE`** **路径** **逐条** **比对** **。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["statfs", "fstatfs"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/stat.rs:203-222"],
+    "related_files": [],
+    "key_insight": "NULL buf 时仍先做 vfs/stat 再 vm_write，错误顺序与 Linux 可能不同"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 Linux statfs/fstatfs 对用户缓冲区的校验顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "非法 buf 时的错误码与顺序与目标 Linux 行为一致，或显式文档化差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `sys_statfs`/`sys_fstatfs` 入口对 `buf` 做与 `vm_write` 等价的可写/非空检查，再进入 resolve/lookup。",
+  "references": ["man 2 statfs", "man 2 fstatfs", "kernel/src/syscall/fs/stat.rs"]
+}

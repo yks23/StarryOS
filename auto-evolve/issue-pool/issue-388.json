@@ -1,0 +1,27 @@
+{
+  "id": "issue-388",
+  "title": "`fspick(2)`：`sys_fspick` 忽略 `flags`，未知 `FSPICK_*` 位未在 `get_as_str` 前拒绝为 `EINVAL`",
+  "status": "resolved",
+  "created_at": "2026-04-14T00:00:00Z",
+  "severity": "low",
+  "description": "`kernel/src/syscall/fs/mount.rs` `sys_fspick`（约 139–147 行）：形参 `_flags: u32` 未使用。Linux `fspick(2)` 仅允许定义的 `FSPICK_*` 掩码（如 `FSPICK_SYMLINK_NOFOLLOW`、`FSPICK_NO_AUTOMOUNT`、`FSPICK_EMPTY_PATH`，见 `uapi/linux/mount.h`）；**保留位** 应 **`EINVAL`**。\n\n当前路径：`dfd != AT_FDCWD` 时 **`Directory::from_fd`**（**`EBADF`**）→ **`pathname.get_as_str()`** → 桩 **`Unsupported`**。**从未** 因非法 **`flags`** 失败，与同文件 **`sys_fsopen`**（issue-386 **verified**）、**`sys_open_tree`**（issue-387 **open**）及 **`openat`** **flags-first** 主题不一致。\n\n建议：定义 `FSPICK_*` 常量及 **`FSPICK_KNOWN_FLAGS`**（与内核 uapi 对齐或按 Starry 子集收紧）；在 **`get_as_str`** **之前**、**`from_fd`** **之后** 校验 **`flags & !KNOWN != 0`** → **`InvalidInput`**，以保持 **`EBADF`** 优先于 **`EINVAL`**。桩返回 **`ENOSYS`** 前仍应先拒绝未知位。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["fspick"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/mount.rs:139-148"],
+    "related_files": ["kernel/src/syscall/fs/mount.rs:119-137", "kernel/src/syscall/fs/mount.rs:150-158"],
+    "key_insight": "EBADF 先于非法 `FSPICK_*`；`FSPICK_KNOWN` = 三 `AT_*`位（Linux mount.h）"
+  },
+  "fix_summary": "`sys_fspick`：`FSPICK_KNOWN_FLAGS` = `AT_SYMLINK_NOFOLLOW|AT_NO_AUTOMOUNT|AT_EMPTY_PATH`；在 `from_fd` 之后、`get_as_str` 之前拒绝未知位为 `InvalidInput`（issue-388）。",
+  "files_changed": ["kernel/src/syscall/fs/mount.rs"],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：非法 `FSPICK_*` 位 + 合法 `pathname` 对照 Linux `errno`。",
+    "expected_output_contains": "",
+    "pass_criteria": "未知 `flags` 返回 EINVAL（`InvalidInput`），无效 `dfd` 仍先返回 EBADF。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（仓库既有警告）"
+  },
+  "suggested_fix": "校验 `FSPICK_*` 掩码后再读 `pathname`；与 issue-386/`fsopen`、issue-387/`open_tree` 同文件模式一致。",
+  "references": ["man 2 fspick", "kernel/src/syscall/fs/mount.rs", "issue-386", "issue-387", "issue-323"]
+}

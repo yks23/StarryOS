@@ -1,0 +1,32 @@
+{
+  "id": "issue-189",
+  "title": "recvmsg：`CMsgBuilder::new` 在 `socket.recv` 之前将用户 `msg_controllen` 置 0，失败路径已篡改 `msghdr`",
+  "status": "resolved",
+  "created_at": "2026-04-13T23:00:00Z",
+  "severity": "medium",
+  "fix_summary": "`CMsgBuilder::new` 仅读取 **`capacity = *len`**，用内部字段 **`written`** 累计对齐后 ancillary 长度；**`remaining()`** 基于 **`capacity - written`**。**`recv_on_socket`** 在 **`socket.recv` 成功**并完成 cmsg 写回逻辑后调用 **`builder.commit()`** 一次性设置 **`msg.msg_controllen = written`**（无 ancillary 时为 0）。**`recv` 失败或后续 `?` 提前返回**时不再提前清零用户 **`msg_controllen`**，与 Linux 失败路径尽量不修改 **`msghdr`** 的约定一致。**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过。",
+  "files_changed": [
+    "kernel/src/syscall/net/cmsg.rs",
+    "kernel/src/syscall/net/io.rs",
+    "auto-evolve/issue-pool/issue-189.json",
+    "auto-evolve/memory/executor-memory.md"
+  ],
+  "description": "**`kernel/src/syscall/net/cmsg.rs`** **`CMsgBuilder::new`** 在读取 **`capacity = *len`** 后立即 **` *len = 0`**。**`kernel/src/syscall/net/io.rs`** **`sys_recvmsg`** 在调用 **`recv_on_socket`** 时通过 **`CMsgBuilder::new(..., &mut msg.msg_controllen)`** 构造 **`Option<CMsgBuilder>`**，该构造在 **`recv_on_socket` 内 `socket.recv` 执行之前即完成**，故 **`msg.msg_controllen` 已被写为 0**。**若随后 `recv` 失败**（**`EAGAIN`**、**`EINTR`**、**`EINVAL`** 等），用户态 **`msghdr`** 中的 **`msg_controllen`** 已与进入 **syscall 前不同**，失去原始缓冲区长度信息。**Linux `recvmsg(2)`** 常见约定：**失败时尽量不修改** **`msghdr`** 输出字段（或仅文档化部分字段），避免与重试/审计逻辑冲突。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["recvmsg"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/net/io.rs:297-316", "kernel/src/syscall/net/cmsg.rs:67-74"],
+    "related_files": [],
+    "key_insight": "`new` 侧效应对用户 `*len` 发生在 `recv` 之前"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": " **`recvmsg`** 配非空 **`msg_control`**，令 **`recv` 失败**（如 **`MSG_DONTWAIT` 无数据**），对比 **进入前后** **`msg_controllen`**；与 **Linux** 行为对照。",
+    "expected_output_contains": "",
+    "pass_criteria": "**失败路径**不破坏用户 **`msg_controllen`**（或文档化差异）；成功路径仍可写回实际 ancillary 长度。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（2026-04-12）"
+  },
+  "suggested_fix": "将 **` *len = 0`** 推迟到 **`recv` 成功之后**，或仅在 **`CMsgBuilder` 内部**维护已写字节数、结束时再一次性写回；失败时用 **`Drop`/显式恢复** 还原用户 **`controllen`**（若未提交 ancillary）。",
+  "references": ["man 2 recvmsg", "Linux __sys_recvmsg"]
+}

@@ -1,33 +1,114 @@
-use core::sync::atomic::{Ordering, compiler_fence};
+//! `membarrier(2)` — Linux command values are **single-bit masks** (see `uapi/linux/membarrier.h`).
+//!
+//! Non-`QUERY` commands that actually order memory use a **CPU** [`atomic::fence`] with
+//! [`Ordering::SeqCst`], not `compiler_fence`, so the hardware enforces ordering on this hart.
+//!
+//! **SMP / QUERY:** Linux `MEMBARRIER_CMD_GLOBAL` and `MEMBARRIER_CMD_GLOBAL_EXPEDITED` order
+//! memory across **all** CPUs (IPI). This kernel has no cross-hart barrier yet, so
+//! **`MEMBARRIER_CMD_QUERY` does not advertise those bits** — only commands whose implementation
+//! is local-hart (`PRIVATE_*` + their `REGISTER_*`). Unadvertised command bits still return
+//! **`EINVAL`** if invoked. See issue-203.
+//!
+//! **Registration:** `PRIVATE_*` expedited commands require a prior matching `REGISTER_*` on the
+//! calling process (**`EINVAL`** otherwise), matching Linux `membarrier.c`.
+
+use core::sync::atomic::{self, Ordering};
 
 use axerrno::{AxError, AxResult};
+use axtask::current;
 
-/// Memory barrier commands
+use crate::task::AsThread;
+
+/// `MEMBARRIER_CMD_QUERY`
 const MEMBARRIER_CMD_QUERY: i32 = 0;
-const MEMBARRIER_CMD_GLOBAL: i32 = 1;
-const MEMBARRIER_CMD_GLOBAL_EXPEDITED: i32 = 2;
-const MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED: i32 = 3;
-const MEMBARRIER_CMD_PRIVATE_EXPEDITED: i32 = 4;
-const MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED: i32 = 5;
+/// `MEMBARRIER_CMD_PRIVATE_EXPEDITED` — `(1 << 3)`
+const MEMBARRIER_CMD_PRIVATE_EXPEDITED: i32 = 1 << 3;
+/// `MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED` — `(1 << 4)`
+const MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED: i32 = 1 << 4;
+/// `MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE` — `(1 << 5)`
+const MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE: i32 = 1 << 5;
+/// `MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE` — `(1 << 6)`
+const MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE: i32 = 1 << 6;
 
-/// Supported command flags for query
-const SUPPORTED_COMMANDS: i32 = (1 << MEMBARRIER_CMD_GLOBAL)
-    | (1 << MEMBARRIER_CMD_GLOBAL_EXPEDITED)
-    | (1 << MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED)
-    | (1 << MEMBARRIER_CMD_PRIVATE_EXPEDITED)
-    | (1 << MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED);
+/// Bitmask returned by `MEMBARRIER_CMD_QUERY`: **only** commands with correct local-hart semantics
+/// here (no `GLOBAL*` / `REGISTER_GLOBAL_EXPEDITED` until SMP-wide barriers exist; issue-203).
+const SUPPORTED_COMMANDS: i32 = MEMBARRIER_CMD_PRIVATE_EXPEDITED
+    | MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED
+    | MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE
+    | MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE;
+
+#[inline]
+fn membarrier_cpu_local_fence() {
+    atomic::fence(Ordering::SeqCst);
+}
+
+/// Extra core serialization for `PRIVATE_EXPEDITED_SYNC_CORE` (best-effort per architecture).
+#[inline]
+fn membarrier_sync_core() {
+    membarrier_cpu_local_fence();
+    #[cfg(target_arch = "riscv64")]
+    unsafe {
+        // Instruction-fetch barrier: flushes pipeline visibility for this hart (see Linux rseq/membarrier notes).
+        core::arch::asm!("fence.i", options(nostack, preserves_flags));
+    }
+}
+
+#[inline]
+fn is_single_command_bit(cmd: i32) -> bool {
+    let u = cmd as u32;
+    u != 0 && (u & u.wrapping_sub(1)) == 0
+}
 
 pub fn sys_membarrier(cmd: i32, flags: u32, _cpu_id: i32) -> AxResult<isize> {
-    // 检查 flags 参数，目前应该为 0
     if flags != 0 {
         return Err(AxError::InvalidInput);
     }
 
+    if cmd == MEMBARRIER_CMD_QUERY {
+        return Ok(SUPPORTED_COMMANDS as isize);
+    }
+
+    if !is_single_command_bit(cmd) {
+        return Err(AxError::InvalidInput);
+    }
+
+    let task = current();
+    let pd = &*task.as_thread().proc_data;
+
     match cmd {
-        MEMBARRIER_CMD_QUERY => Ok(SUPPORTED_COMMANDS as isize),
-        _ => {
-            compiler_fence(Ordering::SeqCst);
+        MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED => {
+            pd.membarrier_reg_private_expedited
+                .store(true, Ordering::Relaxed);
             Ok(0)
         }
+        MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE => {
+            pd.membarrier_reg_private_expedited_sync_core
+                .store(true, Ordering::Relaxed);
+            Ok(0)
+        }
+
+        MEMBARRIER_CMD_PRIVATE_EXPEDITED => {
+            if !pd
+                .membarrier_reg_private_expedited
+                .load(Ordering::Relaxed)
+            {
+                return Err(AxError::InvalidInput);
+            }
+            membarrier_cpu_local_fence();
+            Ok(0)
+        }
+
+        MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE => {
+            if !pd
+                .membarrier_reg_private_expedited_sync_core
+                .load(Ordering::Relaxed)
+            {
+                return Err(AxError::InvalidInput);
+            }
+            membarrier_sync_core();
+            Ok(0)
+        }
+
+        _ => Err(AxError::InvalidInput),
     }
 }

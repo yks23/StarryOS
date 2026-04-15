@@ -1,0 +1,27 @@
+{
+  "id": "issue-280",
+  "title": "mprotect：`length == 0` 时 Linux 成功 no-op，Starry 返回 EINVAL",
+  "status": "resolved",
+  "created_at": "2026-04-12T23:50:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_mprotect`：在 `MmapProt` 与 `addr` 页对齐校验通过后，若 `length == 0` 则 `Ok(0)` 不调用 `aspace.protect`，对齐 Linux `do_mprotect_pkey` 的 `if (!len) return 0`。`munmap` 的 `length==0` → EINVAL 不变。",
+  "files_changed": ["kernel/src/syscall/mm/mmap.rs"],
+  "description": "**`kernel/src/syscall/mm/mmap.rs`** **`sys_mprotect`**（约 **322–331** 行）在 **`prot`** **解析** **后** **若** **`length == 0`** **直接** **`return Err(AxError::InvalidInput)`**。\n\n**Linux `mm/mprotect.c` `do_mprotect_pkey`**（**`SYSCALL_DEFINE3(mprotect, …)`** **路径**）：在 **`start`** **页对齐** **等** **检查** **之后** **有** **`if (!len) return 0;`**，**即** **`len == 0`** **时** **成功** **返回** **0** **且** **不** **修改** **任何** **映射**（**no-op**）。**POSIX** **亦** **允许** **实现** **将** **零长度** **视为** **无** **操作** **（** **Linux** **自** **2.6.17** **起** **采用** **该** **行为** **）**。\n\n**当前** **Starry** **与** **Linux** **在** **`mprotect(addr, 0, prot)`** **上** **分叉**：**glibc/应用** **若** **依赖** **零长度** **no-op** **成功**，**可能** **收到** **`EINVAL`** **而非** **0**。\n\n**对照**：同文件 **`sys_munmap`** **`length == 0`** **→** **`EINVAL`** **与** **Linux** **一致**（**勿** **混淆** **两** **syscall** **）**。\n\n**建议**：在 **`length == 0`** **时** **于** **页对齐** **等** **前置** **校验** **通过后** **直接** **`return Ok(0)`**（**或** **与** **内核** **一致** **的** **顺序**：**对齐** **失败** **仍** **EINVAL**，**对齐** **通过** **且** **len==0** **→** **Ok(0)** **）**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["mprotect"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/mm/mmap.rs:322-331"],
+    "related_files": [],
+    "key_insight": "Linux do_mprotect_pkey len==0 早退成功，Starry InvalidInput"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；对照 Linux `mm/mprotect.c` `do_mprotect_pkey` 中 `if (!len) return 0`。",
+    "expected_output_contains": "",
+    "pass_criteria": "页对齐合法且 length==0 时 mprotect 返回 0，或与 Linux 一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `sys_mprotect` 中于 `VirtAddr` 对齐校验之后、非零长度处理之前：若 `length == 0` 则 `Ok(0)`。",
+  "references": ["man 2 mprotect", "Linux mm/mprotect.c do_mprotect_pkey", "kernel/src/syscall/mm/mmap.rs"]
+}

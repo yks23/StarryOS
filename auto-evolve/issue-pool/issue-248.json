@@ -1,0 +1,27 @@
+{
+  "id": "issue-248",
+  "title": "preadv2/pwritev2：`flags`（RWF_*）被忽略，未知位未 EINVAL（与 Linux 不一致）",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`sys_preadv2`/`sys_pwritev2`：引入 `linux_raw_sys::general` 的 `RWF_*` 与 `RWF_MASK`；`flags & !RWF_MASK` → `InvalidInput`（EINVAL）；掩码内非零 → `OperationNotSupported`（EOPNOTSUPP），直至实现 `RWF_*` 语义。`check_rwf_flags` 供二者共用。",
+  "files_changed": ["kernel/src/syscall/fs/io.rs"],
+  "description": "**`kernel/src/syscall/fs/io.rs`** **`sys_preadv2`** / **`sys_pwritev2`**（约 **289–321** 行）将最后一个参数记为 **`_flags`**，**仅** 写入 **`debug!`**，**未** 校验或解释 **`RWF_*`**。\n\n**Linux `preadv2(2)`/`pwritev2(2)`**：**`flags`** 可为 **`RWF_HIPRI`**、**`RWF_DSYNC`**、**`RWF_SYNC`**、**`RWF_APPEND`** 等（**`uapi/linux/fs.h`**）；**保留位/未知非零组合** 通常 **`EINVAL`**。当前实现对 **`flags != 0`** **静默按 `flags==0` 路径**完成 **`read_at`/`write_at`**，既不拒绝未支持语义，也不保证与 **O_DIRECT**/**append**/**dsync** 相关的 **Linux** 行为一致。\n\n**建议**：校验 **`flags`** 仅含已知子集；**未知位** → **`InvalidInput`**；**`RWF_HIPRI`/`DSYNC`/`SYNC`/`APPEND`** 在未实现前 → **`OperationNotSupported`** 或按 **VFS** 能力降级实现。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["preadv2", "pwritev2"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/io.rs:289-321"],
+    "related_files": [],
+    "key_insight": "`_flags` 未参与控制流"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；`preadv2` 带非零 `flags` 与 Linux 对照。",
+    "expected_output_contains": "",
+    "pass_criteria": "未知 RWF_* → EINVAL；已定义标志与 Linux 或明确 EOPNOTSUPP。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0）"
+  },
+  "suggested_fix": "引入 `RWF_*` 掩码；`flags & !KNOWN` → EINVAL；其余分路径或 EOPNOTSUPP。",
+  "references": ["man 2 preadv2", "uapi/linux/fs.h RWF_*"]
+}

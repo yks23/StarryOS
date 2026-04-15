@@ -1,0 +1,31 @@
+{
+  "id": "issue-190",
+  "title": "prlimit64：`vm_read_uninit`+`assume_init` 读 `rlimit64`，FIXME AnyBitPattern，与 Pod 安全边界脆弱",
+  "status": "resolved",
+  "created_at": "2026-04-14T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`sys_prlimit64`** 对用户 **`new_limit`**改为按 Linux **`rlimit64`**（两 **`__u64`**）分两次 **`u64::vm_read()`**，再 **`rlimit64 { rlim_cur, rlim_max }`** 字面量构造；去掉 **`vm_read_uninit`/`assume_init`** 与 **`FIXME: AnyBitPattern`**。标量读仍依赖 **`bytemuck::AnyBitPattern`**（**`u64`**），整型布局与 uapi 一致。**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过。",
+  "files_changed": [
+    "kernel/src/syscall/resources.rs",
+    "auto-evolve/issue-pool/issue-190.json",
+    "auto-evolve/memory/executor-memory.md"
+  ],
+  "description": "**`kernel/src/syscall/resources.rs`** **`sys_prlimit64`** 在应用 **`new_limit`** 时使用 **`// FIXME: AnyBitPattern`** 与 **`unsafe { new_limit.vm_read_uninit()?.assume_init() }`**。**`rlimit64`** 在 **`linux_raw_sys`** 中虽多为整数对，但 **`assume_init`** 要求 **`MaybeUninit<rlimit64>` 已完全初始化**；若 **`vm_read_uninit`** 路径或 **`rlimit64` 布局** 与假设不符，或未来 **`uapi` 增字段/填充**，存在与 **issue-184/`getrusage`**、**issue-175/`statfs`** 同类的 **技术债**。**更稳妥**：**字段级 `vm_read`**、**`rlimit64 { rlim_cur: ..., rlim_max: ... }`** 显式构造，或 **`zerocopy::FromBytes`** 等可审计路径。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["prlimit64"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/resources.rs:41-45"],
+    "related_files": ["kernel/src/syscall/resources.rs:93-113"],
+    "key_insight": "`assume_init()` + FIXME AnyBitPattern"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "**MIRI**（若可跑内核单测）或静态审查：**`rlimit64`** 是否 **`Pod`**；畸形用户缓冲是否可导致 **未初始化假设**。",
+    "expected_output_contains": "",
+    "pass_criteria": "消除 **`assume_init`** 或证明类型/读路径 **`Pod`** 安全；**`linux_raw_sys` 升级**时编译期暴露遗漏。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（2026-04-12）"
+  },
+  "suggested_fix": "**`let new_limit = new_limit.vm_read()`**（若存在 **`VmRead` for `rlimit64`**）或 **`rlimit64 { rlim_cur: UserConstPtr::from(...).field... }`**；与 **`sys_getrlimit`/`setrlimit`** 路径统一。",
+  "references": ["man 2 prlimit", "issue-184", "Rust MaybeUninit"]
+}

@@ -1,0 +1,27 @@
+{
+  "id": "issue-184",
+  "title": "getrusage：`From<Rusage> for rusage` 用 `mem::zeroed` + FIXME，uapi 扩展与 Rust 安全边界脆弱",
+  "status": "resolved",
+  "created_at": "2026-04-13T14:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`impl From<Rusage> for rusage`**：改为 **`rusage { ru_utime, ru_stime, ru_maxrss, … }`** 显式初始化全部 **`linux_raw_sys`** 字段，未统计项 **`0`**；删除 **`mem::zeroed`** 与 FIXME（对齐 issue-175 **`statfs`**）。",
+  "files_changed": ["kernel/src/syscall/resources.rs"],
+  "description": "**`kernel/src/syscall/resources.rs`** 中 **`impl From<Rusage> for rusage`** 使用 **`// FIXME: Zeroable`** 与 **`let mut usage: rusage = unsafe { core::mem::zeroed() }`**，再写入 **`ru_utime`/`ru_stime`/`ru_maxrss`**。其余 **`rusage`** 字段（**`ru_minflt`**、**`ru_majflt`**、**`ru_nvcsw`** 等）依赖零初始化。**风险**与 **issue-175**（**`statfs`**）同类：**`linux_raw_sys::general::rusage`** 若新增字段或零初始化不再合法，存在 **UB** 与 **用户态可见 ABI** 静默偏离 **Linux** 的可能；新增字段时编译器**不会**像结构体字面量那样强制补全赋值。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["getrusage"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/resources.rs:93-101"],
+    "related_files": ["kernel/src/syscall/fs/stat.rs"],
+    "key_insight": "`mem::zeroed()` + 部分字段 + FIXME，与已修复的 `statfs` 模式相同"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "对比 **Starry** 与 **Linux** 在同一进程上 **`getrusage(RUSAGE_SELF, ...)`** 返回的 **`struct rusage`**（未实现字段允许为 0，但 padding/保留位与结构大小须一致）。",
+    "expected_output_contains": "",
+    "pass_criteria": "用 **`rusage { ... }` 全字段字面量**（未统计字段显式 **0**）或 **`MaybeUninit`/安全构造** 替代 **`zeroed()`**；**`linux_raw_sys` 升级**时编译期暴露遗漏。",
+    "last_result": "`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos` 通过（未跑对照测试）。"
+  },
+  "suggested_fix": "仿 **issue-175** 修复：**`rusage { ru_utime: ..., ru_stime: ..., ru_maxrss: ..., ... }`** 为 **`linux_raw_sys`** 中**全部** ABI 字段显式赋值（含 **`..Default::default()`** 若类型支持且语义正确），删除 **`unsafe`** **`zeroed()`**。",
+  "references": ["man 2 getrusage", "issue-175 statfs 字面量构造"]
+}

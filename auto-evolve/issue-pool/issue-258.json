@@ -1,0 +1,27 @@
+{
+  "id": "issue-258",
+  "title": "memfd_create/memfd_secret：可同时指定 `MFD_EXEC` 与 `MFD_NOEXEC_SEAL`，与 Linux EINVAL 互斥语义不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T00:00:00Z",
+  "severity": "low",
+  "fix_summary": "`validate_memfd_flags`：若 `MFD_EXEC` 与 `MFD_NOEXEC_SEAL` 同时置位 → `InvalidInput`（EINVAL），对齐 Linux `mm/memfd.c` `sanitize_flags`；`memfd_create`/`memfd_secret` 共用。",
+  "files_changed": ["kernel/src/syscall/fs/memfd.rs"],
+  "description": "**`kernel/src/syscall/fs/memfd.rs`** **`validate_memfd_flags`**（约 **21–49** 行）将 **`MFD_CLOEXEC | MFD_ALLOW_SEALING | MFD_HUGETLB | MFD_EXEC | MFD_NOEXEC_SEAL`** 一并列入 **`BASE`** 可接受位，**未** 拒绝 **`MFD_EXEC` 与 `MFD_NOEXEC_SEAL` 同时置位**。\n\n**Linux `mm/memfd.c` `sanitize_flags`**：**`/* Invalid if both EXEC and NOEXEC_SEAL are set. */`**，**`(flags & MFD_EXEC) && (flags & MFD_NOEXEC_SEAL)`** → **`-EINVAL`**。两标志语义冲突（可执行 vs 强制不可执行并封印）。\n\n**当前**：**`memfd_create`/`memfd_secret`** 可能接受 **`flags` 同时含两比特**，与 **Linux** **`errno`** 分叉。\n\n**建议**：若 **`(flags & MFD_EXEC) != 0 && (flags & MFD_NOEXEC_SEAL) != 0`** → **`InvalidInput`（EINVAL）**（与 **`linux_raw_sys`** 中常量名一致）。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["memfd_create", "memfd_secret"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/memfd.rs:21-53"],
+    "related_files": [],
+    "key_insight": "BASE 掩码未排除 EXEC+NOEXEC_SEAL 组合"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；`memfd_create(name, MFD_EXEC|MFD_NOEXEC_SEAL)` 与 Linux 对照。",
+    "expected_output_contains": "",
+    "pass_criteria": "两标志同时设置 → EINVAL（与 Linux）。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0）"
+  },
+  "suggested_fix": "在 `validate_memfd_flags` 中增加互斥检测后再做 huge 字段校验。",
+  "references": ["man 2 memfd_create", "Linux mm/memfd.c sanitize_flags"]
+}

@@ -1,0 +1,27 @@
+{
+  "id": "issue-381",
+  "title": "`shmget(2)`：`size == 0` 时 `sys_shmget` 一律 `InvalidInput`，与 Linux 对已存在 key 的「size 为 0 表示仅访问」语义不一致",
+  "status": "resolved",
+  "created_at": "2026-04-12T12:00:00Z",
+  "severity": "medium",
+  "description": "**`kernel/src/syscall/ipc/shm.rs`** **`sys_shmget`**（约 **389–417** 行）：**`page_num = align_up_4k(size) / PAGE_SIZE`** 为 0（即 **`size == 0`**）时在任何分支前即 **`return Err(InvalidInput)`**。Linux **`shmget(2)`** 在段已存在且 **`size`** 不大于该段大小时可成功返回标识符；手册 ERRORS 仅列「已存在段但 **`size`** 大于该段 → **`EINVAL`**」，未将 **`size == 0`** 的访问路径一律视为非法。\n\n即使放宽入口，**`ShmInner::try_update`**（约 **134–144** 行）仍要求 **`size`** 与已有 **`shmid_ds.shm_segsz`** 严格相等，**`size == 0`** 且段非零长度时也会 **`InvalidInput`**，与 Linux「仅过大 **`size`** 拒绝」仍可能分叉。\n\n建议：区分新建（**`IPC_PRIVATE`** 或 **`IPC_CREAT`** 且无现有 **key**）与访问已存在段：新建时 **`size == 0`** 可保持 **`EINVAL`**；访问时按 Linux 仅在 **`size > shm_segsz`** 时拒绝，**`size == 0`** 按仅访问处理。与 **issue-307** **`shmat`** 顺序、**issue-363** **`shmctl`** 正交。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["shmget"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/ipc/shm.rs:389-417", "kernel/src/syscall/ipc/shm.rs:134-144"],
+    "related_files": [],
+    "key_insight": "已存在 key：`size==0` 可 `shmget`；`try_update` 仅 `size > shm_segsz` 为 EINVAL；新建路径仍拒绝 `size==0`"
+  },
+  "fix_summary": "`sys_shmget`：将 `page_num==0` 检查移到「新建段」分支；已存在 key 时允许 `size==0`（仅访问）。`ShmInner::try_update`：仅当 `size != 0 && size > shm_segsz` 返回 EINVAL，不再要求与 `shm_segsz` 严格相等。",
+  "files_changed": ["kernel/src/syscall/ipc/shm.rs"],
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：已存在 key 的段上 `shmget(key, 0, 0)` 对照 Linux 返回与 errno。",
+    "expected_output_contains": "",
+    "pass_criteria": "已存在段上 `size == 0` 访问路径与 Linux 一致，或文档化差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（仓库既有警告）"
+  },
+  "suggested_fix": "推迟对 `size == 0` 的拒绝至「确定需新建段」分支；在 `try_update` 中仅在 `size > shm_segsz`（及权限）时返回错误，`size == 0` 视为匹配任意既有长度。",
+  "references": ["man 2 shmget", "kernel/src/syscall/ipc/shm.rs", "issue-307", "issue-363"]
+}

@@ -1,0 +1,27 @@
+{
+  "id": "issue-306",
+  "title": "`sched_getaffinity(2)`：`sys_sched_getaffinity` 在 `vm_write_slice(user_mask, …)` 前未对 `user_mask` 显式 `is_null()` → `BadAddress`，与同文件 `sched_setaffinity` 注释强调的 Linux 顺序及 `sys_getgroups`/`issue-304` 指针风格不一致",
+  "status": "resolved",
+  "created_at": "2026-04-15T12:05:00Z",
+  "severity": "low",
+  "fix_summary": "在 `sys_sched_getaffinity` 中于 `vm_write_slice` 之前增加 `user_mask.is_null()` → `AxError::BadAddress`，置于 `sched_resolve_task` 之后以保持 `ESRCH` 先于 `EFAULT`；注释引用 issue-283/issue-304/issue-306。`executor-memory` sched 条补充。",
+  "files_changed": ["kernel/src/syscall/task/schedule.rs", "auto-evolve/memory/executor-memory.md"],
+  "description": "**`kernel/src/syscall/task/schedule.rs`** **`sys_sched_getaffinity`** **（** **约** **182–194** **行** **）** **在** **`sched_resolve_task`** **与** **`vm_write_slice(user_mask, mask_bytes)`** **之间** **未** **对** **`user_mask.is_null()`** **做** **显式** **早退** **。** **同** **文件** **`sys_sched_setaffinity`** **注释** **写明** **Linux** **先** **解析** **`pid`** **再** **`copy_from_user(mask)`** **；** **`sys_getgroups`** **（** **`sys.rs`** **）** **对** **输出** **`list`** **有** **`NULL`** **→** **`BadAddress`** **；** **`issue-304`** **`capget`** **亦** **在** **入口** **显式** **拒绝** **空** **指针** **。** **`vm_write_slice`** **对** **非法** **地址** **可能** **已** **返回** **`EFAULT`** **，** **但** **缺少** **入口** **显式** **检查** **使** **风格** **与** **文档** **可读性** **不** **统一** **。**\n\n**建议** **：** **在** **`vm_write_slice`** **前** **增加** **`user_mask.is_null()`** **→** **`AxError::BadAddress`** **，** **或** **在** **函数** **注释** **中** **说明** **依赖** **`vm_write_slice`** **的** **EFAULT** **路径** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["sched_getaffinity"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/schedule.rs:182-194"],
+    "related_files": ["kernel/src/syscall/sys.rs", "kernel/src/syscall/task/ctl.rs"],
+    "key_insight": "sched_getaffinity 输出 mask 指针未显式 NULL 早退"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：`user_mask==NULL` 对照 Linux EFAULT。",
+    "expected_output_contains": "",
+    "pass_criteria": "显式 `NULL` 早退或注释说明与 `getgroups`/issue-304 风格一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "在 `sys_sched_getaffinity` 中于 `vm_write_slice` 之前加入 `user_mask.is_null()` 检查并返回 `BadAddress`。",
+  "references": ["man 2 sched_getaffinity", "kernel/src/syscall/task/schedule.rs", "issue-304"]
+}

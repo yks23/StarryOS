@@ -1,0 +1,27 @@
+{
+  "id": "issue-330",
+  "title": "`timerfd_settime(2)`：`sys_timerfd_settime` 在 `flags` 掩码校验（`TFD_TIMER_ABSTIME`）之前判断 `new_value.is_null()` → `EINVAL`，与 Linux `timerfd_settime` 在 `fget` 后常先规范化 `flags` 再 `copy_from_user(new)` 时，「NULL `new_value`」与「非法 `flags`」的 `EINVAL` 优先级可能不完全一致",
+  "status": "resolved",
+  "created_at": "2026-04-13T21:00:00Z",
+  "severity": "low",
+  "fix_summary": "将 `flags & !TFD_TIMER_ABSTIME` 校验提前到 `new_value.is_null()` 之前（仍在 `TimerFd::from_fd` 之后）；注释 issue-330/issue-110 及与 issue-209 无关。更新 `executor-memory` timerfd 条、表格与最近更新；新增 `issue-330.json`。",
+  "files_changed": ["kernel/src/syscall/fs/timerfd.rs", "auto-evolve/memory/executor-memory.md", "auto-evolve/issue-pool/issue-330.json"],
+  "description": "**`kernel/src/syscall/fs/timerfd.rs`** **`sys_timerfd_settime`** **（** **约** **26–51** **行** **）** **顺序** **：** **`TimerFd::from_fd(fd)?`** **→** **`new_value.is_null()`** **→** **`InvalidInput`** **→** **`flags`** **未知** **位** **检查** **→** **`read_timespec_user`** **。** **当** **`new_value == NULL`** **且** **`flags`** **含** **非** **`TFD_TIMER_ABSTIME`** **允许** **位** **时** **，** **本** **实现** **固定** **先** **因** **NULL** **`new_value`** **返回** **`EINVAL`** **；** **Linux** **`fs/timerfd.c`** **路径** **多** **在** **用户** **拷贝** **前** **先** **拒绝** **非法** **`flags`** **。**\n\n**建议** **：** **对照** **Linux** **`timerfd_settime`** **，** **将** **`flags & !TFD_TIMER_ABSTIME`** **校验** **提前** **到** **`new_value.is_null()`** **之前** **（** **仍** **在** **`from_fd`** **之后** **）** **，** **或** **注释** **说明** **与** **上游** **`EINVAL`** **顺序** **差异** **。** **与** **issue-209** **/`read_timespec_user`** **字段** **读** **取** **无关** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["timerfd_settime"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/timerfd.rs:26-51"],
+    "related_files": [],
+    "key_insight": "timerfd_settime NULL new vs invalid flags EINVAL order"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：NULL `new_value` + 非法 `flags` 对照 Linux 返回的 `EINVAL` 子原因顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游 `timerfd_settime` 错误校验顺序一致，或注释说明差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "先 `flags` 掩码校验，再拒绝 `new_value.is_null()`；保持 `from_fd` 在最先。",
+  "references": ["man 2 timerfd_settime", "kernel/src/syscall/fs/timerfd.rs", "issue-209"]
+}

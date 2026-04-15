@@ -8,8 +8,8 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use axerrno::{AxError, AxResult};
 use axfs::{CachedFile, FileFlags};
 use axhal::paging::{MappingFlags, PageSize, PageTableCursor, PagingError};
-use axsync::Mutex;
 use memory_addr::{PAGE_SIZE_4K, VirtAddr, VirtAddrRange};
+use spin::RwLock;
 
 use super::{AddrSpace, Backend, BackendOps, PopulateCallback, pages_in};
 
@@ -33,7 +33,7 @@ impl Drop for FileBackendInner {
     }
 }
 impl FileBackendInner {
-    pub fn register_listener(self: &Arc<Self>, aspace: &Arc<Mutex<AddrSpace>>) {
+    pub fn register_listener(self: &Arc<Self>, aspace: &Arc<RwLock<AddrSpace>>) {
         if self.handle.load(Ordering::Acquire) != 0 {
             panic!("Listener already registered");
         }
@@ -48,7 +48,7 @@ impl FileBackendInner {
                     // The address space has been dropped, nothing to do.
                     return;
                 };
-                let Some(mut aspace) = aspace.try_lock() else {
+                let Some(mut aspace) = aspace.try_write() else {
                     // This can happen during the populate process, when new pages
                     // are being populated and old pages are being evicted. In this
                     // case, we delegate the unmapping to the populate process.
@@ -86,6 +86,22 @@ impl FileBackendInner {
 #[derive(Clone)]
 pub struct FileBackend(Arc<FileBackendInner>);
 impl FileBackend {
+    /// Same file mapping at a new virtual start (for `mremap` relocation / regrow).
+    pub(crate) fn remap_at(
+        &self,
+        new_start: VirtAddr,
+        proc_aspace: &Arc<RwLock<AddrSpace>>,
+    ) -> Backend {
+        let offset = self.0.offset_page as usize * PAGE_SIZE_4K;
+        Backend::new_file(
+            new_start,
+            self.0.cache.clone(),
+            self.0.flags,
+            offset,
+            proc_aspace,
+        )
+    }
+
     fn check_flags(&self, flags: MappingFlags) -> AxResult {
         let mut required_flags = FileFlags::empty();
         if flags.contains(MappingFlags::READ) {
@@ -103,6 +119,10 @@ impl FileBackend {
 
     pub fn futex_handle(&self) -> Weak<()> {
         Arc::downgrade(&self.0.futex_handle)
+    }
+
+    pub(crate) fn shared_page_cache(&self) -> CachedFile {
+        self.0.cache.clone()
     }
 }
 
@@ -215,7 +235,7 @@ impl BackendOps for FileBackend {
         _flags: MappingFlags,
         _old_pt: &mut PageTableCursor,
         _new_pt: &mut PageTableCursor,
-        new_aspace: &Arc<Mutex<AddrSpace>>,
+        new_aspace: &Arc<RwLock<AddrSpace>>,
     ) -> AxResult<Backend> {
         let inner = Arc::new(FileBackendInner {
             start: self.0.start,
@@ -236,7 +256,7 @@ impl Backend {
         cache: CachedFile,
         flags: FileFlags,
         offset: usize,
-        aspace: &Arc<Mutex<AddrSpace>>,
+        aspace: &Arc<RwLock<AddrSpace>>,
     ) -> Self {
         let offset_page = (offset / PAGE_SIZE_4K) as u32;
         let inner = Arc::new(FileBackendInner {

@@ -2,11 +2,10 @@ use axerrno::{AxError, AxResult};
 use bitflags::bitflags;
 use linux_raw_sys::general::{O_CLOEXEC, O_NONBLOCK};
 use starry_signal::SignalSet;
-use starry_vm::VmPtr;
 
 use crate::{
     file::{FileLike, add_file_like, signalfd::Signalfd},
-    syscall::signal::check_sigset_size,
+    syscall::signal::{check_sigset_size, read_signal_set_user},
 };
 
 // SFD flag definitions (if not available in linux_raw_sys)
@@ -43,6 +42,13 @@ pub fn sys_signalfd4(
     sigsetsize: usize,
     flags: u32,
 ) -> AxResult<isize> {
+    // NULL `mask` **EFAULT** before **EINVAL** from bad `sigsetsize`/`flags`/`CLOEXEC` combo (Linux
+    // user-pointer access order; issue-321; orthogonal to `fd` vs `read_signal_set_user`, issue-319).
+    if mask.is_null() {
+        // Linux `signalfd4(2)`: `mask` must point to valid user memory; NULL → EFAULT.
+        return Err(AxError::BadAddress);
+    }
+
     check_sigset_size(sigsetsize)?;
 
     let flags = SignalfdFlags::from_bits(flags).ok_or(AxError::InvalidInput)?;
@@ -51,16 +57,20 @@ pub fn sys_signalfd4(
         return Err(AxError::InvalidInput);
     }
 
-    // Read the signal mask from user space before handling the request mode.
-    let mask = unsafe { mask.vm_read_uninit()?.assume_init() };
-
-    // If fd is not -1, we should modify the existing signalfd
+    // If fd is not -1, resolve `fd` before `read_signal_set_user` so **EBADF** precedes **EFAULT** on
+    // bad `fd` + unreadable `mask` (Linux `__do_signalfd4` / `fget` order; issue-319). New fd uses
+    // mask read first (issue-210 path unchanged for `fd == -1`).
     if fd != -1 {
         let signalfd = Signalfd::from_fd(fd)?;
+        // issue-210: same word-wise path as `rt_sigprocmask` / `read_signal_set_user`.
+        let mask = read_signal_set_user(mask)?;
         signalfd.update_mask(mask);
         signalfd.set_nonblocking(flags.contains(SignalfdFlags::NONBLOCK))?;
         return Ok(fd as _);
     }
+
+    // issue-210: same word-wise path as `rt_sigprocmask` / `read_signal_set_user`.
+    let mask = read_signal_set_user(mask)?;
 
     // Create a new Signalfd
     let signalfd = Signalfd::new(mask);

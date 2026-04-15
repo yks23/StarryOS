@@ -1,0 +1,27 @@
+{
+  "id": "issue-326",
+  "title": "`sendfile(2)`：`sys_sendfile` 在 `File::from_fd`/`get_file_like` 之前判断 `in_fd == out_fd` → `EINVAL`，与 Linux 先解析两路 `fd`（`EBADF`）再拒绝「同一文件描述」时，「两 fd 数值相同且无效」场景下 `EBADF`/`EINVAL` 优先级可能不完全一致",
+  "status": "resolved",
+  "created_at": "2026-04-13T00:05:00Z",
+  "severity": "low",
+  "fix_summary": "在 `in_fd == out_fd` 校验前增加 `get_file_like(in_fd)?` 与 `get_file_like(out_fd)?`，对齐 Linux `do_sendfile` 先 `fget` 再拒绝同描述符；无效且相等的 fd 先得 EBADF。注释 issue-326 及 issue-317/issue-322 同类；同 fd 拒绝仍 issue-235。更新 `executor-memory` splice 段 sendfile 句、表格与最近更新；新增 `issue-326.json`。",
+  "files_changed": ["kernel/src/syscall/fs/io.rs", "auto-evolve/memory/executor-memory.md", "auto-evolve/issue-pool/issue-326.json"],
+  "description": "**`kernel/src/syscall/fs/io.rs`** **`sys_sendfile`** **（** **约** **429–454** **行** **）** **顺序** **：** **`in_fd == out_fd`** **→** **`InvalidInput`** **，** **再** **`File::from_fd(in_fd)`** **/** **`get_file_like(in_fd)`** **`/`** **`get_file_like(out_fd)`** **。** **当** **`in_fd`** **与** **`out_fd`** **数值** **相等** **（** **如** **均为** **`-1`** **或** **同一** **未** **使用** **槽** **位** **）** **且** **该** **描述** **符** **无效** **时** **，** **本** **实现** **可能** **先** **`EINVAL`** **（** **等同** **一路** **`fd`** **的** **「** **自** **拷贝** **」** **拒绝** **）** **；** **Linux** **`do_sendfile`** **路径** **多** **先** **`fget`** **得到** **`EBADF`** **。** **与** **issue-317**/**issue-322** **类** **「** **句柄** **解析** **与** **其它** **校验** **顺序** **」** **同类** **。** **issue-234**/**issue-235** **曾** **覆盖** **sendfile** **/`munmap`** **其它** **维度** **。**\n\n**建议** **：** **对照** **Linux** **`fs/read_write.c`** **`do_sendfile`** **，** **将** **`get_file_like`/`from_fd`** **（** **或** **等价** **`fget`** **）** **提前** **到** **`in_fd == out_fd`** **判断** **之前** **，** **或** **注释** **说明** **边界** **与** **上游** **差异** **。**",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["sendfile"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/fs/io.rs:429-456"],
+    "related_files": [],
+    "key_insight": "sendfile same-fd check vs EBADF order"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos",
+    "run_method": "静态审查；可选：无效且相等的 in/out fd 对照 Linux 返回顺序。",
+    "expected_output_contains": "",
+    "pass_criteria": "与上游 `sendfile` 错误优先级一致，或注释说明差异。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（exit 0；仓库既有警告）"
+  },
+  "suggested_fix": "先解析 `in_fd`/`out_fd`（`fget` 等价），再 `in_fd == out_fd` → `EINVAL`；或注释。",
+  "references": ["man 2 sendfile", "kernel/src/syscall/fs/io.rs", "issue-317", "issue-234"]
+}

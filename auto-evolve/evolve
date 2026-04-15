@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# Auto-Evolve 统一入口脚本
+# 用法:
+#   ./auto-evolve/evolve start          启动 daemon + kernel（前台）
+#   ./auto-evolve/evolve start -d       后台启动
+#   ./auto-evolve/evolve stop           停止所有
+#   ./auto-evolve/evolve status         查看状态
+#   ./auto-evolve/evolve gui            启动 TUI 仪表盘
+#   ./auto-evolve/evolve drop debugger Question1.md
+#   ./auto-evolve/evolve drop executor auto-evolve/issue-pool/issue-001.json
+#   ./auto-evolve/evolve send debugger "请检查 mmap 相关的 syscall"
+#   ./auto-evolve/evolve send executor "请优先修复 timerfd"
+
+set -e
+DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$DIR/.."
+export PATH="$HOME/.local/bin:$PATH"
+
+case "${1:-help}" in
+    start)
+        shift
+        python3 "$DIR/daemon.py" start "$@"
+        ;;
+    stop)
+        python3 "$DIR/daemon.py" stop
+        ;;
+    restart)
+        python3 "$DIR/daemon.py" restart
+        ;;
+    status)
+        echo "=== Daemon ==="
+        python3 "$DIR/daemon.py" status
+        echo ""
+        echo "=== Kernel ==="
+        python3 "$DIR/kernel.py" status
+        ;;
+    gui)
+        python3 "$DIR/dashboard.py"
+        ;;
+    drop)
+        shift
+        python3 "$DIR/kernel.py" drop "$@"
+        ;;
+    send)
+        shift
+        python3 "$DIR/kernel.py" send "$@"
+        ;;
+    snap)
+        python3 "$DIR/monitor.py" snap
+        ;;
+    report)
+        python3 "$DIR/monitor.py" report
+        ;;
+    history)
+        python3 "$DIR/monitor.py" history
+        ;;
+    monitor)
+        python3 "$DIR/monitor.py" run
+        ;;
+    test)
+        shift
+        python3 "$DIR/test-harness.py" "$@"
+        ;;
+    test-build)
+        python3 "$DIR/test-harness.py" build "$@"
+        ;;
+    test-list)
+        python3 "$DIR/test-harness.py" list
+        ;;
+    test-report)
+        python3 "$DIR/test-harness.py" report
+        ;;
+    help|--help|-h)
+        echo "Auto-Evolve: Starry OS 自动迭代体系"
+        echo ""
+        echo "用法: ./auto-evolve/evolve <command> [args]"
+        echo ""
+        echo "命令:"
+        echo "  start [-d]          启动守护进程 (-d 后台)"
+        echo "  stop                停止所有进程"
+        echo "  restart             重启"
+        echo "  status              查看状态"
+        echo "  gui                 启动 TUI 仪表盘"
+        echo "  drop <agent> <file> 拖拽文件给 agent"
+        echo "  send <agent> <msg>  手动发消息给 agent"
+        echo "  snap                立即拍一次快照"
+        echo "  report              打印当前进度报告"
+        echo "  history             查看快照历史曲线"
+        echo "  monitor             启动定时监控（每小时快照）"
+        echo ""
+        echo "示例:"
+        echo "  ./auto-evolve/evolve drop debugger Question1.md"
+        echo "  ./auto-evolve/evolve send executor '请修复 timerfd'"
+        echo "  ./auto-evolve/evolve gui"
+        echo "  ./auto-evolve/evolve report"
+        echo ""
+        echo "测试:"
+        echo "  test run [--test NAME]  编译+注入+QEMU+解析 全流程"
+        echo "  test build              只编译测试"
+        echo "  test inject             编译+注入 rootfs"
+        echo "  test-list               列出所有测试"
+        echo "  test-report             查看最近测试结果"
+        ;;
+    *)
+        echo "未知命令: $1（使用 --help 查看帮助）"
+        exit 1
+        ;;
+esac

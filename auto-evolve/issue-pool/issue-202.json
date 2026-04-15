@@ -1,0 +1,31 @@
+{
+  "id": "issue-202",
+  "title": "capget/capset：`read_cap_header` 与 `cap_low` 使用 `vm_read_uninit`+`assume_init`，`FIXME AnyBitPattern`",
+  "status": "resolved",
+  "created_at": "2026-04-16T12:00:00Z",
+  "severity": "low",
+  "fix_summary": "**`read_cap_header`**：按 **`version`/`pid`** 字段 **`addr_of!` + `vm_read`**；版本不符时 **`vm_write`** 整头（与原先一致）。新增 **`read_cap_data_user`**，**`sys_capset`** 各 **`__user_cap_data_struct` 槽** 字段级读取，去掉 **`assume_init`/`FIXME`**。**`cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos`** 通过。",
+  "files_changed": [
+    "kernel/src/syscall/task/ctl.rs",
+    "auto-evolve/issue-pool/issue-202.json",
+    "auto-evolve/memory/executor-memory.md"
+  ],
+  "description": "**`kernel/src/syscall/task/ctl.rs`** **`read_cap_header`**（**`sys_capget`/`sys_capset` 共用**）使用 **`// FIXME: AnyBitPattern`** 与 **`unsafe { header_ptr.vm_read_uninit()?.assume_init() }`** 读 **`__user_cap_header_struct`**。**`sys_capset`** 对 **`data`** 第一槽及后续槽亦 **`vm_read_uninit`?.`assume_init()`**。**`assume_init`** 依赖整结构已从用户态完整初始化；若 **`linux_raw_sys`** 中结构 **padding**、**对齐** 或 **uapi 演进** 与假设不符，存在与 **issue-190/`prlimit64`**、**issue-201/`utimensat`** 同类的可审计性问题。**更稳妥**：对 **`version`/`pid`**（及 **`__user_cap_data_struct` 三字段**）**字段级 `vm_read`** 或 **`zerocopy::FromBytes`**，去掉 **`FIXME`**。",
+  "category": "syscall-semantics",
+  "affected_syscalls": ["capget", "capset"],
+  "source_context": {
+    "primary_files": ["kernel/src/syscall/task/ctl.rs:17-87"],
+    "related_files": [],
+    "key_insight": "`read_cap_header` + `capset` data 槽均为 `assume_init`"
+  },
+  "test": {
+    "source_file": "",
+    "build_command": "",
+    "run_method": "**`linux_raw_sys` 升级**后全量编译；对比 **字段级读取** 与 **整结构 `vm_read_uninit`** 在 **边界填充** 上的差异（若 bindgen 引入 **`#[repr(C)]` 填充**）。",
+    "expected_output_contains": "",
+    "pass_criteria": "消除 **`assume_init`** 或证明 **`__user_cap_*`** 全 **`Pod`** 且读长度与 **内核 uapi** 一致。",
+    "last_result": "cargo clippy --target riscv64gc-unknown-none-elf -F qemu -p starryos 通过（2026-04-12）"
+  },
+  "suggested_fix": "**`cap_header.version`/`pid`** 两次标量读；**`__user_cap_data_struct`** 三 **`u32`** 同理；**`capset`** 循环槽位同理。",
+  "references": ["man 2 capget", "issue-190", "issue-201"]
+}
