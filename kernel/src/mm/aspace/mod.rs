@@ -176,6 +176,46 @@ impl AddrSpace {
         Ok(())
     }
 
+    /// Ensures `[start, start + size)` is fully covered by mapped VMAs (4 KiB aligned).
+    ///
+    /// Used for `mlock2(MLOCK_ONFAULT)`: pages are not populated yet, but the
+    /// range must exist.
+    pub fn ensure_mapped_4k(&self, start: VirtAddr, size: usize) -> AxResult {
+        self.validate_region(start, size)?;
+        let end = start + size;
+        let mut cur = start;
+        while cur < end {
+            let area = self.areas.find(cur).ok_or(AxError::NoMemory)?;
+            cur = area.end().min(end);
+        }
+        Ok(())
+    }
+
+    /// Populates every page in the range (stub for `mlock` / `mlock2` without swap).
+    pub fn mlock_populate_4k(&mut self, mut start: VirtAddr, size: usize) -> AxResult {
+        self.validate_region(start, size)?;
+        let end = start + size;
+        while start < end {
+            let (advance_to, cb) = {
+                let area = self.areas.find(start).ok_or(AxError::NoMemory)?;
+                let range = VirtAddrRange::new(start, area.end().min(end));
+                let vma_flags = area.flags();
+                let mut modify = self.pt.cursor();
+                let (_pages, cb) = area
+                    .backend()
+                    .populate(range, vma_flags, vma_flags, &mut modify)?;
+                drop(modify);
+                (area.end(), cb)
+            };
+            if let Some(cb) = cb {
+                cb(self);
+            }
+            start = advance_to;
+            assert!(start.is_aligned_4k());
+        }
+        Ok(())
+    }
+
     /// Removes mappings within the specified virtual address range.
     ///
     /// Returns an error if the address range is out of the address space or not

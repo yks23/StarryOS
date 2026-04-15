@@ -5,7 +5,7 @@ use axfs::FileBackend;
 use axhal::paging::{MappingFlags, PageSize};
 use axtask::current;
 use linux_raw_sys::general::*;
-use memory_addr::{MemoryAddr, VirtAddr, VirtAddrRange, align_up_4k};
+use memory_addr::{MemoryAddr, VirtAddr, VirtAddrRange, PAGE_SIZE_4K, align_up_4k};
 use starry_vm::{vm_load, vm_write_slice};
 
 use crate::{
@@ -332,6 +332,27 @@ pub fn sys_mlock(addr: usize, length: usize) -> AxResult<isize> {
     sys_mlock2(addr, length, 0)
 }
 
-pub fn sys_mlock2(_addr: usize, _length: usize, _flags: u32) -> AxResult<isize> {
+/// Linux `MLOCK_ONFAULT`: populate on access instead of immediately.
+const MLOCK_ONFAULT: u32 = 1;
+
+pub fn sys_mlock2(addr: usize, length: usize, flags: u32) -> AxResult<isize> {
+    if flags & !MLOCK_ONFAULT != 0 {
+        return Err(AxError::InvalidInput);
+    }
+    if length == 0 {
+        return Ok(0);
+    }
+    let end = addr.checked_add(length).ok_or(AxError::InvalidInput)?;
+    let start = addr.align_down(PAGE_SIZE_4K);
+    let end = end.align_up(PAGE_SIZE_4K);
+    let size = end.checked_sub(start).ok_or(AxError::InvalidInput)?;
+
+    let curr = current();
+    let mut aspace = curr.as_thread().proc_data.aspace.lock();
+    if flags & MLOCK_ONFAULT != 0 {
+        aspace.ensure_mapped_4k(VirtAddr::from(start), size)?;
+    } else {
+        aspace.mlock_populate_4k(VirtAddr::from(start), size)?;
+    }
     Ok(0)
 }
