@@ -2,7 +2,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use axerrno::{AxError, AxResult};
 use axhal::uspace::UserContext;
-use axtask::{TaskInner, current};
+use axtask::{TaskInner, current, yield_now};
 use starry_process::Pid;
 use starry_signal::{SignalInfo, SignalOSAction, SignalSet};
 
@@ -23,21 +23,50 @@ pub fn check_signals(
             do_exit(signo as i32, true);
         }
         SignalOSAction::CoreDump => {
-            // TODO: implement core dump
+            super::core_dump::write_min_elf_core(thr, uctx, signo as u32);
             do_exit(128 + signo as i32, true);
         }
         SignalOSAction::Stop => {
-            // TODO: implement stop
-            do_exit(1, true);
+            let signo_u8 = signo as u8;
+            {
+                let mut jc = thr.proc_data.jobctl.lock();
+                jc.stop_sig = Some(signo_u8);
+                jc.stop_wait_pending = true;
+            }
+            wake_parent_for_jobctl(thr);
+            loop {
+                {
+                    let jc = thr.proc_data.jobctl.lock();
+                    if jc.stop_sig.is_none() {
+                        break;
+                    }
+                }
+                while check_signals(thr, uctx, restore_blocked) {}
+                yield_now();
+            }
         }
         SignalOSAction::Continue => {
-            // TODO: implement continue
+            let mut jc = thr.proc_data.jobctl.lock();
+            let was_stopped = jc.stop_sig.take().is_some();
+            if was_stopped {
+                jc.continued_wait_pending = true;
+            }
+            drop(jc);
+            wake_parent_for_jobctl(thr);
         }
         SignalOSAction::Handler => {
             // do nothing
         }
     }
     true
+}
+
+fn wake_parent_for_jobctl(thr: &Thread) {
+    if let Some(p) = thr.proc_data.proc.parent()
+        && let Ok(pdata) = get_process_data(p.pid())
+    {
+        pdata.child_exit_event.wake();
+    }
 }
 
 static BLOCK_NEXT_SIGNAL_CHECK: AtomicBool = AtomicBool::new(false);
@@ -58,11 +87,11 @@ pub fn with_blocked_signals<R>(
     let sig = &curr.as_thread().signal;
 
     let old_blocked = blocked.map(|set| sig.set_blocked(set));
-    f().inspect(|_| {
-        if let Some(old) = old_blocked {
-            sig.set_blocked(old);
-        }
-    })
+    let result = f();
+    if let Some(old) = old_blocked {
+        sig.set_blocked(old);
+    }
+    result
 }
 
 pub(super) fn send_signal_thread_inner(task: &TaskInner, thr: &Thread, sig: SignalInfo) {
