@@ -614,18 +614,18 @@ pub fn handle_syscall(uctx: &mut UserContext) {
             uctx.arg3() as _,
         ),
 
-        // dummy fds
-        Sysno::timerfd_create
-        | Sysno::fanotify_init
-        | Sysno::inotify_init1
-        | Sysno::userfaultfd
-        | Sysno::perf_event_open
-        | Sysno::io_uring_setup
-        | Sysno::bpf
-        | Sysno::fsopen
-        | Sysno::fspick
-        | Sysno::open_tree
-        | Sysno::memfd_secret => sys_dummy_fd(sysno),
+        // Avoid misleading dummy fds for timerfd/notify; no full implementation yet → ENOSYS.
+        Sysno::timerfd_create | Sysno::fanotify_init | Sysno::inotify_init1 => {
+            Err(AxError::Unsupported)
+        }
+
+        Sysno::bpf | Sysno::userfaultfd | Sysno::perf_event_open | Sysno::io_uring_setup => {
+            Err(AxError::Unsupported)
+        }
+
+        Sysno::fsopen | Sysno::fspick | Sysno::open_tree | Sysno::memfd_secret => {
+            sys_dummy_fd(sysno)
+        }
 
         Sysno::timer_create | Sysno::timer_gettime | Sysno::timer_settime => Ok(0),
 
