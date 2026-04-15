@@ -225,6 +225,9 @@ pub struct ProcessData {
     /// Job control (`waitpid` stopped / continued).
     pub jobctl: Mutex<JobCtl>,
 
+    /// Waiters blocked in job-control stop (`SIGSTOP` / `SIGTSTP` / …).
+    pub jobctl_stop_wq: Arc<WaitQueue>,
+
     /// The process signal manager
     pub signal: Arc<ProcessSignalManager>,
 
@@ -260,6 +263,7 @@ impl ProcessData {
             exit_signal,
 
             jobctl: Mutex::new(JobCtl::default()),
+            jobctl_stop_wq: Arc::new(WaitQueue::new()),
 
             signal: Arc::new(ProcessSignalManager::new(
                 signal_actions,

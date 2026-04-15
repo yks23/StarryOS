@@ -2,7 +2,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use axerrno::{AxError, AxResult};
 use axhal::uspace::UserContext;
-use axtask::{TaskInner, current, yield_now};
+use axtask::{TaskInner, current};
 use starry_process::Pid;
 use starry_signal::{SignalInfo, SignalOSAction, SignalSet};
 
@@ -34,6 +34,7 @@ pub fn check_signals(
                 jc.stop_wait_pending = true;
             }
             wake_parent_for_jobctl(thr);
+            let wq = thr.proc_data.jobctl_stop_wq.clone();
             loop {
                 {
                     let jc = thr.proc_data.jobctl.lock();
@@ -42,7 +43,16 @@ pub fn check_signals(
                     }
                 }
                 while check_signals(thr, uctx, restore_blocked) {}
-                yield_now();
+                // Block on the jobctl wait queue instead of spinning on `yield_now`.
+                let still_wait = match wq.wait_if(!0, None, || {
+                    thr.proc_data.jobctl.lock().stop_sig.is_some()
+                }) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                if !still_wait {
+                    break;
+                }
             }
         }
         SignalOSAction::Continue => {
@@ -52,6 +62,9 @@ pub fn check_signals(
                 jc.continued_wait_pending = true;
             }
             drop(jc);
+            if was_stopped {
+                thr.proc_data.jobctl_stop_wq.wake(usize::MAX, !0);
+            }
             wake_parent_for_jobctl(thr);
         }
         SignalOSAction::Handler => {
